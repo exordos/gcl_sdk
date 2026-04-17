@@ -514,19 +514,18 @@ wheels = [
 
 [[package]]
 name = "gcl-iam"
-version = "1.0.3"
+version = "1.2.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "bazooka" },
     { name = "cryptography" },
     { name = "izulu" },
-    { name = "pbr" },
     { name = "pyjwt" },
     { name = "restalchemy" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/ef/07/9c1bac22491a7ba078ec271e774671316d4988313498e9d5590f2ae4e418/gcl_iam-1.0.3.tar.gz", hash = "sha256:d6d0d98213835dca11cb918f75febb26d972e4d54cbaf1e47a302ccb98b5ffc9", size = 25868, upload-time = "2026-01-21T11:21:16.042Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/bf/2a/5691cc4e515ba3fd212283cc8759ed0aea4bcce4de5352937e9619391bc4/gcl_iam-1.2.0.tar.gz", hash = "sha256:382f586e9b4b9e43cbd7eef5d32936b4b0df94010dcc405b6015f9979294d37d", size = 202448, upload-time = "2026-04-08T12:49:51.639Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f7/48/efd2b020318b8ac52851775e0d71ea33e22ac5453fda6fe88d8ee6bb44e3/gcl_iam-1.0.3-py3-none-any.whl", hash = "sha256:70ed3b066b6b472bf1742a7a9d85fd68cad391e422a978c81964b03322da4931", size = 35790, upload-time = "2026-01-21T11:21:13.94Z" },
+    { url = "https://files.pythonhosted.org/packages/0c/fe/204bd374caf8554e7dc65a52ea08eaf23889692be655d83a797f8e775e43/gcl_iam-1.2.0-py3-none-any.whl", hash = "sha256:584eb1c0bee042120b203a59646e511f50fca49fbb86b00b7cbc6a0118322bb2", size = 39182, upload-time = "2026-04-08T12:49:49.872Z" },
 ]
 
 [[package]]
