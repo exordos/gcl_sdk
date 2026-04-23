@@ -531,16 +531,15 @@ wheels = [
 
 [[package]]
 name = "gcl-looper"
-version = "1.2.2"
+version = "1.0.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "importlib-metadata" },
-    { name = "oslo-config" },
+    { name = "pbr" },
     { name = "setuptools" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/89/16/0be0c790ece5dbbe9d160cc6de422c7746999bd590df1f9143227762fe15/gcl_looper-1.2.2.tar.gz", hash = "sha256:f94cda61bb8c0c3c96aee0149b265f87c1958a291da9f3fef1515bff790114e7", size = 133740, upload-time = "2026-02-24T09:03:20.099Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e4/e4/6a6d3c41df8fb8475bc4282326d5fb185bc06a087ddb12cfbf3a370f7cb2/gcl_looper-1.0.1.tar.gz", hash = "sha256:84dc3feb910bf57185c4ab1e9687e7fc625dbf7db01f8db52a4d0b4e12b90477", size = 14759, upload-time = "2025-08-05T08:42:02.407Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/18/0f/702389545a5a1bfcedbf30484b5295557e9111a5861f8641dd99eb7deefd/gcl_looper-1.2.2-py3-none-any.whl", hash = "sha256:12c59b1d77ae6707412f958486412c42c4921f50edae5af2f8ef108867387b6b", size = 30040, upload-time = "2026-02-24T09:03:18.435Z" },
+    { url = "https://files.pythonhosted.org/packages/aa/79/2512a6af57d7d15053ecb3c84782d7b5c65cd98cd31ffbc7030f235e0f5f/gcl_looper-1.0.1-py3-none-any.whl", hash = "sha256:2d2f710994f507108e6c03546d34a417b9656a73d8e348bb64a330bf86792398", size = 18362, upload-time = "2025-08-05T08:42:01.374Z" },
 ]
 
 [[package]]
@@ -637,14 +636,14 @@ wheels = [
 
 [[package]]
 name = "importlib-metadata"
-version = "6.11.0"
+version = "9.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "zipp" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/ee/eb/58c2ab27ee628ad801f56d4017fe62afab0293116f6d0b08f1d5bd46e06f/importlib_metadata-6.11.0.tar.gz", hash = "sha256:1231cf92d825c9e03cfc4da076a16de6422c863558229ea0b22b675657463443", size = 54593, upload-time = "2023-12-03T17:33:10.693Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/a9/01/15bb152d77b21318514a96f43af312635eb2500c96b55398d020c93d86ea/importlib_metadata-9.0.0.tar.gz", hash = "sha256:a4f57ab599e6a2e3016d7595cfd72eb4661a5106e787a95bcc90c7105b831efc", size = 56405, upload-time = "2026-03-20T06:42:56.999Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/59/9b/ecce94952ab5ea74c31dcf9ccf78ccd484eebebef06019bf8cb579ab4519/importlib_metadata-6.11.0-py3-none-any.whl", hash = "sha256:f0afba6205ad8f8947c7d338b5342d5db2afbfd82f9cbef7879a9539cc12eb9b", size = 23427, upload-time = "2023-12-03T17:33:08.965Z" },
+    { url = "https://files.pythonhosted.org/packages/38/3d/2d244233ac4f76e38533cfcb2991c9eb4c7bf688ae0a036d30725b8faafe/importlib_metadata-9.0.0-py3-none-any.whl", hash = "sha256:2d21d1cc5a017bd0559e36150c21c830ab1dc304dedd1b7ea85d20f45ef3edd7", size = 27789, upload-time = "2026-03-20T06:42:55.665Z" },
 ]
 
 [[package]]
