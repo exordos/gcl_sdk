@@ -21,6 +21,7 @@ from http import client as http_client
 from restalchemy.api.middlewares import contexts as mw_contexts
 from restalchemy.api.middlewares import errors as mw_errors
 
+from gcl_iam.middlewares import EndpointComparator
 from gcl_sdk.agents.universal.api import contexts
 from gcl_sdk.agents.universal.api import packers
 
@@ -31,6 +32,7 @@ class SdkContextMiddleware(mw_contexts.ContextMiddleware):
         application,
         context_class=contexts.SdkEncryptionInformationContext,
         context_kwargs=None,
+        skip_sdk_endpoints: list = None,
     ):
         """
         Initialize the middleware with a context class.
@@ -40,14 +42,22 @@ class SdkContextMiddleware(mw_contexts.ContextMiddleware):
         :param context_class: The class used to construct a request context.
         :type context_class: gcl_sdk.agents.universal.api.contexts.
                              SdkEncryptionInformationContext
-        :param conext_kwargs: Additional keyword arguments to pass to the
+        :param context_kwargs: Additional keyword arguments to pass to the
             context class constructor.
-        :type conext_kwargs: dict
+        :type context_kwargs: dict
+        :param skip_sdk_endpoints: The list of endpoints to skip check the SDK
+            encryption.
+        :type skip_sdk_endpoints: list
         """
         super().__init__(
             application=application,
             context_class=context_class,
             context_kwargs=context_kwargs,
+        )
+        self._skip_sdk_endpoints = (
+            [EndpointComparator(e) for e in skip_sdk_endpoints]
+            if skip_sdk_endpoints
+            else []
         )
 
     def _construct_context(self, req):
@@ -65,8 +75,17 @@ class SdkContextMiddleware(mw_contexts.ContextMiddleware):
 
         return self._context_class(req, **self._context_kwargs)
 
+    def _should_skip_sdk(self, req) -> bool:
+        for endpoint in self._skip_sdk_endpoints:
+            if endpoint.compare(req):
+                return True
+        return False
+
     def _get_response(self, ctx, req):
-        if ctx.encryption_information.is_requires_encryption():
+        if (
+            not self._should_skip_sdk(req)
+            and ctx.encryption_information.is_requires_encryption()
+        ):
             if req.content_type != packers.ENCRYPTED_JSON_CONTENT_TYPE:
                 return req.ResponseClass(
                     status=http_client.BAD_REQUEST,
