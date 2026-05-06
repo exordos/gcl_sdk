@@ -88,16 +88,23 @@ class CoreIamAuthenticator(AbstractAuthenticator):
         self._refresh_token = refresh_token
 
     def authenticate(self) -> None:
-        response = self._http_client.post(
-            self._url,
-            headers=self._headers,
-            data={
-                "grant_type": GRANT_TYPE_REFRESH_TOKEN,
-                "refresh_token": self._refresh_token,
-            }
-            if self._refresh_token
-            else self._data,
-        )
+        try:
+            response = self._http_client.post(
+                self._url,
+                headers=self._headers,
+                data={
+                    "grant_type": GRANT_TYPE_REFRESH_TOKEN,
+                    "refresh_token": self._refresh_token,
+                }
+                if self._refresh_token
+                else self._data,
+            )
+        except bazooka.exceptions.BadRequestError:
+            # refresh token is invalid, try to authenticate with username and password
+            self._refresh_token = None
+            response = self._http_client.post(
+                self._url, headers=self._headers, data=self._data
+            )
         data = response.json()
         self._access_token = data["access_token"]
         self._refresh_token = data["refresh_token"]
