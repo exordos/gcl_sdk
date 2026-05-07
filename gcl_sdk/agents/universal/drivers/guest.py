@@ -1,4 +1,4 @@
-#    Copyright 2025 Genesis Corporation.
+#    Copyright 2025-2026 Genesis Corporation.
 #
 #    All Rights Reserved.
 #
@@ -15,19 +15,31 @@
 #    under the License.
 from __future__ import annotations
 
-import os
+import json
 import logging
+import os
 import subprocess
+import pathlib
+
+import yaml
 
 from restalchemy.dm import properties
 from restalchemy.dm import types
 from restalchemy.dm import types_network
 
 from gcl_sdk.agents.universal.drivers import meta
+from gcl_sdk.common import utils as common_utils
 from gcl_sdk.agents.universal import constants as c
 
 LOG = logging.getLogger(__name__)
 GUEST_MACHINE_KIND = "guest_machine"
+
+EXORDOS_DATA_DIR = pathlib.Path("/persist")
+NETPLAN_DIR = EXORDOS_DATA_DIR / "netplan"
+UPDATE_JSON_PATH = EXORDOS_DATA_DIR / "update.json"
+SYSTEM_NETPLAN_DIR = pathlib.Path("/etc/netplan")
+GRUB_DEFAULT_PATH = pathlib.Path("/etc/default/grub.d/50-cloudimg-settings.cfg")
+IMAGE_PATH = pathlib.Path(c.WORK_DIR) / "image"
 
 
 class GuestMachineMetaModel(meta.MetaDataPlaneModel):
@@ -79,13 +91,141 @@ class GuestMachineMetaModel(meta.MetaDataPlaneModel):
         if self.hostname:
             self.hostname = self._get_hostname()
 
+        # Save the original image to be able to compare it on update
+        if not IMAGE_PATH.exists():
+            with open(IMAGE_PATH, "w", opener=common_utils.rw_owner_opener) as f:
+                f.write(self.image)
+
     def delete_from_dp(self) -> None:
         """It's not applicable for the guest machine."""
         # Just do nothing.
         pass
 
+    def _save_network_settings(self) -> None:
+        """Save and convert netplan settings to JSON files.
+
+        Reads all YAML files from /etc/netplan/, converts them to JSON,
+        and saves to /persist/netplan/.
+        """
+
+        # Clean up old netplan configs
+        if NETPLAN_DIR.exists():
+            for f in NETPLAN_DIR.glob("*"):
+                f.unlink()
+
+        # Create target directory if it doesn't exist
+        NETPLAN_DIR.mkdir(parents=True, exist_ok=True)
+
+        if not SYSTEM_NETPLAN_DIR.exists():
+            LOG.warning("System netplan directory not found: %s", SYSTEM_NETPLAN_DIR)
+            return
+
+        # Read all .yaml/.yml files from system netplan directory
+        netplan_files = list(SYSTEM_NETPLAN_DIR.glob("*.yaml"))
+        netplan_files.extend(SYSTEM_NETPLAN_DIR.glob("*.yml"))
+
+        if not netplan_files:
+            LOG.warning("No netplan files found in %s", SYSTEM_NETPLAN_DIR)
+            return
+
+        for netplan_file in netplan_files:
+            # Read YAML content
+            content = netplan_file.read_text(encoding="utf-8")
+            # Parse YAML to Python dict
+            yaml_data = yaml.safe_load(content) or {}
+            # Convert to JSON and save
+            json_filename = netplan_file.stem + ".json"
+            json_path = NETPLAN_DIR / json_filename
+            json_path.write_text(json.dumps(yaml_data, indent=2), encoding="utf-8")
+            LOG.info("Converted %s to %s", netplan_file, json_path)
+
+        LOG.info("Netplan settings saved to %s", NETPLAN_DIR)
+
+    def _save_target_image(self) -> None:
+        """Save the target image to update.json.
+
+        Creates /persist/update.json with target image information.
+        """
+        # Read the original image from the file
+        if IMAGE_PATH.exists():
+            with open(IMAGE_PATH, "r") as f:
+                orig_image = f.read().strip()
+        else:
+            raise FileNotFoundError(f"Image file not found: {IMAGE_PATH}")
+
+        # Create target directory if it doesn't exist
+        EXORDOS_DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+        update_data = {
+            "target_image": self.image,
+            "original_image": orig_image,
+        }
+        UPDATE_JSON_PATH.write_text(json.dumps(update_data, indent=2), encoding="utf-8")
+        LOG.info("Update info saved to %s", UPDATE_JSON_PATH)
+
+    def _update_grub_default(self) -> None:
+        """Update the grub default boot item to menu entry 3.
+
+        Sets GRUB_DEFAULT=3 (0-indexed, so 3 = 4th item) using shell commands.
+        Updates /etc/default/grub and regenerates grub configuration.
+        """
+        # Update GRUB_DEFAULT to 3 (4th menu item, 0-indexed)
+        # Check if GRUB_DEFAULT exists in the file
+        result = subprocess.run(
+            f'grep -q "^GRUB_DEFAULT=" {GRUB_DEFAULT_PATH}',
+            shell=True,
+            check=False,
+        )
+        if result.returncode == 0:
+            # GRUB_DEFAULT exists, replace it
+            subprocess.check_call(
+                f'sed -i "s/^GRUB_DEFAULT=.*/GRUB_DEFAULT=3/" {GRUB_DEFAULT_PATH}',
+                shell=True,
+            )
+            LOG.info("GRUB_DEFAULT updated to 3 (4th menu item)")
+        else:
+            # GRUB_DEFAULT does not exist, append it
+            subprocess.check_call(
+                f'echo "GRUB_DEFAULT=3" >> {GRUB_DEFAULT_PATH}',
+                shell=True,
+            )
+            LOG.info("GRUB_DEFAULT added with value 3 (4th menu item)")
+
+        # Regenerate grub config
+        subprocess.check_call(["update-grub"])
+        LOG.info("GRUB configuration regenerated successfully")
+
+    def _reboot(self) -> None:
+        """Reboot the system.
+
+        Initiates a system reboot to boot into the new image.
+        """
+        LOG.info("Initiating system reboot for image update")
+        subprocess.check_call("reboot && sleep 600", shell=True)
+
     def update_on_dp(self) -> None:
         """Update the resource on the data plane."""
+
+        # Read the original image from the file
+        if IMAGE_PATH.exists():
+            with open(IMAGE_PATH, "r") as f:
+                orig_image = f.read().strip()
+        else:
+            orig_image = None
+
+        # Image changed, need to start the update procedure
+        if orig_image and orig_image != self.image:
+            LOG.info("Image change detected: '%s' -> '%s'", orig_image, self.image)
+            # - save and convert network settings
+            self._save_network_settings()
+            # - save the target image
+            self._save_target_image()
+            # - update the grub default item
+            self._update_grub_default()
+            # - reboot
+            self._reboot()
+            return
+
         # The simplest implementation, just recreate.
         self.dump_to_dp()
 
