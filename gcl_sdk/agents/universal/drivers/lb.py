@@ -367,6 +367,9 @@ ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDS
 
         return f"""\
 server {{
+gzip_proxied any;
+client_max_body_size 0;
+server_tokens off;
 listen 0.0.0.0:{v["port"]}{" ssl http2" if v["proto"] == "https" else ""}{" proxy_protocol" if v.get("proxy_proto_from") else ""};
 {part}
 server_name {" ".join(v["domains"])};{ssl_info}
@@ -380,9 +383,6 @@ deny all;
         return """\
 ssl_session_timeout 10m;
 ssl_session_cache shared:SSL:10m;
-gzip_proxied any;
-client_max_body_size 0;
-server_tokens off;
 
 map $http_upgrade $connection_upgrade {
     default upgrade;
