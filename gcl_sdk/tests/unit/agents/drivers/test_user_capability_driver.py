@@ -84,11 +84,12 @@ class TestGCUsersRestApiBackendClientInit:
     def test_capabilities_returns_user_kind(self):
         from gcl_sdk.agents.universal.drivers import core as drv_core
 
-        with patch("gcl_sdk.agents.universal.drivers.core.bazooka.Client"), patch(
-            "gcl_sdk.agents.universal.drivers.core.base.CoreIamAuthenticator"
-        ), patch(
-            "gcl_sdk.agents.universal.drivers.core.base.CollectionBaseClient"
-        ), patch("gcl_sdk.agents.universal.storage.fs.TargetFieldsFileStorage"):
+        with (
+            patch("gcl_sdk.agents.universal.drivers.core.bazooka.Client"),
+            patch("gcl_sdk.agents.universal.drivers.core.base.CoreIamAuthenticator"),
+            patch("gcl_sdk.agents.universal.drivers.core.base.CollectionBaseClient"),
+            patch("gcl_sdk.agents.universal.storage.fs.TargetFieldsFileStorage"),
+        ):
             driver = drv_core.UserCapabilityDriver(
                 username="admin",
                 password="pass",
@@ -101,11 +102,12 @@ class TestGCUsersRestApiBackendClientInit:
     def test_default_user_kind(self):
         from gcl_sdk.agents.universal.drivers import core as drv_core
 
-        with patch("gcl_sdk.agents.universal.drivers.core.bazooka.Client"), patch(
-            "gcl_sdk.agents.universal.drivers.core.base.CoreIamAuthenticator"
-        ), patch(
-            "gcl_sdk.agents.universal.drivers.core.base.CollectionBaseClient"
-        ), patch("gcl_sdk.agents.universal.storage.fs.TargetFieldsFileStorage"):
+        with (
+            patch("gcl_sdk.agents.universal.drivers.core.bazooka.Client"),
+            patch("gcl_sdk.agents.universal.drivers.core.base.CoreIamAuthenticator"),
+            patch("gcl_sdk.agents.universal.drivers.core.base.CollectionBaseClient"),
+            patch("gcl_sdk.agents.universal.storage.fs.TargetFieldsFileStorage"),
+        ):
             driver = drv_core.UserCapabilityDriver(
                 username="admin",
                 password="pass",
