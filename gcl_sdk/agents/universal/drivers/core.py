@@ -38,7 +38,7 @@ CORE_TARGET_FIELDS_FILENAME = "core_target_fields.json"
 
 # DEPRECATED(akremenetsky): Use RestCoreCapabilityDriver instead.
 class CoreCapabilityDriver(direct.DirectAgentDriver):
-    """Core capability driver for interacting with Genesis Core."""
+    """Core capability driver for interacting with Exordos Core."""
 
     def __init__(
         self,

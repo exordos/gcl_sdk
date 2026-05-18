@@ -57,7 +57,7 @@ core_agent_opts = [
     ),
     cfg.StrOpt(
         "target_fields_path",
-        default="/var/lib/genesis/universal_agent/db_back_target_fields.json",
+        default="/var/lib/exordos/universal_agent/db_back_target_fields.json",
         help="Path to the target fields storage file.",
     ),
     cfg.StrOpt(
@@ -68,12 +68,12 @@ core_agent_opts = [
     cfg.StrOpt(
         "orch_endpoint",
         default="http://localhost:11011",
-        help="Endpoint of Genesis Core Orch API for 'http' orch client",
+        help="Endpoint of Exordos Core Orch API for 'http' orch client",
     ),
     cfg.StrOpt(
         "status_endpoint",
         default="http://localhost:11012",
-        help="Endpoint of Genesis Core Status API for 'http' orch client",
+        help="Endpoint of Exordos Core Status API for 'http' orch client",
     ),
     cfg.StrOpt(
         "payload_path",

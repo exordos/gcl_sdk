@@ -1,7 +1,7 @@
 site_name: gcl_sdk
-site_url: https://github.com/infraguys/gcl_sdk
+site_url: https://github.com/exordos/gcl_sdk
 repo_name: gcl_sdk
-repo_url: https://github.com/infraguys/gcl_sdk
+repo_url: https://github.com/exordos/gcl_sdk
 edit_uri: browse/docs/
 
 theme:

@@ -155,9 +155,9 @@ class HttpEventClient(AbstractEventClient, bzk_common.RESTClientMixIn):
     def build_from_config(cls, conf=None, **kwargs):
         conf = conf or CONF
 
-        endpoint = conf[event_c.DOMAIN].genesis_notification_endpoint
-        version = conf[event_c.DOMAIN].genesis_api_version
-        auth_token = conf[event_c.DOMAIN].genesis_api_token
+        endpoint = conf[event_c.DOMAIN].exordos_notification_endpoint
+        version = conf[event_c.DOMAIN].exordos_api_version
+        auth_token = conf[event_c.DOMAIN].exordos_api_token
         project_id = conf[event_c.DOMAIN].project_id
 
         return super().build_from_config(

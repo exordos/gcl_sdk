@@ -28,11 +28,11 @@ from gcl_sdk.paas.dm import services as s_models
 LOG = logging.getLogger(__name__)
 SERVICE_TARGET_KIND = "service_agent_node"
 SERVICES_DIR = "/etc/systemd/system/"
-NAME_PREFIX = "genesis_srv"
+NAME_PREFIX = "exordos_srv"
 
 SERVICE_TEMPLATE = """\
 [Unit]
-Description=Genesis Core: dynamic service {name}
+Description=Exordos Core: dynamic service {name}
 After=network.target
 
 [Service]

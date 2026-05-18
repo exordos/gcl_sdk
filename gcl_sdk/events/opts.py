@@ -43,18 +43,18 @@ def register_event_opts(conf=None):
             help="Event type mapping file path",
         ),
         cfg.URIOpt(
-            "genesis_notification_endpoint",
+            "exordos_notification_endpoint",
             default="http://127.0.0.1:8080/",
             help="Genesis notification endpoint URL",
         ),
         cfg.StrOpt(
-            "genesis_api_version",
+            "exordos_api_version",
             choices=["v1"],
             default="v1",
             help="API version of the Genesis service",
         ),
         cfg.StrOpt(
-            "genesis_api_token",
+            "exordos_api_token",
             default="<inser token here>",
             help=("API token for authentication with the Genesis Notificatio service"),
         ),

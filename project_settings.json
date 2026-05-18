@@ -2,8 +2,8 @@
     "project": {
         "name": "gcl_sdk",
         "package_name": "gcl_sdk",
-        "description": "The Genesis Core SDK",
-        "summary": "The Genesis Core SDK"
+        "description": "The Exordos SDK",
+        "summary": "The Exordos SDK"
     },
     "author": {
         "name": "Genesis Corporation",

@@ -28,8 +28,8 @@ from gcl_sdk.agents.universal.dm import models
 
 ENCRYPTED_JSON_CONTENT_TYPE = "application/x-genesis-agent-chacha20-poly1305-encrypted"
 
-GENESIS_NODE_UUID_HEADER = "X-Genesis-Node-UUID"
-GENESIS_NONCE_HEADER = "X-Genesis-Nonce"
+EXORDOS_NODE_UUID_HEADER = "X-Genesis-Node-UUID"
+EXORDOS_NONCE_HEADER = "X-Genesis-Nonce"
 
 
 class BaseEncryptionInformation(metaclass=abc.ABCMeta):
@@ -85,12 +85,12 @@ class EncryptionInformation(BaseEncryptionInformation):
         if self._node_uuid is not None:
             return self._node_uuid
 
-        node_uuid_str = self._request.headers.get(GENESIS_NODE_UUID_HEADER)
+        node_uuid_str = self._request.headers.get(EXORDOS_NODE_UUID_HEADER)
         if node_uuid_str:
             self._node_uuid = sys_uuid.UUID(node_uuid_str)
             return self._node_uuid
 
-        raise ValueError(f"{GENESIS_NODE_UUID_HEADER} header is missing or invalid")
+        raise ValueError(f"{EXORDOS_NODE_UUID_HEADER} header is missing or invalid")
 
     @property
     def request_nonce(self) -> bytes:
@@ -101,11 +101,11 @@ class EncryptionInformation(BaseEncryptionInformation):
         if self._request_nonce_base64 is not None:
             return self._request_nonce_base64
 
-        self._request_nonce_base64 = self._request.headers.get(GENESIS_NONCE_HEADER)
+        self._request_nonce_base64 = self._request.headers.get(EXORDOS_NONCE_HEADER)
         if self._request_nonce_base64:
             return self._request_nonce_base64
 
-        raise ValueError(f"{GENESIS_NONCE_HEADER} header is missing or invalid")
+        raise ValueError(f"{EXORDOS_NONCE_HEADER} header is missing or invalid")
 
     @property
     def response_nonce(self) -> bytes:
@@ -167,7 +167,7 @@ class NoEncryptionInformation(BaseEncryptionInformation):
         return False
 
 
-class GenesisAgentEncryptedJsonPacker(ra_packers.JSONPacker):
+class ExordosAgentEncryptedJsonPacker(ra_packers.JSONPacker):
     """Packer for encrypted JSON payloads."""
 
     def pack(self, obj: tp.Any) -> tp.Any:
@@ -196,4 +196,4 @@ class GenesisAgentEncryptedJsonPacker(ra_packers.JSONPacker):
         return super().unpack(value)
 
 
-ra_packers.set_packer(ENCRYPTED_JSON_CONTENT_TYPE, GenesisAgentEncryptedJsonPacker)
+ra_packers.set_packer(ENCRYPTED_JSON_CONTENT_TYPE, ExordosAgentEncryptedJsonPacker)

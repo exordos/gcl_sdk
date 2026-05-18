@@ -4,13 +4,13 @@ This page provides a quick start guide for capability drivers. Please refer to m
 
 ## Driver interface
 
-You can find the driver interface [here](https://github.com/infraguys/gcl_sdk/blob/master/gcl_sdk/agents/universal/drivers/base.py) every method has a docstring with short description and they won't be duplicated here.
+You can find the driver interface [here](https://github.com/exordos/gcl_sdk/blob/master/gcl_sdk/agents/universal/drivers/base.py) every method has a docstring with short description and they won't be duplicated here.
 
 ## Quick start
 
 If you are reading this section, it means you would like to write your capability driver and that's great! As you already read a driver needs to work with data plane part and translate results to the Universal Agent via such abstraction as `Resource`. Let's imagine a simple problem we would like to solve for this quick start guide and write a driver for it. For instance, our driver should keep files in a particular directory. For simplicity we assume all files are empty, no nested directory and so on. We only need presence of these files in the particular directory. Let's start.
 
-The full implementation can be found in [dummy.py](https://github.com/infraguys/gcl_sdk/blob/master/gcl_sdk/agents/universal/drivers/dummy.py).
+The full implementation can be found in [dummy.py](https://github.com/exordos/gcl_sdk/blob/master/gcl_sdk/agents/universal/drivers/dummy.py).
 
 ### Register capability
 
@@ -134,7 +134,7 @@ pip install your-package-with-driver
 uv pip install your-package-with-driver
 ```
 
-Then add the driver to the configuration file `/etc/genesis_universal_agent/genesis_universal_agent.conf`:
+Then add the driver to the configuration file `/etc/exordos_universal_agent/exordos_universal_agent.conf`:
 
 ```ini
 [universal_agent]
@@ -144,7 +144,7 @@ caps_drivers = ...,YouDriverClassName
 Restart the agent:
 
 ```bash
-systemctl restart genesis-universal-agent
+systemctl restart exordos-universal-agent
 ```
 
 Now the agent will use your driver to work with files!

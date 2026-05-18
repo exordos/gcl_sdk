@@ -1,6 +1,6 @@
-Welcome to the Genesis SDK documentation!
+Welcome to the Exordos SDK documentation!
 
-The Genesis SDK is a set of tools for developing Genesis elements. There are several topics in the SDK documentation that you can find here:
+The Exordos SDK is a set of tools for developing Exordos elements. There are several topics in the SDK documentation that you can find here:
 
 * [Events](events/events.md)
 * [Universal Agent](universal_agent/universal_agent.md)
