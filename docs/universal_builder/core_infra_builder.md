@@ -1,6 +1,6 @@
 # CoreInfraBuilder
 
-The `CoreInfraBuilder` is a builder that is focused on infrastructure management. The main purpose of this builder is to provide a simple way to manage infrastructure resources of Genesis Core. The builder inherits from `UniversalBuilder` so you can override any method of the builder to provide custom logic. The builder extends the interface of the `UniversalBuilder` with some specific methods.
+The `CoreInfraBuilder` is a builder that is focused on infrastructure management. The main purpose of this builder is to provide a simple way to manage infrastructure resources of Exordos Core. The builder inherits from `UniversalBuilder` so you can override any method of the builder to provide custom logic. The builder extends the interface of the `UniversalBuilder` with some specific methods.
 
 ## create_infra
 

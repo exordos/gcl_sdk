@@ -48,7 +48,7 @@ Some explanation for the `hash` and `full_hash`. Let's assume we have the follow
         "disk_spec": {
             "kind": "root_disk",
             "root_disk_size": 15,
-            "image": "http://10.20.0.1:8080/genesis-base.raw",
+            "image": "http://10.20.0.1:8080/exordos-base.raw",
         }
     }
 ```
@@ -65,7 +65,7 @@ All these fields are considered as target fields and they are used to calculate 
         "disk_spec": {
             "kind": "root_disk",
             "root_disk_size": 15,
-            "image": "http://10.20.0.1:8080/genesis-base.raw",
+            "image": "http://10.20.0.1:8080/exordos-base.raw",
         },
 
         // Not target fields below
@@ -121,9 +121,9 @@ This model is used to represent the payload of the agent. The model is used as f
 
 One of ideas of the Universal Agent is to use drivers to interact with the data plane but the agent itself is operated only on high level abstractions. So developers should write only drivers using specified interface. The drivers are loaded at agent launch time and registered their capabilities and facts. After registration the agent can handle resources with specified capabilities.
 
-[Capability driver interface](https://github.com/infraguys/gcl_sdk/blob/master/gcl_sdk/agents/universal/drivers/base.py#L23)
+[Capability driver interface](https://github.com/exordos/gcl_sdk/blob/master/gcl_sdk/agents/universal/drivers/base.py#L23)
 
-[Fact driver interface](https://github.com/infraguys/gcl_sdk/blob/master/gcl_sdk/agents/universal/drivers/base.py#L62)
+[Fact driver interface](https://github.com/exordos/gcl_sdk/blob/master/gcl_sdk/agents/universal/drivers/base.py#L62)
 
 Look at [quick start guide](capability_driver_quick_start.md) for capability driver and [quick start guide](fact_driver_quick_start.md) for fact driver.
 
@@ -137,7 +137,7 @@ See [Metadata driver quick start](metadata_driver_quick_start.md) for details, e
 
 #### SSHKeyCapabilityDriver
 
-The driver handles SSH keys on the host. The `SSHKeyCapabilityDriver` is derived from `MetaFileStorageAgentDriver`. The main data plane model is `SSHKey`, it's derived from `MetaDataPlaneModel`. The meta file is located at `/var/lib/genesis/universal_agent/ssh_key_meta.json`.
+The driver handles SSH keys on the host. The `SSHKeyCapabilityDriver` is derived from `MetaFileStorageAgentDriver`. The main data plane model is `SSHKey`, it's derived from `MetaDataPlaneModel`. The meta file is located at `/var/lib/exordos/universal_agent/ssh_key_meta.json`.
 
 ### Direct driver
 

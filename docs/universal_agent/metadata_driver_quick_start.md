@@ -23,8 +23,8 @@ Please refer to [Universal Agent](universal_agent.md) main terms for context.
 
 Metadata drivers are built on top of:
 
-- [`MetaFileStorageAgentDriver`](https://github.com/infraguys/gcl_sdk/blob/master/gcl_sdk/agents/universal/drivers/meta.py)
-- [`MetaDataPlaneModel`](https://github.com/infraguys/gcl_sdk/blob/master/gcl_sdk/agents/universal/drivers/meta.py)
+- [`MetaFileStorageAgentDriver`](https://github.com/exordos/gcl_sdk/blob/master/gcl_sdk/agents/universal/drivers/meta.py)
+- [`MetaDataPlaneModel`](https://github.com/exordos/gcl_sdk/blob/master/gcl_sdk/agents/universal/drivers/meta.py)
 
 A metadata driver stores resource metadata (for example UUID and file path) in a meta file and keeps the actual object in the data plane.
 
@@ -102,7 +102,7 @@ from gcl_sdk.agents.universal.drivers import meta
 
 
 class FilesMetaCapabilityDriver(meta.MetaFileStorageAgentDriver):
-    FILE_META_PATH = "/var/lib/genesis/universal_agent/file_meta.json"
+    FILE_META_PATH = "/var/lib/exordos/universal_agent/file_meta.json"
 
     __model_map__ = {
         "file_target": FileMetaModel,
@@ -159,5 +159,5 @@ caps_drivers = ...,FilesMetaCapabilityDriver
 ```
 
 ```bash
-systemctl restart genesis-universal-agent
+systemctl restart exordos-universal-agent
 ```

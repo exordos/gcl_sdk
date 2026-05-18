@@ -35,7 +35,7 @@ class ResourceProjectMismatch(exceptions.BackendClientException):
 
 
 class GCRestApiBackendClient(rest.RestApiBackendClient):
-    """Genesis Core Rest API backend client."""
+    """Exordos Core Rest API backend client."""
 
     def __init__(
         self,
@@ -101,7 +101,7 @@ class GCRestApiBackendClient(rest.RestApiBackendClient):
 
 
 class GCUsersRestApiBackendClient(rest.RestApiBackendClient):
-    """Genesis Core Users Rest API backend client.
+    """Exordos Core Users Rest API backend client.
 
     Works exclusively with the /v1/iam/users collection.
     """

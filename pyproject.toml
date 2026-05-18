@@ -1,6 +1,6 @@
 [project]
 name = "gcl_sdk"
-description = "The Genesis Core SDK"
+description = "The Exordos SDK"
 readme = "README.md"
 authors = [{name = "Genesis Corporation", email = "eugene@frolov.net.ru"}]
 dynamic = ["version"]
@@ -31,7 +31,7 @@ dependencies = [
     "orjson>=3.10.0,<4.0.0",  # MIT
 ]
 [project.urls]
-homepage = "https://github.com/infraguys/gcl_sdk/"
+homepage = "https://github.com/exordos/gcl_sdk/"
 
 [build-system]
 requires = [
@@ -128,9 +128,9 @@ line-ending = "auto"
 where = ["."]
 
 [project.scripts]
-genesis-universal-agent = "gcl_sdk.agents.universal.cmd.universal_agent:main"
-genesis-universal-agent-db-back = "gcl_sdk.agents.universal.cmd.universal_agent_db_back:main"
-genesis-universal-scheduler = "gcl_sdk.agents.universal.cmd.scheduler:main"
+exordos-universal-agent = "gcl_sdk.agents.universal.cmd.universal_agent:main"
+exordos-universal-agent-db-back = "gcl_sdk.agents.universal.cmd.universal_agent_db_back:main"
+exordos-universal-scheduler = "gcl_sdk.agents.universal.cmd.scheduler:main"
 
 [project.entry-points."gcl_sdk_event_payloads"]
 DummyEventPayload = "gcl_sdk.events.dm.models:DummyEventPayload"

@@ -41,8 +41,8 @@ BALANCE_MAPPING = {
     "roundrobin": "",
     "leastconn": "least_conn;",
 }
-NGINX_L7_CONFIG_FILE = "/etc/nginx/conf.d/genesis_lb.conf"
-NGINX_L4_CONFIG_FILE = "/etc/nginx/genesis/l4.conf"
+NGINX_L7_CONFIG_FILE = "/etc/nginx/conf.d/exordos_lb.conf"
+NGINX_L4_CONFIG_FILE = "/etc/nginx/exordos/l4.conf"
 NGINX_SSL_DIR = "/etc/nginx/ssl/"
 NGINX_USER = NGINX_GROUP = "www-data"
 # Drop all if not set by user, convenient default
@@ -76,27 +76,27 @@ DOWNLOAD_DIR_TMP = "/var/www/gc_downloaded_tmp/"
 
 SYSTEMD_TEMPLATE = """\
 [Unit]
-Description=Genesis Tunnel service for %i
+Description=Exordos Tunnel service for %i
 After=network.target
 
 [Service]
-ExecStart=/var/lib/genesis/tunnels/%i.sh
+ExecStart=/var/lib/exordos/tunnels/%i.sh
 RestartSec=5
 Restart=always
 
 [Install]
 WantedBy=multi-user.target
 """
-SYSTEMD_TMPL_PATH = "/etc/systemd/system/genesis-tunnel@.service"
+SYSTEMD_TMPL_PATH = "/etc/systemd/system/exordos-tunnel@.service"
 
-TUNNEL_SCRIPT_PATH = "/var/lib/genesis/tunnels/"
+TUNNEL_SCRIPT_PATH = "/var/lib/exordos/tunnels/"
 
 REMOTE_SCRIPT = """\
 set -eux
 
-cat > /tmp/genesis_nginx_{port}_{mode}.conf <<EOF
+cat > /tmp/exordos_nginx_{port}_{mode}.conf <<EOF
 load_module /usr/lib/nginx/modules/ngx_stream_module.so;
-pid /tmp/genesis_nginx_{port}_{mode}.pid;
+pid /tmp/exordos_nginx_{port}_{mode}.pid;
 
 events {{
     worker_connections  1024;
@@ -104,7 +104,7 @@ events {{
 
 stream {{
     upstream backend {{
-       server unix:/tmp/genesis_nginx_{port}_{mode}.sock;
+       server unix:/tmp/exordos_nginx_{port}_{mode}.sock;
     }}
 
     server {{
@@ -115,24 +115,24 @@ stream {{
 }}
 EOF
 
-PID_FILE="/tmp/genesis_nginx_{port}_{mode}.pid"
+PID_FILE="/tmp/exordos_nginx_{port}_{mode}.pid"
 
 if [ -f "$PID_FILE" ]; then
     pkill -F "$PID_FILE"
 fi;
 
-if [ -S "/tmp/genesis_nginx_{port}_{mode}.sock" ]; then
-    if socat -u OPEN:/dev/null UNIX-CONNECT:/tmp/genesis_nginx_{port}_{mode}.sock; then
+if [ -S "/tmp/exordos_nginx_{port}_{mode}.sock" ]; then
+    if socat -u OPEN:/dev/null UNIX-CONNECT:/tmp/exordos_nginx_{port}_{mode}.sock; then
         echo "Socket is alive, continue"
     else
-        rm /tmp/genesis_nginx_{port}_{mode}.sock || true
+        rm /tmp/exordos_nginx_{port}_{mode}.sock || true
         exit 1
     fi
 fi;
 
-trap "pkill -F $PID_FILE && rm /tmp/genesis_nginx_{port}_{mode}.sock || true" EXIT
+trap "pkill -F $PID_FILE && rm /tmp/exordos_nginx_{port}_{mode}.sock || true" EXIT
 
-/usr/sbin/nginx -g "daemon off; master_process off;" -e stderr -c /tmp/genesis_nginx_{port}_{mode}.conf
+/usr/sbin/nginx -g "daemon off; master_process off;" -e stderr -c /tmp/exordos_nginx_{port}_{mode}.conf
 
 """
 
@@ -143,7 +143,7 @@ set -xe
 MODE={mode}
 
 
-COMMAND="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=20 -o ServerAliveCountMax=3 -o IdentitiesOnly=yes -F /dev/null {ssh_user}@{ssh_host} -p {ssh_port} -i /var/lib/genesis/tunnels/{name}.key"
+COMMAND="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=20 -o ServerAliveCountMax=3 -o IdentitiesOnly=yes -F /dev/null {ssh_user}@{ssh_host} -p {ssh_port} -i /var/lib/exordos/tunnels/{name}.key"
 REMOTE_COMMAND=$(cat <<'END'
 {remote_command}
 END
@@ -151,7 +151,7 @@ END
 
 if [[ "$MODE" == "tcp" ]]; then
     if [[ "$REMOTE_COMMAND" = *[^[:space:]]* ]]; then
-        $COMMAND -R /tmp/genesis_nginx_{port}_{mode}.sock:0.0.0.0:{port} <<END
+        $COMMAND -R /tmp/exordos_nginx_{port}_{mode}.sock:0.0.0.0:{port} <<END
 $REMOTE_COMMAND
 END
     else
@@ -353,8 +353,8 @@ location {LOCATION_TYPE_MAPPING[c["kind"]]} {c["value"]} {{
 
         if v["proto"] == "https":
             ssl_info = f"""
-ssl_certificate      {NGINX_SSL_DIR}{v["uuid"]}_genesis.crt;
-ssl_certificate_key  {NGINX_SSL_DIR}{v["uuid"]}_genesis.key;
+ssl_certificate      {NGINX_SSL_DIR}{v["uuid"]}_exordos.crt;
+ssl_certificate_key  {NGINX_SSL_DIR}{v["uuid"]}_exordos.key;
 ssl_protocols TLSv1.2 TLSv1.3;
 ssl_ecdh_curve X25519:prime256v1:secp384r1;
 ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384:DHE-RSA-CHACHA20-POLY1305;
@@ -569,18 +569,18 @@ map $http_upgrade $connection_upgrade {
         for v in self.vhosts:
             if v["proto"] != "https":
                 continue
-            crt_name = f"{NGINX_SSL_DIR}{v['uuid']}_genesis.crt"
+            crt_name = f"{NGINX_SSL_DIR}{v['uuid']}_exordos.crt"
             with open(crt_name, "w", opener=secure_opener) as f:
                 f.write(v["cert"]["crt"])
             shutil.chown(crt_name, user=NGINX_USER, group=NGINX_GROUP)
-            key_name = f"{NGINX_SSL_DIR}{v['uuid']}_genesis.key"
+            key_name = f"{NGINX_SSL_DIR}{v['uuid']}_exordos.key"
             actual_keys.add(key_name)
             with open(key_name, "w", opener=secure_opener) as f:
                 f.write(v["cert"]["key"])
             shutil.chown(key_name, user=NGINX_USER, group=NGINX_GROUP)
 
         # Clean up SSL certificate files that are not in use
-        for filepath in glob.glob(f"{NGINX_SSL_DIR}*_genesis.key"):
+        for filepath in glob.glob(f"{NGINX_SSL_DIR}*_exordos.key"):
             if filepath not in actual_keys:
                 try:
                     os.remove(f"{os.path.splitext(filepath)[0]}.crt")
@@ -625,7 +625,7 @@ map $http_upgrade $connection_upgrade {
             ) as f:
                 f.write(e["private_key"])
             subprocess.check_call(
-                ["systemctl", "enable", "--now", f"genesis-tunnel@{n}"]
+                ["systemctl", "enable", "--now", f"exordos-tunnel@{n}"]
             )
         self._remove_external_sources(ext_sources)
 
@@ -653,10 +653,10 @@ map $http_upgrade $connection_upgrade {
         for v in self.vhosts:
             if v["proto"] == "https":
                 self._validate_file(
-                    f"{NGINX_SSL_DIR}{v['uuid']}_genesis.crt", v["cert"]["crt"]
+                    f"{NGINX_SSL_DIR}{v['uuid']}_exordos.crt", v["cert"]["crt"]
                 )
                 self._validate_file(
-                    f"{NGINX_SSL_DIR}{v['uuid']}_genesis.key", v["cert"]["key"]
+                    f"{NGINX_SSL_DIR}{v['uuid']}_exordos.key", v["cert"]["key"]
                 )
         for path, future in self._download_dirs_futures.copy().items():
             try:
@@ -716,7 +716,7 @@ map $http_upgrade $connection_upgrade {
             )
             try:
                 subprocess.check_output(
-                    ["systemctl", "is-active", f"genesis-tunnel@{n}"]
+                    ["systemctl", "is-active", f"exordos-tunnel@{n}"]
                 )
             except subprocess.CalledProcessError:
                 raise driver_exc.InvalidDataPlaneObjectError(
@@ -745,7 +745,7 @@ map $http_upgrade $connection_upgrade {
                         "systemctl",
                         "disable",
                         "--now",
-                        f"genesis-tunnel@{sname}",
+                        f"exordos-tunnel@{sname}",
                     ]
                 )
             except subprocess.CalledProcessError:
@@ -763,8 +763,8 @@ map $http_upgrade $connection_upgrade {
 
         for v in self.vhosts:
             if v["proto"] == "https":
-                self._remove_file(f"{NGINX_SSL_DIR}{v['uuid']}_genesis.crt")
-                self._remove_file(f"{NGINX_SSL_DIR}{v['uuid']}_genesis.key")
+                self._remove_file(f"{NGINX_SSL_DIR}{v['uuid']}_exordos.crt")
+                self._remove_file(f"{NGINX_SSL_DIR}{v['uuid']}_exordos.key")
 
         self._actualize_downloaded_dirs()
         self._reload_or_restart_nginx()

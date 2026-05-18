@@ -1,10 +1,10 @@
-![Tests workflow](https://github.com/infraguys/gcl_sdk/actions/workflows/tests.yaml/badge.svg)
+![Tests workflow](https://github.com/exordos/gcl_sdk/actions/workflows/tests.yaml/badge.svg)
 ![PyPI - Python Version](https://img.shields.io/pypi/pyversions/gcl-sdk)
 ![PyPI - Downloads](https://img.shields.io/pypi/dm/gcl-sdk)
 
-Welcome to the Genesis SDK!
+Welcome to the Exordos SDK!
 
-The Genesis SDK is a set of tools for developing Genesis elements. Main information you can find in the [wiki](https://github.com/infraguys/gcl_sdk/wiki).
+The Exordos SDK is a set of tools for developing Exordos elements. Main information you can find in the [wiki](https://github.com/exordos/gcl_sdk/wiki).
 
 # 🚀 Development
 
@@ -47,8 +47,8 @@ tox -e py312-functional
 
 # 🔗 Related projects
 
-- Genesis Core is main project of the Genesis ecosystem. You can find it [here](https://github.com/infraguys/genesis_core).
-- Genesis DevTools it's a set oftools to manager life cycle of genesis projects. You can find it [here](https://github.com/infraguys/genesis_devtools).
+- Exordos Core is main project of the Exordos ecosystem. You can find it [here](https://github.com/exordos/exordos_core).
+- Exordos DevTools it's a set oftools to manager life cycle of exordos projects. You can find it [here](https://github.com/exordos/exordos).
 
 # 💡 Contributing
 

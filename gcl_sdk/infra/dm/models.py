@@ -173,7 +173,7 @@ class DisksSpec(AbstractDiskSpec):
           kind: "disks"
           disks:
             - size: 10
-              image: "https://repository.genesis-core.tech/genesis-base/latest/genesis-base.raw.gz"
+              image: "https://repo.exordos.com/exordos-base/latest/exordos-base.raw.gz"
             - size: 100
               label: "data"
               mount_point: "/var/data"
@@ -292,7 +292,7 @@ class Node(
     ra_models.ModelWithNameDesc,
     ra_models.ModelWithTimestamp,
 ):
-    """The model represents a node in Genesis Core infrastructure.
+    """The model represents a node in Exordos Core infrastructure.
 
     The model represents a virtual machine or a physical machine with
     specified characteristics such as cores, ram, root disk size, image,
@@ -420,7 +420,7 @@ class SetDisksSpec(DisksSpec, AbstractSetDiskSpec):
           kind: "disks"
           disks:
             - size: 10
-              image: "https://repository.genesis-core.tech/genesis-base/latest/genesis-base.raw.gz"
+              image: "https://repo.exordos.com/exordos-base/latest/exordos-base.raw.gz"
             - size: 100
               label: "data"
               mount_point: "/var/data"
@@ -450,7 +450,7 @@ class NodeSet(
     ra_models.ModelWithTimestamp,
     ua_models.TargetResourceKindAwareMixin,
 ):
-    """The model represents a node set in Genesis Core infrastructure.
+    """The model represents a node set in Exordos Core infrastructure.
 
     The node set is a group of nodes with the same characteristics. See the
     `Node` model for more details about node characteristics. The key field of

@@ -57,8 +57,8 @@ def encryption_key_factory():
 def build_encryption_headers(node_uuid: sys_uuid.UUID, content_type: str):
     nonce = sdk_crypto.generate_nonce()
     return {
-        packers.GENESIS_NODE_UUID_HEADER: str(node_uuid),
-        packers.GENESIS_NONCE_HEADER: base64.b64encode(nonce).decode(),
+        packers.EXORDOS_NODE_UUID_HEADER: str(node_uuid),
+        packers.EXORDOS_NONCE_HEADER: base64.b64encode(nonce).decode(),
         "Accept": "application/json",
         "Content-Type": content_type,
     }
@@ -317,5 +317,5 @@ class TestEncryptedStatusApi:
 
         assert response.status_code == 200
         assert response.headers["Content-Type"] == (packers.ENCRYPTED_JSON_CONTENT_TYPE)
-        assert packers.GENESIS_NONCE_HEADER in response.headers
-        assert packers.GENESIS_NODE_UUID_HEADER in response.headers
+        assert packers.EXORDOS_NONCE_HEADER in response.headers
+        assert packers.EXORDOS_NODE_UUID_HEADER in response.headers

@@ -30,10 +30,10 @@ class SdkEncryptionHeadersMixin:
         headers["Content-Type"] = (
             self._req.content_type or packers.ENCRYPTED_JSON_CONTENT_TYPE
         )
-        headers[packers.GENESIS_NONCE_HEADER] = base64.b64encode(
+        headers[packers.EXORDOS_NONCE_HEADER] = base64.b64encode(
             encryption_information.response_nonce
         ).decode()
-        headers[packers.GENESIS_NODE_UUID_HEADER] = str(
+        headers[packers.EXORDOS_NODE_UUID_HEADER] = str(
             encryption_information.node_uuid
         )
         return headers

@@ -23,7 +23,7 @@ Please refer to [Universal Agent](universal_agent.md) main terms for context.
 
 A direct driver is based on:
 
-- [`DirectAgentDriver`](https://github.com/infraguys/gcl_sdk/blob/master/gcl_sdk/agents/universal/drivers/direct.py)
+- [`DirectAgentDriver`](https://github.com/exordos/gcl_sdk/blob/master/gcl_sdk/agents/universal/drivers/direct.py)
 - backend client (`AbstractBackendClient`)
 - target fields storage (`AbstractTargetFieldsStorage`)
 
@@ -199,5 +199,5 @@ caps_drivers = ...,FilesDirectCapabilityDriver
 ```
 
 ```bash
-systemctl restart genesis-universal-agent
+systemctl restart exordos-universal-agent
 ```

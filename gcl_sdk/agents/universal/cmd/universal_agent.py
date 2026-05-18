@@ -41,12 +41,12 @@ core_agent_opts = [
     cfg.StrOpt(
         "orch_endpoint",
         default="http://localhost:11011",
-        help="Endpoint of Genesis Core Orch API",
+        help="Endpoint of Exordos Core Orch API",
     ),
     cfg.StrOpt(
         "status_endpoint",
         default="http://localhost:11011",
-        help="Endpoint of Genesis Core Status API",
+        help="Endpoint of Exordos Core Status API",
     ),
     cfg.ListOpt(
         "caps_drivers",

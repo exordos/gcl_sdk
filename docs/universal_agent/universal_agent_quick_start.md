@@ -4,9 +4,9 @@ This page provides a quick start guide for the Universal Agent. How to run, conf
 
 ## Install & run
 
-The agent is embedded into [Genesis base image](https://github.com/infraguys/gci_base) and the simplest way to test it just to run a VM from the base image or its inherited images.
+The agent is embedded into [Exordos base image](https://github.com/exordos/eci_base) and the simplest way to test it just to run a VM from the base image or its inherited images.
 
-For manual installation prepare a virtual environment and install the [gcl-sdk](https://github.com/infraguys/gcl_sdk).
+For manual installation prepare a virtual environment and install the [gcl-sdk](https://github.com/exordos/gcl_sdk).
 
 ```bash
 python3 -m venv venv
@@ -17,14 +17,14 @@ pip install gcl-sdk
 Run the agent:
 
 ```bash
-genesis-universal-agent --config-file /etc/genesis_universal_agent/genesis_universal_agent.conf
+exordos-universal-agent --config-file /etc/exordos_universal_agent/exordos_universal_agent.conf
 ```
 
 The configuration file will be described later.
 
 ## Configuration
 
-The agent uses a configuration file in the `ini` format. The default path to the configuration file is `/etc/genesis_universal_agent/genesis_universal_agent.conf`. The main agent section is `universal_agent`:
+The agent uses a configuration file in the `ini` format. The default path to the configuration file is `/etc/exordos_universal_agent/exordos_universal_agent.conf`. The main agent section is `universal_agent`:
 
 ```ini
 [universal_agent]
@@ -51,7 +51,7 @@ If any of drivers use a database it should be configured in the `[db]` section. 
 
 ```ini
 [db]
-connection_url = postgresql://genesis_core:genesis_core@127.0.0.1:5432/genesis_core
+connection_url = postgresql://exordos_core:exordos_core@127.0.0.1:5432/exordos_core
 connection_pool_size = 2
 ```
 
