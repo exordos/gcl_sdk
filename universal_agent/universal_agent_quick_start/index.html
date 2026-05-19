@@ -5,7 +5,7 @@
       
       
       
-        <link rel="canonical" href="https://github.com/infraguys/gcl_sdk/universal_agent/universal_agent_quick_start/">
+        <link rel="canonical" href="https://github.com/exordos/gcl_sdk/universal_agent/universal_agent_quick_start/">
       
       
         <link rel="prev" href="../universal_agent/">
@@ -207,7 +207,7 @@
     
     
       <div class="md-header__source">
-        <a href="https://github.com/infraguys/gcl_sdk" title="Go to repository" class="md-source" data-md-component="source">
+        <a href="https://github.com/exordos/gcl_sdk" title="Go to repository" class="md-source" data-md-component="source">
   <div class="md-source__icon md-icon">
     
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.3.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2023 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81z"></path></svg>
@@ -254,7 +254,7 @@
   </label>
   
     <div class="md-nav__source">
-      <a href="https://github.com/infraguys/gcl_sdk" title="Go to repository" class="md-source" data-md-component="source">
+      <a href="https://github.com/exordos/gcl_sdk" title="Go to repository" class="md-source" data-md-component="source">
   <div class="md-source__icon md-icon">
     
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.3.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2023 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81z"></path></svg>
@@ -579,18 +579,18 @@
 <h1 id="universal-agent-quick-start">Universal Agent Quick start<a class="headerlink" href="#universal-agent-quick-start" title="Permanent link">#</a></h1>
 <p>This page provides a quick start guide for the Universal Agent. How to run, configure and work with it.</p>
 <h2 id="install--run">Install &amp; run<a class="headerlink" href="#install--run" title="Permanent link">#</a></h2>
-<p>The agent is embedded into <a href="https://github.com/infraguys/gci_base">Genesis base image</a> and the simplest way to test it just to run a VM from the base image or its inherited images.</p>
-<p>For manual installation prepare a virtual environment and install the <a href="https://github.com/infraguys/gcl_sdk">gcl-sdk</a>.</p>
+<p>The agent is embedded into <a href="https://github.com/exordos/eci_base">Exordos base image</a> and the simplest way to test it just to run a VM from the base image or its inherited images.</p>
+<p>For manual installation prepare a virtual environment and install the <a href="https://github.com/exordos/gcl_sdk">gcl-sdk</a>.</p>
 <div class="highlight"><pre><span></span><code>python3<span class="w"> </span>-m<span class="w"> </span>venv<span class="w"> </span>venv
 <span class="nb">source</span><span class="w"> </span>venv/bin/activate
 pip<span class="w"> </span>install<span class="w"> </span>gcl-sdk
 </code></pre></div>
 <p>Run the agent:</p>
-<div class="highlight"><pre><span></span><code>genesis-universal-agent<span class="w"> </span>--config-file<span class="w"> </span>/etc/genesis_universal_agent/genesis_universal_agent.conf
+<div class="highlight"><pre><span></span><code>exordos-universal-agent<span class="w"> </span>--config-file<span class="w"> </span>/etc/exordos_universal_agent/exordos_universal_agent.conf
 </code></pre></div>
 <p>The configuration file will be described later.</p>
 <h2 id="configuration">Configuration<a class="headerlink" href="#configuration" title="Permanent link">#</a></h2>
-<p>The agent uses a configuration file in the <code>ini</code> format. The default path to the configuration file is <code>/etc/genesis_universal_agent/genesis_universal_agent.conf</code>. The main agent section is <code>universal_agent</code>:</p>
+<p>The agent uses a configuration file in the <code>ini</code> format. The default path to the configuration file is <code>/etc/exordos_universal_agent/exordos_universal_agent.conf</code>. The main agent section is <code>universal_agent</code>:</p>
 <div class="highlight"><pre><span></span><code><span class="k">[universal_agent]</span>
 <span class="na">orch_endpoint</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">http://localhost:11011</span>
 <span class="na">status_endpoint</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">http://localhost:11012</span>
@@ -611,7 +611,7 @@ pip<span class="w"> </span>install<span class="w"> </span>gcl-sdk
 </ul>
 <p>If any of drivers use a database it should be configured in the <code>[db]</code> section. Example:</p>
 <div class="highlight"><pre><span></span><code><span class="k">[db]</span>
-<span class="na">connection_url</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">postgresql://genesis_core:genesis_core@127.0.0.1:5432/genesis_core</span>
+<span class="na">connection_url</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">postgresql://exordos_core:exordos_core@127.0.0.1:5432/exordos_core</span>
 <span class="na">connection_pool_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">2</span>
 </code></pre></div>
 <p>Also you may specify specific configuration for each driver, for example, for the <code>CoreCapabilityDriver</code>:</p>

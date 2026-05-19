@@ -5,7 +5,7 @@
       
       
       
-        <link rel="canonical" href="https://github.com/infraguys/gcl_sdk/ru/universal_agent/capability_driver_quick_start/">
+        <link rel="canonical" href="https://github.com/exordos/gcl_sdk/ru/universal_agent/capability_driver_quick_start/">
       
       
         <link rel="prev" href="../universal_agent_quick_start/">
@@ -207,7 +207,7 @@
     
     
       <div class="md-header__source">
-        <a href="https://github.com/infraguys/gcl_sdk" title="Перейти к репозиторию" class="md-source" data-md-component="source">
+        <a href="https://github.com/exordos/gcl_sdk" title="Перейти к репозиторию" class="md-source" data-md-component="source">
   <div class="md-source__icon md-icon">
     
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.3.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2023 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81z"></path></svg>
@@ -254,7 +254,7 @@
   </label>
   
     <div class="md-nav__source">
-      <a href="https://github.com/infraguys/gcl_sdk" title="Перейти к репозиторию" class="md-source" data-md-component="source">
+      <a href="https://github.com/exordos/gcl_sdk" title="Перейти к репозиторию" class="md-source" data-md-component="source">
   <div class="md-source__icon md-icon">
     
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.3.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2023 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81z"></path></svg>
@@ -613,10 +613,10 @@
 <h1 id="capability-driver-quick-start">Capability driver Quick start<a class="headerlink" href="#capability-driver-quick-start" title="Permanent link">#</a></h1>
 <p>This page provides a quick start guide for capability drivers. Please refer to main terms of the <a href="../universal_agent/">Universal Agent</a> to be in the right context.</p>
 <h2 id="driver-interface">Driver interface<a class="headerlink" href="#driver-interface" title="Permanent link">#</a></h2>
-<p>You can find the driver interface <a href="https://github.com/infraguys/gcl_sdk/blob/master/gcl_sdk/agents/universal/drivers/base.py">here</a> every method has a docstring with short description and they won't be duplicated here.</p>
+<p>You can find the driver interface <a href="https://github.com/exordos/gcl_sdk/blob/master/gcl_sdk/agents/universal/drivers/base.py">here</a> every method has a docstring with short description and they won't be duplicated here.</p>
 <h2 id="quick-start">Quick start<a class="headerlink" href="#quick-start" title="Permanent link">#</a></h2>
 <p>If you are reading this section, it means you would like to write your capability driver and that's great! As you already read a driver needs to work with data plane part and translate results to the Universal Agent via such abstraction as <code>Resource</code>. Let's imagine a simple problem we would like to solve for this quick start guide and write a driver for it. For instance, our driver should keep files in a particular directory. For simplicity we assume all files are empty, no nested directory and so on. We only need presence of these files in the particular directory. Let's start.</p>
-<p>The full implementation can be found in <a href="https://github.com/infraguys/gcl_sdk/blob/master/gcl_sdk/agents/universal/drivers/dummy.py">dummy.py</a>.</p>
+<p>The full implementation can be found in <a href="https://github.com/exordos/gcl_sdk/blob/master/gcl_sdk/agents/universal/drivers/dummy.py">dummy.py</a>.</p>
 <h3 id="register-capability">Register capability<a class="headerlink" href="#register-capability" title="Permanent link">#</a></h3>
 <p>The first step is to specify capabilities or kinds the driver works with. The capabilities are defined as a list of strings. For example, if we want to work with files we can register the <code>file</code> capability.</p>
 <div class="highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">get_capabilities</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]:</span>
@@ -700,12 +700,12 @@
 <span class="c1"># or with uv</span>
 uv<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>your-package-with-driver
 </code></pre></div>
-<p>Then add the driver to the configuration file <code>/etc/genesis_universal_agent/genesis_universal_agent.conf</code>:</p>
+<p>Then add the driver to the configuration file <code>/etc/exordos_universal_agent/exordos_universal_agent.conf</code>:</p>
 <div class="highlight"><pre><span></span><code><span class="k">[universal_agent]</span>
 <span class="na">caps_drivers</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">...,YouDriverClassName</span>
 </code></pre></div>
 <p>Restart the agent:</p>
-<div class="highlight"><pre><span></span><code>systemctl<span class="w"> </span>restart<span class="w"> </span>genesis-universal-agent
+<div class="highlight"><pre><span></span><code>systemctl<span class="w"> </span>restart<span class="w"> </span>exordos-universal-agent
 </code></pre></div>
 <p>Now the agent will use your driver to work with files!</p>
 

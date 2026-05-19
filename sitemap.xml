@@ -1,213 +1,213 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">
     <url>
-        <loc>https://github.com/infraguys/gcl_sdk/</loc>
-        <lastmod>2026-04-17</lastmod>
+        <loc>https://github.com/exordos/gcl_sdk/</loc>
+        <lastmod>2026-05-19</lastmod>
         <changefreq>daily</changefreq>
-        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/infraguys/gcl_sdk/"/>
-        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/infraguys/gcl_sdk/ru/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/exordos/gcl_sdk/"/>
+        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/exordos/gcl_sdk/ru/"/>
     </url>
     <url>
-        <loc>https://github.com/infraguys/gcl_sdk/audit/audit/</loc>
-        <lastmod>2026-04-17</lastmod>
+        <loc>https://github.com/exordos/gcl_sdk/audit/audit/</loc>
+        <lastmod>2026-05-19</lastmod>
         <changefreq>daily</changefreq>
-        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/infraguys/gcl_sdk/audit/audit/"/>
-        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/infraguys/gcl_sdk/ru/audit/audit/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/exordos/gcl_sdk/audit/audit/"/>
+        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/exordos/gcl_sdk/ru/audit/audit/"/>
     </url>
     <url>
-        <loc>https://github.com/infraguys/gcl_sdk/events/events/</loc>
-        <lastmod>2026-04-17</lastmod>
+        <loc>https://github.com/exordos/gcl_sdk/events/events/</loc>
+        <lastmod>2026-05-19</lastmod>
         <changefreq>daily</changefreq>
-        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/infraguys/gcl_sdk/events/events/"/>
-        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/infraguys/gcl_sdk/ru/events/events/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/exordos/gcl_sdk/events/events/"/>
+        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/exordos/gcl_sdk/ru/events/events/"/>
     </url>
     <url>
-        <loc>https://github.com/infraguys/gcl_sdk/universal_agent/capability_driver_quick_start/</loc>
-        <lastmod>2026-04-17</lastmod>
+        <loc>https://github.com/exordos/gcl_sdk/universal_agent/capability_driver_quick_start/</loc>
+        <lastmod>2026-05-19</lastmod>
         <changefreq>daily</changefreq>
-        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/infraguys/gcl_sdk/universal_agent/capability_driver_quick_start/"/>
-        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/infraguys/gcl_sdk/ru/universal_agent/capability_driver_quick_start/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/exordos/gcl_sdk/universal_agent/capability_driver_quick_start/"/>
+        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/exordos/gcl_sdk/ru/universal_agent/capability_driver_quick_start/"/>
     </url>
     <url>
-        <loc>https://github.com/infraguys/gcl_sdk/universal_agent/direct_driver_quick_start/</loc>
-        <lastmod>2026-04-17</lastmod>
+        <loc>https://github.com/exordos/gcl_sdk/universal_agent/direct_driver_quick_start/</loc>
+        <lastmod>2026-05-19</lastmod>
         <changefreq>daily</changefreq>
-        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/infraguys/gcl_sdk/universal_agent/direct_driver_quick_start/"/>
-        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/infraguys/gcl_sdk/ru/universal_agent/direct_driver_quick_start/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/exordos/gcl_sdk/universal_agent/direct_driver_quick_start/"/>
+        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/exordos/gcl_sdk/ru/universal_agent/direct_driver_quick_start/"/>
     </url>
     <url>
-        <loc>https://github.com/infraguys/gcl_sdk/universal_agent/fact_driver_quick_start/</loc>
-        <lastmod>2026-04-17</lastmod>
+        <loc>https://github.com/exordos/gcl_sdk/universal_agent/fact_driver_quick_start/</loc>
+        <lastmod>2026-05-19</lastmod>
         <changefreq>daily</changefreq>
-        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/infraguys/gcl_sdk/universal_agent/fact_driver_quick_start/"/>
-        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/infraguys/gcl_sdk/ru/universal_agent/fact_driver_quick_start/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/exordos/gcl_sdk/universal_agent/fact_driver_quick_start/"/>
+        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/exordos/gcl_sdk/ru/universal_agent/fact_driver_quick_start/"/>
     </url>
     <url>
-        <loc>https://github.com/infraguys/gcl_sdk/universal_agent/metadata_driver_quick_start/</loc>
-        <lastmod>2026-04-17</lastmod>
+        <loc>https://github.com/exordos/gcl_sdk/universal_agent/metadata_driver_quick_start/</loc>
+        <lastmod>2026-05-19</lastmod>
         <changefreq>daily</changefreq>
-        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/infraguys/gcl_sdk/universal_agent/metadata_driver_quick_start/"/>
-        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/infraguys/gcl_sdk/ru/universal_agent/metadata_driver_quick_start/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/exordos/gcl_sdk/universal_agent/metadata_driver_quick_start/"/>
+        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/exordos/gcl_sdk/ru/universal_agent/metadata_driver_quick_start/"/>
     </url>
     <url>
-        <loc>https://github.com/infraguys/gcl_sdk/universal_agent/universal_agent/</loc>
-        <lastmod>2026-04-17</lastmod>
+        <loc>https://github.com/exordos/gcl_sdk/universal_agent/universal_agent/</loc>
+        <lastmod>2026-05-19</lastmod>
         <changefreq>daily</changefreq>
-        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/infraguys/gcl_sdk/universal_agent/universal_agent/"/>
-        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/infraguys/gcl_sdk/ru/universal_agent/universal_agent/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/exordos/gcl_sdk/universal_agent/universal_agent/"/>
+        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/exordos/gcl_sdk/ru/universal_agent/universal_agent/"/>
     </url>
     <url>
-        <loc>https://github.com/infraguys/gcl_sdk/universal_agent/universal_agent_quick_start/</loc>
-        <lastmod>2026-04-17</lastmod>
+        <loc>https://github.com/exordos/gcl_sdk/universal_agent/universal_agent_quick_start/</loc>
+        <lastmod>2026-05-19</lastmod>
         <changefreq>daily</changefreq>
-        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/infraguys/gcl_sdk/universal_agent/universal_agent_quick_start/"/>
-        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/infraguys/gcl_sdk/ru/universal_agent/universal_agent_quick_start/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/exordos/gcl_sdk/universal_agent/universal_agent_quick_start/"/>
+        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/exordos/gcl_sdk/ru/universal_agent/universal_agent_quick_start/"/>
     </url>
     <url>
-        <loc>https://github.com/infraguys/gcl_sdk/universal_builder/core_infra_builder/</loc>
-        <lastmod>2026-04-17</lastmod>
+        <loc>https://github.com/exordos/gcl_sdk/universal_builder/core_infra_builder/</loc>
+        <lastmod>2026-05-19</lastmod>
         <changefreq>daily</changefreq>
-        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/infraguys/gcl_sdk/universal_builder/core_infra_builder/"/>
-        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/infraguys/gcl_sdk/ru/universal_builder/core_infra_builder/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/exordos/gcl_sdk/universal_builder/core_infra_builder/"/>
+        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/exordos/gcl_sdk/ru/universal_builder/core_infra_builder/"/>
     </url>
     <url>
-        <loc>https://github.com/infraguys/gcl_sdk/universal_builder/paas_builder/</loc>
-        <lastmod>2026-04-17</lastmod>
+        <loc>https://github.com/exordos/gcl_sdk/universal_builder/paas_builder/</loc>
+        <lastmod>2026-05-19</lastmod>
         <changefreq>daily</changefreq>
-        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/infraguys/gcl_sdk/universal_builder/paas_builder/"/>
-        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/infraguys/gcl_sdk/ru/universal_builder/paas_builder/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/exordos/gcl_sdk/universal_builder/paas_builder/"/>
+        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/exordos/gcl_sdk/ru/universal_builder/paas_builder/"/>
     </url>
     <url>
-        <loc>https://github.com/infraguys/gcl_sdk/universal_builder/universal_builder/</loc>
-        <lastmod>2026-04-17</lastmod>
+        <loc>https://github.com/exordos/gcl_sdk/universal_builder/universal_builder/</loc>
+        <lastmod>2026-05-19</lastmod>
         <changefreq>daily</changefreq>
-        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/infraguys/gcl_sdk/universal_builder/universal_builder/"/>
-        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/infraguys/gcl_sdk/ru/universal_builder/universal_builder/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/exordos/gcl_sdk/universal_builder/universal_builder/"/>
+        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/exordos/gcl_sdk/ru/universal_builder/universal_builder/"/>
     </url>
     <url>
-        <loc>https://github.com/infraguys/gcl_sdk/universal_builder/universal_builder_quick_start/</loc>
-        <lastmod>2026-04-17</lastmod>
+        <loc>https://github.com/exordos/gcl_sdk/universal_builder/universal_builder_quick_start/</loc>
+        <lastmod>2026-05-19</lastmod>
         <changefreq>daily</changefreq>
-        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/infraguys/gcl_sdk/universal_builder/universal_builder_quick_start/"/>
-        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/infraguys/gcl_sdk/ru/universal_builder/universal_builder_quick_start/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/exordos/gcl_sdk/universal_builder/universal_builder_quick_start/"/>
+        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/exordos/gcl_sdk/ru/universal_builder/universal_builder_quick_start/"/>
     </url>
     <url>
-        <loc>https://github.com/infraguys/gcl_sdk/universal_builder/universal_scheduler/</loc>
-        <lastmod>2026-04-17</lastmod>
+        <loc>https://github.com/exordos/gcl_sdk/universal_builder/universal_scheduler/</loc>
+        <lastmod>2026-05-19</lastmod>
         <changefreq>daily</changefreq>
-        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/infraguys/gcl_sdk/universal_builder/universal_scheduler/"/>
-        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/infraguys/gcl_sdk/ru/universal_builder/universal_scheduler/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/exordos/gcl_sdk/universal_builder/universal_scheduler/"/>
+        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/exordos/gcl_sdk/ru/universal_builder/universal_scheduler/"/>
     </url>
     <url>
-        <loc>https://github.com/infraguys/gcl_sdk/universal_scheduler/universal_scheduler/</loc>
-        <lastmod>2026-04-17</lastmod>
+        <loc>https://github.com/exordos/gcl_sdk/universal_scheduler/universal_scheduler/</loc>
+        <lastmod>2026-05-19</lastmod>
         <changefreq>daily</changefreq>
-        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/infraguys/gcl_sdk/universal_scheduler/universal_scheduler/"/>
-        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/infraguys/gcl_sdk/ru/universal_scheduler/universal_scheduler/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/exordos/gcl_sdk/universal_scheduler/universal_scheduler/"/>
+        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/exordos/gcl_sdk/ru/universal_scheduler/universal_scheduler/"/>
     </url>
     <url>
-        <loc>https://github.com/infraguys/gcl_sdk/ru/</loc>
-        <lastmod>2026-04-17</lastmod>
+        <loc>https://github.com/exordos/gcl_sdk/ru/</loc>
+        <lastmod>2026-05-19</lastmod>
         <changefreq>daily</changefreq>
-        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/infraguys/gcl_sdk/ru/"/>
-        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/infraguys/gcl_sdk/"/>
+        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/exordos/gcl_sdk/ru/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/exordos/gcl_sdk/"/>
     </url>
     <url>
-        <loc>https://github.com/infraguys/gcl_sdk/ru/audit/audit/</loc>
-        <lastmod>2026-04-17</lastmod>
+        <loc>https://github.com/exordos/gcl_sdk/ru/audit/audit/</loc>
+        <lastmod>2026-05-19</lastmod>
         <changefreq>daily</changefreq>
-        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/infraguys/gcl_sdk/ru/audit/audit/"/>
-        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/infraguys/gcl_sdk/audit/audit/"/>
+        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/exordos/gcl_sdk/ru/audit/audit/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/exordos/gcl_sdk/audit/audit/"/>
     </url>
     <url>
-        <loc>https://github.com/infraguys/gcl_sdk/ru/events/events/</loc>
-        <lastmod>2026-04-17</lastmod>
+        <loc>https://github.com/exordos/gcl_sdk/ru/events/events/</loc>
+        <lastmod>2026-05-19</lastmod>
         <changefreq>daily</changefreq>
-        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/infraguys/gcl_sdk/ru/events/events/"/>
-        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/infraguys/gcl_sdk/events/events/"/>
+        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/exordos/gcl_sdk/ru/events/events/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/exordos/gcl_sdk/events/events/"/>
     </url>
     <url>
-        <loc>https://github.com/infraguys/gcl_sdk/ru/universal_agent/capability_driver_quick_start/</loc>
-        <lastmod>2026-04-17</lastmod>
+        <loc>https://github.com/exordos/gcl_sdk/ru/universal_agent/capability_driver_quick_start/</loc>
+        <lastmod>2026-05-19</lastmod>
         <changefreq>daily</changefreq>
-        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/infraguys/gcl_sdk/ru/universal_agent/capability_driver_quick_start/"/>
-        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/infraguys/gcl_sdk/universal_agent/capability_driver_quick_start/"/>
+        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/exordos/gcl_sdk/ru/universal_agent/capability_driver_quick_start/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/exordos/gcl_sdk/universal_agent/capability_driver_quick_start/"/>
     </url>
     <url>
-        <loc>https://github.com/infraguys/gcl_sdk/ru/universal_agent/direct_driver_quick_start/</loc>
-        <lastmod>2026-04-17</lastmod>
+        <loc>https://github.com/exordos/gcl_sdk/ru/universal_agent/direct_driver_quick_start/</loc>
+        <lastmod>2026-05-19</lastmod>
         <changefreq>daily</changefreq>
-        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/infraguys/gcl_sdk/ru/universal_agent/direct_driver_quick_start/"/>
-        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/infraguys/gcl_sdk/universal_agent/direct_driver_quick_start/"/>
+        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/exordos/gcl_sdk/ru/universal_agent/direct_driver_quick_start/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/exordos/gcl_sdk/universal_agent/direct_driver_quick_start/"/>
     </url>
     <url>
-        <loc>https://github.com/infraguys/gcl_sdk/ru/universal_agent/fact_driver_quick_start/</loc>
-        <lastmod>2026-04-17</lastmod>
+        <loc>https://github.com/exordos/gcl_sdk/ru/universal_agent/fact_driver_quick_start/</loc>
+        <lastmod>2026-05-19</lastmod>
         <changefreq>daily</changefreq>
-        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/infraguys/gcl_sdk/ru/universal_agent/fact_driver_quick_start/"/>
-        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/infraguys/gcl_sdk/universal_agent/fact_driver_quick_start/"/>
+        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/exordos/gcl_sdk/ru/universal_agent/fact_driver_quick_start/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/exordos/gcl_sdk/universal_agent/fact_driver_quick_start/"/>
     </url>
     <url>
-        <loc>https://github.com/infraguys/gcl_sdk/ru/universal_agent/metadata_driver_quick_start/</loc>
-        <lastmod>2026-04-17</lastmod>
+        <loc>https://github.com/exordos/gcl_sdk/ru/universal_agent/metadata_driver_quick_start/</loc>
+        <lastmod>2026-05-19</lastmod>
         <changefreq>daily</changefreq>
-        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/infraguys/gcl_sdk/ru/universal_agent/metadata_driver_quick_start/"/>
-        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/infraguys/gcl_sdk/universal_agent/metadata_driver_quick_start/"/>
+        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/exordos/gcl_sdk/ru/universal_agent/metadata_driver_quick_start/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/exordos/gcl_sdk/universal_agent/metadata_driver_quick_start/"/>
     </url>
     <url>
-        <loc>https://github.com/infraguys/gcl_sdk/ru/universal_agent/universal_agent/</loc>
-        <lastmod>2026-04-17</lastmod>
+        <loc>https://github.com/exordos/gcl_sdk/ru/universal_agent/universal_agent/</loc>
+        <lastmod>2026-05-19</lastmod>
         <changefreq>daily</changefreq>
-        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/infraguys/gcl_sdk/ru/universal_agent/universal_agent/"/>
-        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/infraguys/gcl_sdk/universal_agent/universal_agent/"/>
+        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/exordos/gcl_sdk/ru/universal_agent/universal_agent/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/exordos/gcl_sdk/universal_agent/universal_agent/"/>
     </url>
     <url>
-        <loc>https://github.com/infraguys/gcl_sdk/ru/universal_agent/universal_agent_quick_start/</loc>
-        <lastmod>2026-04-17</lastmod>
+        <loc>https://github.com/exordos/gcl_sdk/ru/universal_agent/universal_agent_quick_start/</loc>
+        <lastmod>2026-05-19</lastmod>
         <changefreq>daily</changefreq>
-        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/infraguys/gcl_sdk/ru/universal_agent/universal_agent_quick_start/"/>
-        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/infraguys/gcl_sdk/universal_agent/universal_agent_quick_start/"/>
+        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/exordos/gcl_sdk/ru/universal_agent/universal_agent_quick_start/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/exordos/gcl_sdk/universal_agent/universal_agent_quick_start/"/>
     </url>
     <url>
-        <loc>https://github.com/infraguys/gcl_sdk/ru/universal_builder/core_infra_builder/</loc>
-        <lastmod>2026-04-17</lastmod>
+        <loc>https://github.com/exordos/gcl_sdk/ru/universal_builder/core_infra_builder/</loc>
+        <lastmod>2026-05-19</lastmod>
         <changefreq>daily</changefreq>
-        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/infraguys/gcl_sdk/ru/universal_builder/core_infra_builder/"/>
-        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/infraguys/gcl_sdk/universal_builder/core_infra_builder/"/>
+        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/exordos/gcl_sdk/ru/universal_builder/core_infra_builder/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/exordos/gcl_sdk/universal_builder/core_infra_builder/"/>
     </url>
     <url>
-        <loc>https://github.com/infraguys/gcl_sdk/ru/universal_builder/paas_builder/</loc>
-        <lastmod>2026-04-17</lastmod>
+        <loc>https://github.com/exordos/gcl_sdk/ru/universal_builder/paas_builder/</loc>
+        <lastmod>2026-05-19</lastmod>
         <changefreq>daily</changefreq>
-        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/infraguys/gcl_sdk/ru/universal_builder/paas_builder/"/>
-        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/infraguys/gcl_sdk/universal_builder/paas_builder/"/>
+        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/exordos/gcl_sdk/ru/universal_builder/paas_builder/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/exordos/gcl_sdk/universal_builder/paas_builder/"/>
     </url>
     <url>
-        <loc>https://github.com/infraguys/gcl_sdk/ru/universal_builder/universal_builder/</loc>
-        <lastmod>2026-04-17</lastmod>
+        <loc>https://github.com/exordos/gcl_sdk/ru/universal_builder/universal_builder/</loc>
+        <lastmod>2026-05-19</lastmod>
         <changefreq>daily</changefreq>
-        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/infraguys/gcl_sdk/ru/universal_builder/universal_builder/"/>
-        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/infraguys/gcl_sdk/universal_builder/universal_builder/"/>
+        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/exordos/gcl_sdk/ru/universal_builder/universal_builder/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/exordos/gcl_sdk/universal_builder/universal_builder/"/>
     </url>
     <url>
-        <loc>https://github.com/infraguys/gcl_sdk/ru/universal_builder/universal_builder_quick_start/</loc>
-        <lastmod>2026-04-17</lastmod>
+        <loc>https://github.com/exordos/gcl_sdk/ru/universal_builder/universal_builder_quick_start/</loc>
+        <lastmod>2026-05-19</lastmod>
         <changefreq>daily</changefreq>
-        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/infraguys/gcl_sdk/ru/universal_builder/universal_builder_quick_start/"/>
-        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/infraguys/gcl_sdk/universal_builder/universal_builder_quick_start/"/>
+        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/exordos/gcl_sdk/ru/universal_builder/universal_builder_quick_start/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/exordos/gcl_sdk/universal_builder/universal_builder_quick_start/"/>
     </url>
     <url>
-        <loc>https://github.com/infraguys/gcl_sdk/ru/universal_builder/universal_scheduler/</loc>
-        <lastmod>2026-04-17</lastmod>
+        <loc>https://github.com/exordos/gcl_sdk/ru/universal_builder/universal_scheduler/</loc>
+        <lastmod>2026-05-19</lastmod>
         <changefreq>daily</changefreq>
-        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/infraguys/gcl_sdk/ru/universal_builder/universal_scheduler/"/>
-        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/infraguys/gcl_sdk/universal_builder/universal_scheduler/"/>
+        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/exordos/gcl_sdk/ru/universal_builder/universal_scheduler/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/exordos/gcl_sdk/universal_builder/universal_scheduler/"/>
     </url>
     <url>
-        <loc>https://github.com/infraguys/gcl_sdk/ru/universal_scheduler/universal_scheduler/</loc>
-        <lastmod>2026-04-17</lastmod>
+        <loc>https://github.com/exordos/gcl_sdk/ru/universal_scheduler/universal_scheduler/</loc>
+        <lastmod>2026-05-19</lastmod>
         <changefreq>daily</changefreq>
-        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/infraguys/gcl_sdk/ru/universal_scheduler/universal_scheduler/"/>
-        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/infraguys/gcl_sdk/universal_scheduler/universal_scheduler/"/>
+        <xhtml:link rel="alternate" hreflang="ru" href="https://github.com/exordos/gcl_sdk/ru/universal_scheduler/universal_scheduler/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://github.com/exordos/gcl_sdk/universal_scheduler/universal_scheduler/"/>
     </url>
 </urlset>
