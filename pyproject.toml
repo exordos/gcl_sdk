@@ -28,7 +28,7 @@ dependencies = [
     "izulu>=0.50.0,<1.0.0",  # MIT License
     "renameat2>=0.4.4,<1.0.0; sys_platform == 'linux'",  # MIT License
     "xxhash>=3.5.0,<4.0.0",  # BSD 2-Clause License
-    "orjson>=3.10.0,<4.0.0",  # MIT
+    "orjson>=3.11.9,<4.0.0",  # MIT
 ]
 [project.urls]
 homepage = "https://github.com/exordos/gcl_sdk/"
