@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import logging
 import typing as tp
 import uuid as sys_uuid
 
@@ -27,6 +28,8 @@ from gcl_sdk.clients.http import base as http
 from gcl_sdk.agents.universal.clients.backend import rest
 from gcl_sdk.agents.universal.clients.backend import exceptions
 from gcl_sdk.agents.universal.storage import base as storage_base
+
+LOG = logging.getLogger(__name__)
 
 
 class ResourceProjectMismatch(exceptions.BackendClientException):
@@ -145,17 +148,25 @@ class GCUsersRestApiBackendClient(rest.RestApiBackendClient):
         resources = {
             str(r.uuid): r
             for r in models.Resource.objects.get_all(
-                filters={"uuid": dm_filters.In(uuids)}
+                filters={
+                    "uuid": dm_filters.In(uuids),
+                    "kind": dm_filters.EQ(self._user_kind),
+                }
             )
         }
 
         # Enrich users with additional data
+        # Skip users not found in data plane - they may have been deleted
+        enriched_users = []
         for user in users:
             if user["uuid"] not in resources:
-                raise ValueError(f"Resource with UUID {user['uuid']} not found")
-            user["password"] = resources[user["uuid"]].value["password"]
+                LOG.warning("User %s not found in data plane, skipping", user["uuid"])
+                continue
+            res = resources[user["uuid"]]
+            user["password"] = res.value.get("password", "")
+            enriched_users.append(user)
 
-        return users
+        return enriched_users
 
     def get(self, resource: models.Resource) -> dict[str, tp.Any]:
         """Get the resource value in dictionary format."""
@@ -166,9 +177,18 @@ class GCUsersRestApiBackendClient(rest.RestApiBackendClient):
         except bazooka_exc.NotFoundError:
             raise exceptions.ResourceNotFound(resource=resource)
 
-        result = self._enrich_users([result])[0]
-
-        return result
+        enriched = self._enrich_users([result])
+        if not enriched:
+            # User exists in IAM but has no data plane record (e.g. after partial
+            # failure or manual IAM creation). Use the target resource's password
+            # so the resource can be collected and the DB record self-heals.
+            LOG.warning(
+                "User %s has no data plane record, using target password as fallback",
+                resource.uuid,
+            )
+            result["password"] = resource.value.get("password", "")
+            return result
+        return enriched[0]
 
     def create(self, resource: models.Resource) -> dict[str, tp.Any]:
         """Creates the resource. Returns the created resource."""
