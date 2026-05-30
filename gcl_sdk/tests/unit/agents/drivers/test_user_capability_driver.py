@@ -162,15 +162,17 @@ class TestGCUsersRestApiBackendClientEnrichUsers:
 
         assert enriched[0]["password"] == "s3cr3t"
 
-    def test_raises_when_db_resource_not_found(self):
+    def test_skips_user_when_db_resource_not_found(self):
         uuid = sys_uuid.uuid4()
         client = _make_client()
         users = [{"uuid": str(uuid), "name": "ghost"}]
 
         with patch(_CORE_MODELS) as mr:
             mr.objects.get_all.return_value = []
-            with pytest.raises(ValueError, match=str(uuid)):
-                client._enrich_users(users)
+            enriched = client._enrich_users(users)
+
+        # User should be skipped, not raise an error
+        assert enriched == []
 
 
 class TestGCUsersRestApiBackendClientGet:
@@ -199,6 +201,21 @@ class TestGCUsersRestApiBackendClientGet:
 
         with pytest.raises(client_exc.ResourceNotFound):
             client.get(res)
+
+    def test_get_falls_back_to_target_password_when_user_not_in_data_plane(self):
+        uuid = sys_uuid.uuid4()
+        res = _make_resource(uuid=uuid)
+
+        client = _make_client()
+        client._client.get.return_value = {"uuid": str(uuid), "name": "alice"}
+
+        with patch(_CORE_MODELS) as mr:
+            mr.objects.get_all.return_value = []
+            result = client.get(res)
+
+        # Should not raise - falls back to target resource password
+        assert result["password"] == "s3cr3t"
+        assert result["uuid"] == str(uuid)
 
 
 class TestGCUsersRestApiBackendClientCreate:
@@ -304,6 +321,27 @@ class TestGCUsersRestApiBackendClientUpdate:
 
         # resource.value must be restored after exception (same keys as before update)
         assert res.value == value_before
+
+    def test_update_falls_back_to_target_password_when_user_not_in_data_plane(self):
+        uuid = sys_uuid.uuid4()
+        value = {
+            "uuid": str(uuid),
+            "name": "eve",
+            "password": "newpass",
+            "status": "ACTIVE",
+        }
+        res = _make_resource(uuid=uuid, value=value)
+
+        client = _make_client()
+        client._client.get.return_value = {"uuid": str(uuid), "name": "eve"}
+        client._client.update.return_value = {"uuid": str(uuid), "name": "eve"}
+
+        with patch(_CORE_MODELS) as mr:
+            mr.objects.get_all.return_value = []
+            result = client.update(res)
+
+        # Should not raise - falls back to target resource password
+        assert result["password"] == "newpass"
 
 
 class TestGCUsersRestApiBackendClientList:
