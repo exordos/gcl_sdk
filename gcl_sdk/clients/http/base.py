@@ -33,6 +33,7 @@ from gcl_sdk.agents.universal.api import packers
 
 GRANT_TYPE_PASSWORD = "password"
 GRANT_TYPE_REFRESH_TOKEN = "refresh_token"
+DEFAULT_CLIENT_ALIAS = "default"
 
 
 class AbstractAuthenticator(abc.ABC):
@@ -46,8 +47,6 @@ class AbstractAuthenticator(abc.ABC):
 
 
 class CoreIamAuthenticator(AbstractAuthenticator):
-    DEFAULT_CLIENT_UUID = sys_uuid.UUID("00000000-0000-0000-0000-000000000000")
-
     def __init__(
         self,
         base_url: str,
@@ -57,7 +56,7 @@ class CoreIamAuthenticator(AbstractAuthenticator):
         refresh_token: str | None = None,
         client_id: str = "GenesisCoreClientId",
         client_secret: str = "GenesisCoreSecret",
-        client_uuid: sys_uuid.UUID = DEFAULT_CLIENT_UUID,
+        client_uuid: sys_uuid.UUID | str = DEFAULT_CLIENT_ALIAS,
         scope: str | None = None,
         ttl: int = 86400,  # 1 day
         http_client: bazooka.Client | None = None,
@@ -78,11 +77,17 @@ class CoreIamAuthenticator(AbstractAuthenticator):
             "grant_type": GRANT_TYPE_PASSWORD,
             "username": username,
             "password": password,
-            "client_id": client_id,
-            "client_secret": client_secret,
             "scope": scope or self.empty_scope(),
             "ttl": str(ttl),
         }
+
+        if client_uuid != DEFAULT_CLIENT_ALIAS:
+            self._data.update(
+                {
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                }
+            )
 
         self._access_token = access_token
         self._refresh_token = refresh_token
