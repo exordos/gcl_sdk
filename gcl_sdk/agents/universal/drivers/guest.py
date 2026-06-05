@@ -45,6 +45,9 @@ IMAGE_PATH = pathlib.Path(c.WORK_DIR) / "image"
 class GuestMachineMetaModel(meta.MetaDataPlaneModel):
     """Guest machine meta model."""
 
+    GRUB_AUTONOMOUS_ENTRY = "Autonomous update mode"
+    GRUB_DEFAULT_TIMEOUT = 5
+
     image = properties.property(types.String(), required=True)
     boot = properties.property(types.String(), required=True)
     hostname = properties.property(
@@ -164,32 +167,50 @@ class GuestMachineMetaModel(meta.MetaDataPlaneModel):
         LOG.info("Update info saved to %s", UPDATE_JSON_PATH)
 
     def _update_grub_default(self) -> None:
-        """Update the grub default boot item to menu entry 3.
+        """Update the grub default boot item to 'Autonomous update mode'.
 
-        Sets GRUB_DEFAULT=3 (0-indexed, so 3 = 4th item) using shell commands.
-        Updates /etc/default/grub and regenerates grub configuration.
+        Sets GRUB_DEFAULT by menu entry name (not fragile numeric index) and
+        ensures GRUB_TIMEOUT is non-zero so the menu is actually displayed.
+        Updates /etc/default/grub.d/50-cloudimg-settings.cfg and regenerates
+        grub configuration.
         """
-        # Update GRUB_DEFAULT to 3 (4th menu item, 0-indexed)
-        # Check if GRUB_DEFAULT exists in the file
+        # Update GRUB_DEFAULT using the entry name so it is index-independent
         result = subprocess.run(
             f'grep -q "^GRUB_DEFAULT=" {GRUB_DEFAULT_PATH}',
             shell=True,
             check=False,
         )
+        grub_default_value = f'"{self.GRUB_AUTONOMOUS_ENTRY}"'
         if result.returncode == 0:
-            # GRUB_DEFAULT exists, replace it
             subprocess.check_call(
-                f'sed -i "s/^GRUB_DEFAULT=.*/GRUB_DEFAULT=3/" {GRUB_DEFAULT_PATH}',
+                f'sed -i "s/^GRUB_DEFAULT=.*/GRUB_DEFAULT={grub_default_value}/" {GRUB_DEFAULT_PATH}',
                 shell=True,
             )
-            LOG.info("GRUB_DEFAULT updated to 3 (4th menu item)")
+            LOG.info("GRUB_DEFAULT updated to %s", grub_default_value)
         else:
-            # GRUB_DEFAULT does not exist, append it
             subprocess.check_call(
-                f'echo "GRUB_DEFAULT=3" >> {GRUB_DEFAULT_PATH}',
+                f'echo "GRUB_DEFAULT={grub_default_value}" >> {GRUB_DEFAULT_PATH}',
                 shell=True,
             )
-            LOG.info("GRUB_DEFAULT added with value 3 (4th menu item)")
+            LOG.info("GRUB_DEFAULT added with value %s", grub_default_value)
+
+        # Ensure GRUB_TIMEOUT is non-zero so the menu is visible on boot
+        result = subprocess.run(
+            f'grep -q "^GRUB_TIMEOUT=" {GRUB_DEFAULT_PATH}',
+            shell=True,
+            check=False,
+        )
+        if result.returncode == 0:
+            subprocess.check_call(
+                f'sed -i "s/^GRUB_TIMEOUT=.*/GRUB_TIMEOUT={self.GRUB_DEFAULT_TIMEOUT}/" {GRUB_DEFAULT_PATH}',
+                shell=True,
+            )
+        else:
+            subprocess.check_call(
+                f'echo "GRUB_TIMEOUT={self.GRUB_DEFAULT_TIMEOUT}" >> {GRUB_DEFAULT_PATH}',
+                shell=True,
+            )
+        LOG.info("GRUB_TIMEOUT set to %d", self.GRUB_DEFAULT_TIMEOUT)
 
         # Regenerate grub config
         subprocess.check_call(["update-grub"])
