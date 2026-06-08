@@ -175,41 +175,43 @@ class GuestMachineMetaModel(meta.MetaDataPlaneModel):
         grub configuration.
         """
         # Update GRUB_DEFAULT using the entry name so it is index-independent
+        grub_default_value = f'"{self.GRUB_AUTONOMOUS_ENTRY}"'
         result = subprocess.run(
-            f'grep -q "^GRUB_DEFAULT=" {GRUB_DEFAULT_PATH}',
-            shell=True,
+            ["grep", "-q", "^GRUB_DEFAULT=", str(GRUB_DEFAULT_PATH)],
             check=False,
         )
-        grub_default_value = f'"{self.GRUB_AUTONOMOUS_ENTRY}"'
         if result.returncode == 0:
             subprocess.check_call(
-                f'sed -i "s/^GRUB_DEFAULT=.*/GRUB_DEFAULT={grub_default_value}/" {GRUB_DEFAULT_PATH}',
-                shell=True,
+                [
+                    "sed",
+                    "-i",
+                    f"s|^GRUB_DEFAULT=.*|GRUB_DEFAULT={grub_default_value}|",
+                    str(GRUB_DEFAULT_PATH),
+                ]
             )
             LOG.info("GRUB_DEFAULT updated to %s", grub_default_value)
         else:
-            subprocess.check_call(
-                f'echo "GRUB_DEFAULT={grub_default_value}" >> {GRUB_DEFAULT_PATH}',
-                shell=True,
-            )
+            with open(GRUB_DEFAULT_PATH, "a") as f:
+                f.write(f"GRUB_DEFAULT={grub_default_value}\n")
             LOG.info("GRUB_DEFAULT added with value %s", grub_default_value)
 
         # Ensure GRUB_TIMEOUT is non-zero so the menu is visible on boot
         result = subprocess.run(
-            f'grep -q "^GRUB_TIMEOUT=" {GRUB_DEFAULT_PATH}',
-            shell=True,
+            ["grep", "-q", "^GRUB_TIMEOUT=", str(GRUB_DEFAULT_PATH)],
             check=False,
         )
         if result.returncode == 0:
             subprocess.check_call(
-                f'sed -i "s/^GRUB_TIMEOUT=.*/GRUB_TIMEOUT={self.GRUB_DEFAULT_TIMEOUT}/" {GRUB_DEFAULT_PATH}',
-                shell=True,
+                [
+                    "sed",
+                    "-i",
+                    f"s|^GRUB_TIMEOUT=.*|GRUB_TIMEOUT={self.GRUB_DEFAULT_TIMEOUT}|",
+                    str(GRUB_DEFAULT_PATH),
+                ]
             )
         else:
-            subprocess.check_call(
-                f'echo "GRUB_TIMEOUT={self.GRUB_DEFAULT_TIMEOUT}" >> {GRUB_DEFAULT_PATH}',
-                shell=True,
-            )
+            with open(GRUB_DEFAULT_PATH, "a") as f:
+                f.write(f"GRUB_TIMEOUT={self.GRUB_DEFAULT_TIMEOUT}\n")
         LOG.info("GRUB_TIMEOUT set to %d", self.GRUB_DEFAULT_TIMEOUT)
 
         # Regenerate grub config
