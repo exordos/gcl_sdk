@@ -20,12 +20,35 @@ import typing as tp
 import bazooka
 
 from gcl_sdk.agents.universal.dm import models
+from gcl_sdk.agents.universal.status_api.dm import models as status_models
 from gcl_sdk.clients.http import base
 
 
 class UniversalAgentsClient(base.StaticCollectionBaseModelClient):
     __collection_path__ = "/v1/agents/"
     __model__ = models.UniversalAgent
+
+
+class NodeVerifiersClient(base.StaticCollectionBaseModelClient):
+    __collection_path__ = "/v1/node_verifiers/"
+    __model__ = status_models.NodeVerifier
+
+    def verify(self, uuid: sys_uuid.UUID) -> bool:
+        """Verify that a node encryption key exists.
+
+        Args:
+            uuid: The UUID of the node to verify.
+
+        Returns:
+            True if the node encryption key exists, False otherwise.
+        """
+        result = self.do_action("verify", uuid)
+        return result.get("valid", False)
+
+
+class NodesClient(base.StaticCollectionBaseModelClient):
+    __collection_path__ = "/v1/nodes/"
+    __model__ = models.NodeEncryptionKey
 
 
 class ResourcesClient(base.CollectionBaseModelClient):
@@ -113,10 +136,17 @@ class StatusAPI:
         self._agents_client = UniversalAgentsClient(
             base_url, http_client=http_client, encryptor=encryptor
         )
+        self._node_verifiers_client = NodeVerifiersClient(
+            base_url, http_client=http_client, encryptor=encryptor
+        )
 
     @property
     def agents(self) -> UniversalAgentsClient:
         return self._agents_client
+
+    @property
+    def node_verifiers(self) -> NodeVerifiersClient:
+        return self._node_verifiers_client
 
     @functools.lru_cache
     def resources(self, kind: str) -> ResourcesClient:

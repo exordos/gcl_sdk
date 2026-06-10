@@ -30,7 +30,10 @@ class AbstractOrchClient(abc.ABC):
 
     @abc.abstractmethod
     def agents_create(
-        self, agent: models.UniversalAgent, **kwargs: tp.Any
+        self,
+        agent: models.UniversalAgent,
+        check_node_exists: bool = False,
+        **kwargs: tp.Any,
     ) -> models.UniversalAgent:
         """Create an instance of Universal agent."""
 

@@ -60,6 +60,12 @@ class RefreshSecretAction(routes.Action):
     __controller__ = controllers.NodesController
 
 
+class NodeVerifierVerifyAction(routes.Action):
+    """Handler for /v1/node_verifiers/<uuid>/actions/verify endpoint"""
+
+    __controller__ = controllers.NodeVerifierController
+
+
 class NodesRoute(routes.Route):
     """Handler for /v1/nodes/ endpoint"""
 
@@ -67,3 +73,12 @@ class NodesRoute(routes.Route):
     __controller__ = controllers.NodesController
 
     refresh_secret = routes.action(RefreshSecretAction, invoke=True)
+
+
+class NodeVerifiersRoute(routes.Route):
+    """Handler for /v1/node_verifiers/ endpoint"""
+
+    __allow_methods__ = [routes.GET]
+    __controller__ = controllers.NodeVerifierController
+
+    verify = routes.action(NodeVerifierVerifyAction)

@@ -70,6 +70,32 @@ class UniversalAgentsController(sdk_controllers.BaseSdkResourceController):
     )
 
 
+class NodeVerifierController(sdk_controllers.BaseSdkResourceController):
+    """Controller for /v1/node_verifiers/ endpoint"""
+
+    __resource__ = resources.ResourceByRAModel(
+        model_class=models.NodeVerifier,
+        process_filters=True,
+        convert_underscore=False,
+    )
+
+    @actions.get
+    def verify(self, resource: models.NodeVerifier):
+        """Verify that a node encryption key exists.
+
+        The action automatically loads the resource. If the key doesn't
+        exist, the framework raises an error. Successful execution confirms
+        the key is valid and present in the database.
+
+        Args:
+            resource: The NodeVerifier model instance to verify.
+
+        Returns:
+            dict: {"valid": True} if the key exists.
+        """
+        return {"valid": True}
+
+
 class NodesController(sdk_controllers.BaseSdkResourceController):
     """Controller for /v1/nodes/ endpoint"""
 

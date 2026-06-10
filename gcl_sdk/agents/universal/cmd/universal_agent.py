@@ -86,6 +86,11 @@ core_agent_opts = [
         default=c.PRIVATE_KEY_PATH,
         help="Path to the private key file.",
     ),
+    cfg.BoolOpt(
+        "verify_node_on_register",
+        default=True,
+        help="Verify that the node encryption key exists before registering the agent.",
+    ),
 ]
 
 CONF = cfg.CONF
@@ -211,6 +216,7 @@ def main():
         facts_drivers=facts_drivers,
         payload_path=CONF[DOMAIN].payload_path,
         iter_min_period=3,
+        verify_node_on_register=CONF[DOMAIN].verify_node_on_register,
     )
 
     service.start()

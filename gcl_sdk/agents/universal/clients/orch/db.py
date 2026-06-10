@@ -25,6 +25,7 @@ from restalchemy.dm import filters as dm_filters
 from restalchemy.storage import exceptions as ra_exc
 
 from gcl_sdk.agents.universal.dm import models
+from gcl_sdk.agents.universal.status_api.dm import models as status_models
 from gcl_sdk.agents.universal.clients.orch import base
 from gcl_sdk.agents.universal.clients.orch import exceptions
 
@@ -45,14 +46,40 @@ class DatabaseOrchClient(base.AbstractOrchClient):
             with contexts.Context().session_manager() as session:
                 yield session
 
+    def _verify_node_exists(
+        self, agent: models.UniversalAgent, session: tp.Any
+    ) -> None:
+        """Verify that the agent's node encryption key exists.
+
+        Args:
+            agent: The UniversalAgent to verify.
+            session: The database session.
+
+        Raises:
+            exceptions.NodeNotFound: If the node encryption key doesn't exist.
+        """
+        if agent.node is None:
+            raise exceptions.NodeNotFound(uuid=None)
+
+        try:
+            status_models.NodeVerifier.objects.get_one(
+                filters={"uuid": dm_filters.EQ(str(agent.node))},
+                session=session,
+            )
+        except ra_exc.RecordNotFound:
+            raise exceptions.NodeNotFound(uuid=agent.node)
+
     def agents_create(
         self,
         agent: models.UniversalAgent,
+        check_node_exists: bool = False,
         session: tp.Any = None,
     ) -> models.UniversalAgent:
         """Create an instance of Universal agent."""
         try:
             with self._session_context(session=session) as s:
+                if check_node_exists:
+                    self._verify_node_exists(agent, session=s)
                 return agent.insert(session=s)
         except ra_exc.ConflictRecords:
             raise exceptions.AgentAlreadyExists(uuid=agent.uuid)

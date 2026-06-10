@@ -44,6 +44,7 @@ class UniversalAgentService(looper_basic.BasicService):
         iter_min_period: float = 3,
         iter_pause: float = 0.1,
         system_uuid: sys_uuid.UUID | None = None,
+        verify_node_on_register: bool = True,
     ):
         super().__init__(iter_min_period, iter_pause)
         self._orch_client = orch_client
@@ -52,6 +53,7 @@ class UniversalAgentService(looper_basic.BasicService):
         self._system_uuid = system_uuid
         self._caps_drivers = caps_drivers
         self._facts_drivers = facts_drivers
+        self._verify_node_on_register = verify_node_on_register
 
     def _register_agent(self) -> None:
         capabilities = itertools.chain.from_iterable(
@@ -67,13 +69,19 @@ class UniversalAgentService(looper_basic.BasicService):
             system_uuid=self._system_uuid,
         )
         try:
-            self._orch_client.agents_create(agent)
+            self._orch_client.agents_create(
+                agent, check_node_exists=self._verify_node_on_register
+            )
             LOG.info("Agent registered: %s", agent.uuid)
         except orch_exc.AgentAlreadyExists:
             LOG.warning("Agent already registered: %s", agent.uuid)
 
             # Update the agent capabilities and facts if they were changed
             self._orch_client.agents_update(agent)
+        except orch_exc.NodeNotFound:
+            LOG.warning(
+                "Node verification failed, cannot register agent %s", agent.uuid
+            )
 
     def _create_resource(
         self,

@@ -138,6 +138,47 @@ class TestUniversalAgent:
         assert set(updated_agent.capabilities["capabilities"]) == {"foo"}
         assert set(updated_agent.facts["facts"]) == {"foo"}
 
+    def test_agent_registration_node_not_found(self):
+        """Test that NodeNotFound exception is handled and logged during registration."""
+        self.orch_client.agents_create = mock.MagicMock(
+            side_effect=orch_exc.NodeNotFound(uuid=self.agent_uuid)
+        )
+
+        agent = agent_svc.UniversalAgentService(
+            agent_uuid=self.agent_uuid,
+            orch_client=self.orch_client,
+            caps_drivers=[],
+            facts_drivers=[],
+            verify_node_on_register=True,
+        )
+
+        # Should not raise, just log warning
+        agent._setup()
+
+        self.orch_client.agents_create.assert_called_once()
+        # Verify check_node_exists was passed as True
+        call_kwargs = self.orch_client.agents_create.call_args.kwargs
+        assert call_kwargs.get("check_node_exists") is True
+
+    def test_agent_registration_skip_node_verify(self):
+        """Test that node verification can be skipped."""
+        self.orch_client.agents_create = mock.MagicMock(return_value=None)
+
+        agent = agent_svc.UniversalAgentService(
+            agent_uuid=self.agent_uuid,
+            orch_client=self.orch_client,
+            caps_drivers=[],
+            facts_drivers=[],
+            verify_node_on_register=False,
+        )
+
+        agent._setup()
+
+        self.orch_client.agents_create.assert_called_once()
+        # Verify check_node_exists was passed as False
+        call_kwargs = self.orch_client.agents_create.call_args.kwargs
+        assert call_kwargs.get("check_node_exists") is False
+
     def test_agent_new_capability(self):
         uuid = sys_uuid.uuid4()
         resource = conftest.FooResource(uuid=uuid)
