@@ -210,3 +210,37 @@ class TestUAStatusApi:
 
         assert response.status_code == 200
         assert output == ["foo"]
+
+    def test_node_verifier_verify_exists_true(
+        self,
+        status_api: test_utils.RestServiceTestCase,
+    ):
+        """Test verify returns valid=True when node encryption key exists."""
+        node_uuid = sys_uuid.uuid4()
+
+        # Create NodeEncryptionKey
+        node_key = models.NodeEncryptionKey(
+            uuid=node_uuid,
+            private_key="test-key",
+        )
+        node_key.save()
+
+        url = urljoin(status_api.base_url, f"node_verifiers/{node_uuid}/actions/verify")
+        response = requests.get(url)
+        output = response.json()
+
+        assert response.status_code == 200
+        assert output == {"valid": True}
+
+    def test_node_verifier_verify_not_found(
+        self,
+        status_api: test_utils.RestServiceTestCase,
+    ):
+        """Test verify returns 404 when node encryption key doesn't exist."""
+        node_uuid = sys_uuid.uuid4()
+
+        url = urljoin(status_api.base_url, f"node_verifiers/{node_uuid}/actions/verify")
+        response = requests.get(url)
+
+        # The framework returns 404 when the resource is not found
+        assert response.status_code == 404

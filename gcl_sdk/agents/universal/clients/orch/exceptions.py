@@ -41,3 +41,8 @@ class ResourceAlreadyExists(OrchClientException):
 class ResourceNotFound(OrchClientException):
     __template__ = "The resource not found: {uuid}"
     uuid: sys_uuid.UUID
+
+
+class NodeNotFound(OrchClientException):
+    __template__ = "The node not found: {uuid}"
+    uuid: sys_uuid.UUID | None

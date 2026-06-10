@@ -22,6 +22,7 @@ from restalchemy.dm import types
 from restalchemy.dm import models as ra_models
 from restalchemy.dm import relationships
 from restalchemy.storage.sql import engines
+from restalchemy.storage.sql import orm
 from restalchemy.storage import base as base_storage
 from restalchemy.common import utils as ra_utils
 from restalchemy.storage import exceptions as storage_exc
@@ -97,3 +98,13 @@ class UniversalAgent(models.UniversalAgent):
 # launch functional tests
 class NodeEncryptionKey(models.NodeEncryptionKey):
     pass
+
+
+class NodeVerifier(ra_models.ModelWithUUID, orm.SQLStorableMixin):
+    """View model for verifying node encryption key existence.
+
+    This is a read-only view on ua_node_encryption_keys table
+    containing only the uuid column for node verification purposes.
+    """
+
+    __tablename__ = "ua_node_verifiers_view"

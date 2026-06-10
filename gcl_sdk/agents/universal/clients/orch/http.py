@@ -58,10 +58,33 @@ class HttpOrchClient(base.AbstractOrchClient):
             encryptor=encryptor,
         )
 
+    def _verify_node_exists(self, agent: models.UniversalAgent) -> None:
+        """Verify that the agent's node encryption key exists.
+
+        Args:
+            agent: The UniversalAgent to verify.
+
+        Raises:
+            exceptions.NodeNotFound: If the node encryption key doesn't exist.
+        """
+        if agent.node is None:
+            raise exceptions.NodeNotFound(uuid=None)
+
+        try:
+            self._status_api.node_verifiers.verify(agent.node)
+        except baz_exc.NotFoundError:
+            raise exceptions.NodeNotFound(uuid=agent.node)
+
     def agents_create(
-        self, agent: models.UniversalAgent, **kwargs: tp.Any
+        self,
+        agent: models.UniversalAgent,
+        check_node_exists: bool = False,
+        **kwargs: tp.Any,
     ) -> models.UniversalAgent:
         """Create an instance of Universal agent."""
+        if check_node_exists:
+            self._verify_node_exists(agent)
+
         try:
             agent = self._status_api.agents.create(agent)
             LOG.info("Agent registered: %s", agent.uuid)
