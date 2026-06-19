@@ -514,7 +514,7 @@ wheels = [
 
 [[package]]
 name = "gcl-iam"
-version = "1.2.0"
+version = "1.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "bazooka" },
@@ -523,9 +523,9 @@ dependencies = [
     { name = "pyjwt" },
     { name = "restalchemy" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/bf/2a/5691cc4e515ba3fd212283cc8759ed0aea4bcce4de5352937e9619391bc4/gcl_iam-1.2.0.tar.gz", hash = "sha256:382f586e9b4b9e43cbd7eef5d32936b4b0df94010dcc405b6015f9979294d37d", size = 202448, upload-time = "2026-04-08T12:49:51.639Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/2c/63/162bd544f1669d994399b37efe702157892220c3198f5d5d45592aba7ed3/gcl_iam-1.3.0.tar.gz", hash = "sha256:a3dec6726062962aed247a5b890f5972acc213c1ce9afb2c3183de6ffbcf2675", size = 202746, upload-time = "2026-06-18T12:31:49.026Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/0c/fe/204bd374caf8554e7dc65a52ea08eaf23889692be655d83a797f8e775e43/gcl_iam-1.2.0-py3-none-any.whl", hash = "sha256:584eb1c0bee042120b203a59646e511f50fca49fbb86b00b7cbc6a0118322bb2", size = 39182, upload-time = "2026-04-08T12:49:49.872Z" },
+    { url = "https://files.pythonhosted.org/packages/47/89/9254e3900b0f07a4f9eff6d2af4fed5e2afb369503c8d73d46c9a1358353/gcl_iam-1.3.0-py3-none-any.whl", hash = "sha256:134b1fe43a1362eeebf0970e71764ff00e98d7fcaa07a91d25e70f519e50d211", size = 39478, upload-time = "2026-06-18T12:31:47.728Z" },
 ]
 
 [[package]]
@@ -1675,7 +1675,7 @@ wheels = [
 
 [[package]]
 name = "restalchemy"
-version = "15.0.12"
+version = "15.1.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "email-validator" },
@@ -1688,9 +1688,9 @@ dependencies = [
     { name = "requests" },
     { name = "webob" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/55/6d/f966873876876636e4285d08d696843d9111f01c5ed68495b4776f27a831/restalchemy-15.0.12.tar.gz", hash = "sha256:e01a3b1a6ee9d0f26afa08eb2dd2a671965af9d96b3063579c19c6c0bf7073dc", size = 432794, upload-time = "2026-05-05T13:10:45.549Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/a2/cb/c43c63537ead1324c150308b6856c2579bf75fb166d2d5db003f6e38134b/restalchemy-15.1.2.tar.gz", hash = "sha256:17a1c83444b8a813ea60ed75b8e877075661d5d81cccb2e190964599a6af32bd", size = 438998, upload-time = "2026-06-15T14:17:33.735Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/5f/99/09c7ff3173f20521f9de22ae0bc6b1156c3a8a5e41348b8ddeee88c96f44/restalchemy-15.0.12-py3-none-any.whl", hash = "sha256:45458c78ed86ca004bdb29773aaf3a86ce33fe785d2293735008f21d33e3e560", size = 484058, upload-time = "2026-05-05T13:10:43.392Z" },
+    { url = "https://files.pythonhosted.org/packages/8b/db/abe78a331a7c81dae9503dcc8fa67d7b624262c77263007b45b45bd64b5c/restalchemy-15.1.2-py3-none-any.whl", hash = "sha256:063491dc07b90130f858638c891dfa79a3c122086511b56294dc8c9a5cd87bcf", size = 491048, upload-time = "2026-06-15T14:17:32.12Z" },
 ]
 
 [[package]]
