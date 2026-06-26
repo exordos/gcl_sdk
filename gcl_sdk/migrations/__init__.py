@@ -18,7 +18,6 @@ import contextlib
 import os
 
 from oslo_config import cfg
-
 from restalchemy.storage.sql import engines
 from restalchemy.storage.sql import migrations
 

@@ -15,18 +15,16 @@
 #    under the License.
 
 import typing as tp
-import uuid as sys_uuid
 from unittest.mock import MagicMock
+import uuid as sys_uuid
 
 import pytest
 from restalchemy.dm import filters as dm_filters
 from restalchemy.storage import exceptions as ra_exc
 
-from gcl_sdk.agents.universal.clients.backend.db import (
-    DatabaseBackendClient,
-    ModelSpec,
-)
 from gcl_sdk.agents.universal.clients.backend import exceptions as client_exc
+from gcl_sdk.agents.universal.clients.backend.db import DatabaseBackendClient
+from gcl_sdk.agents.universal.clients.backend.db import ModelSpec
 from gcl_sdk.agents.universal.dm import models
 
 

@@ -15,8 +15,10 @@
 #    under the License.
 
 import uuid
+
 from oslo_config import cfg
 from oslo_config import types as oslo_types
+
 from gcl_sdk.agents.universal import utils
 
 

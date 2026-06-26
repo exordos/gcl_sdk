@@ -18,13 +18,13 @@ from __future__ import annotations
 from urllib.parse import urljoin
 import uuid as sys_uuid
 
+from oslo_config import cfg
 import pytest
 import requests
-from oslo_config import cfg
 
 from gcl_sdk.agents.universal.dm import models
-from gcl_sdk.tests.functional import utils as test_utils
 from gcl_sdk.tests.functional import conftest
+from gcl_sdk.tests.functional import utils as test_utils
 
 CONF = cfg.CONF
 

@@ -19,10 +19,10 @@ import typing as tp
 
 from bazooka import exceptions as bazooka_exc
 
-from gcl_sdk.clients.http import base as http
-from gcl_sdk.agents.universal.dm import models
 from gcl_sdk.agents.universal.clients.backend import base
 from gcl_sdk.agents.universal.clients.backend import exceptions
+from gcl_sdk.agents.universal.dm import models
+from gcl_sdk.clients.http import base as http
 
 
 class RestApiBackendClient(base.AbstractBackendClient):

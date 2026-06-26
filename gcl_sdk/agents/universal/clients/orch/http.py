@@ -15,19 +15,19 @@
 #    under the License.
 from __future__ import annotations
 
-import uuid as sys_uuid
-import typing as tp
 import logging
+import typing as tp
+import uuid as sys_uuid
 
 import bazooka
 from bazooka import exceptions as baz_exc
 
-from gcl_sdk.agents.universal.dm import models
-from gcl_sdk.clients.http import base as base_client
+from gcl_sdk.agents.universal.clients.http import orch as rest_orch
+from gcl_sdk.agents.universal.clients.http import status as rest_status
 from gcl_sdk.agents.universal.clients.orch import base
 from gcl_sdk.agents.universal.clients.orch import exceptions
-from gcl_sdk.agents.universal.clients.http import status as rest_status
-from gcl_sdk.agents.universal.clients.http import orch as rest_orch
+from gcl_sdk.agents.universal.dm import models
+from gcl_sdk.clients.http import base as base_client
 
 LOG = logging.getLogger(__name__)
 

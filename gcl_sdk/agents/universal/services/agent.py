@@ -15,20 +15,20 @@
 #    under the License.
 from __future__ import annotations
 
-import logging
 import itertools
+import logging
 import typing as tp
 import uuid as sys_uuid
 
 from gcl_looper.services import basic as looper_basic
 
-from gcl_sdk.agents.universal.drivers import base as driver_base
-from gcl_sdk.agents.universal.drivers import exceptions as driver_exc
-from gcl_sdk.agents.universal.dm import models
-from gcl_sdk.agents.universal.clients.orch import base as orch_base
-from gcl_sdk.agents.universal.clients.orch import exceptions as orch_exc
 from gcl_sdk.agents.universal import constants as c
 from gcl_sdk.agents.universal import utils
+from gcl_sdk.agents.universal.clients.orch import base as orch_base
+from gcl_sdk.agents.universal.clients.orch import exceptions as orch_exc
+from gcl_sdk.agents.universal.dm import models
+from gcl_sdk.agents.universal.drivers import base as driver_base
+from gcl_sdk.agents.universal.drivers import exceptions as driver_exc
 
 LOG = logging.getLogger(__name__)
 
@@ -188,7 +188,12 @@ class UniversalAgentService(looper_basic.BasicService):
                 resource = self._create_resource(driver, r)
                 collected_resources.append(resource)
             except Exception:
-                LOG.exception("Error creating resource(%s) %s", capability, r.uuid)
+                LOG.exception(
+                    "Error creating resource %s with uuid (%s) and value (%s)",
+                    capability,
+                    r.uuid,
+                    str(r.value),
+                )
 
         # Delete outdated resources
         for r in actual_resources.keys() - target_resources.keys():

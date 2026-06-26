@@ -23,11 +23,11 @@ import uuid as sys_uuid
 from bazooka import exceptions as bazooka_exc
 from restalchemy.dm import filters as dm_filters
 
-from gcl_sdk.agents.universal.dm import models
-from gcl_sdk.clients.http import base as http
-from gcl_sdk.agents.universal.clients.backend import rest
 from gcl_sdk.agents.universal.clients.backend import exceptions
+from gcl_sdk.agents.universal.clients.backend import rest
+from gcl_sdk.agents.universal.dm import models
 from gcl_sdk.agents.universal.storage import base as storage_base
+from gcl_sdk.clients.http import base as http
 
 LOG = logging.getLogger(__name__)
 

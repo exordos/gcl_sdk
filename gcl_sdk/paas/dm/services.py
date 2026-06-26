@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import enum
 
-
 from restalchemy.dm import models
 from restalchemy.dm import properties
 from restalchemy.dm import types as ra_types

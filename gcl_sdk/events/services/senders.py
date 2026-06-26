@@ -16,13 +16,13 @@
 
 import logging
 
+from gcl_looper.services import basic
 from oslo_config import cfg
 from restalchemy.dm import filters as ra_filters
 
 from gcl_sdk.events import clients
 from gcl_sdk.events import constants as event_c
 from gcl_sdk.events.dm import models
-from gcl_looper.services import basic
 
 LOG = logging.getLogger(__name__)
 

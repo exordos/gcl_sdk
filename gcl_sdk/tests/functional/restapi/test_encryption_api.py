@@ -22,7 +22,6 @@ import uuid as sys_uuid
 
 import pytest
 import requests
-
 from restalchemy.api import applications
 from restalchemy.api import controllers
 from restalchemy.api import middlewares

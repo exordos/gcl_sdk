@@ -19,7 +19,10 @@ import uuid
 
 from oslo_config import cfg
 
-from gcl_sdk.common.oslo.types import UuidType, UuidOpt, ObjectType, ObjectOpt
+from gcl_sdk.common.oslo.types import ObjectOpt
+from gcl_sdk.common.oslo.types import ObjectType
+from gcl_sdk.common.oslo.types import UuidOpt
+from gcl_sdk.common.oslo.types import UuidType
 
 
 class TestUuidType(unittest.TestCase):

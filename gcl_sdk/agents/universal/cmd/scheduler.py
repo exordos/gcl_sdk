@@ -18,12 +18,12 @@ import logging
 import sys
 
 from oslo_config import cfg
+from restalchemy.common import config_opts as ra_config_opts
+from restalchemy.storage.sql import engines
 
+from gcl_sdk.agents.universal.services import scheduler
 from gcl_sdk.common import config
 from gcl_sdk.common import log as infra_log
-from restalchemy.storage.sql import engines
-from restalchemy.common import config_opts as ra_config_opts
-from gcl_sdk.agents.universal.services import scheduler
 
 DOMAIN = "universal_agent_scheduler"
 

@@ -15,15 +15,15 @@
 #    under the License.
 from __future__ import annotations
 
-import logging
 import itertools
+import logging
 
+from gcl_looper.services import basic as looper_basic
 from restalchemy.common import contexts
 from restalchemy.dm import filters as dm_filters
-from gcl_looper.services import basic as looper_basic
 
-from gcl_sdk.agents.universal.dm import models
 from gcl_sdk.agents.universal import constants as c
+from gcl_sdk.agents.universal.dm import models
 
 LOG = logging.getLogger(__name__)
 

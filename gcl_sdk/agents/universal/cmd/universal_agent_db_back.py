@@ -22,19 +22,19 @@ import uuid as sys_uuid
 import bazooka
 from oslo_config import cfg
 from restalchemy.common import config_opts as ra_config_opts
-from restalchemy.storage.sql import engines
 from restalchemy.dm import filters as dm_filters
+from restalchemy.storage.sql import engines
 
-from gcl_sdk.common import config
-from gcl_sdk.common import log as infra_log
-from gcl_sdk.agents.universal.services import agent
+from gcl_sdk.agents.universal import constants as c
 from gcl_sdk.agents.universal import utils as ua_utils
-from gcl_sdk.agents.universal.drivers import direct
+from gcl_sdk.agents.universal.clients.backend import db as db_back
 from gcl_sdk.agents.universal.clients.orch import db as orch_db
 from gcl_sdk.agents.universal.clients.orch import http as orch_http
-from gcl_sdk.agents.universal.clients.backend import db as db_back
 from gcl_sdk.agents.universal.drivers import core as ua_core_drivers
-from gcl_sdk.agents.universal import constants as c
+from gcl_sdk.agents.universal.drivers import direct
+from gcl_sdk.agents.universal.services import agent
+from gcl_sdk.common import config
+from gcl_sdk.common import log as infra_log
 
 DOMAIN = "agent"
 

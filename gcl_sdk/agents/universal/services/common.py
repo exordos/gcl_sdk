@@ -19,9 +19,9 @@ import logging
 import typing as tp
 import uuid as sys_uuid
 
-from gcl_sdk.agents.universal.dm import models as ua_models
 from gcl_sdk.agents.universal.clients.orch import base as orch_base
 from gcl_sdk.agents.universal.clients.orch import exceptions as orch_exc
+from gcl_sdk.agents.universal.dm import models as ua_models
 
 LOG = logging.getLogger(__name__)
 
