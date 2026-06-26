@@ -1,19 +1,20 @@
 from __future__ import annotations
 
-import uuid as sys_uuid
 from urllib.parse import urljoin
+import uuid as sys_uuid
 
-import pytest
-import requests
 from gcl_iam.drivers import DummyDriver
 from gcl_iam.enforcers import Enforcer
 from mock import mock
 from oslo_config import cfg
+import pytest
+import requests
 from restalchemy.common import contexts
 from restalchemy.common.contexts import Context
 
 from gcl_sdk.agents.universal.dm import models
-from gcl_sdk.audit.dm.models import AuditLogSQLStorableMixin, AuditRecord
+from gcl_sdk.audit.dm.models import AuditLogSQLStorableMixin
+from gcl_sdk.audit.dm.models import AuditRecord
 from gcl_sdk.tests.functional import conftest
 from gcl_sdk.tests.functional import utils as test_utils
 

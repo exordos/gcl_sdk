@@ -1,6 +1,7 @@
 import inspect
 import uuid as sys_uuid
 
+from gcl_iam import exceptions as iam_exceptions
 from restalchemy.common import contexts
 from restalchemy.dm import models
 from restalchemy.dm import properties
@@ -8,7 +9,6 @@ from restalchemy.dm import types
 from restalchemy.storage.sql import orm
 
 from gcl_sdk.audit import constants
-from gcl_iam import exceptions as iam_exceptions
 
 
 class AuditRecord(

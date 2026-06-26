@@ -15,9 +15,9 @@
 #    under the License.
 from __future__ import annotations
 
+import contextlib
 import os
 import socket
-import contextlib
 from urllib import parse
 
 from restalchemy.storage.sql import migrations

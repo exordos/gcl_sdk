@@ -18,8 +18,8 @@ import logging
 
 from oslo_config import cfg
 
-from gcl_sdk.common import constants
 from gcl_sdk import version
+from gcl_sdk.common import constants
 
 GLOBAL_SERVICE_NAME = constants.GLOBAL_SERVICE_NAME
 

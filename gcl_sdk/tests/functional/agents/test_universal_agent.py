@@ -17,8 +17,8 @@
 import os
 import tempfile
 import typing as tp
-import uuid as sys_uuid
 from unittest import mock
+import uuid as sys_uuid
 
 from gcl_sdk.agents.universal import utils
 from gcl_sdk.agents.universal.clients.orch import exceptions as orch_exc

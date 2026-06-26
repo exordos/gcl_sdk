@@ -18,10 +18,10 @@ from __future__ import annotations
 
 from http import client as http_client
 
+from gcl_iam.middlewares import EndpointComparator
 from restalchemy.api.middlewares import contexts as mw_contexts
 from restalchemy.api.middlewares import errors as mw_errors
 
-from gcl_iam.middlewares import EndpointComparator
 from gcl_sdk.agents.universal.api import contexts
 from gcl_sdk.agents.universal.api import packers
 

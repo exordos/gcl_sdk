@@ -17,8 +17,8 @@
 import abc
 import uuid as sys_uuid
 
-from bazooka import common as bzk_common
 from bazooka import client as bzk_client
+from bazooka import common as bzk_common
 from bazooka import exceptions as bzk_exceptions
 from izulu import root
 from oslo_config import cfg

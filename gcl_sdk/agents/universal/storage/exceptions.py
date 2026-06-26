@@ -13,8 +13,8 @@
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
 #    under the License.
-from gcl_sdk.common import exceptions
 from gcl_sdk.agents.universal.storage import base
+from gcl_sdk.common import exceptions
 
 
 class TargetFieldsStorageException(exceptions.UniversalAgentException):

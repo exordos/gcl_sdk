@@ -14,10 +14,10 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import configparser
 import logging
 import sys
 import typing as tp
-import configparser
 import uuid as sys_uuid
 
 import bazooka
@@ -25,14 +25,14 @@ from oslo_config import cfg
 from restalchemy.common import config_opts as ra_config_opts
 from restalchemy.storage.sql import engines
 
-from gcl_sdk.common import config
-from gcl_sdk.common import log as infra_log
-from gcl_sdk.common import utils
-from gcl_sdk.agents.universal.services import agent
-from gcl_sdk.agents.universal.drivers import base as driver_base
 from gcl_sdk.agents.universal import constants as c
 from gcl_sdk.agents.universal import utils as ua_utils
 from gcl_sdk.agents.universal.clients.orch import http as orch
+from gcl_sdk.agents.universal.drivers import base as driver_base
+from gcl_sdk.agents.universal.services import agent
+from gcl_sdk.common import config
+from gcl_sdk.common import log as infra_log
+from gcl_sdk.common import utils
 
 DOMAIN = "universal_agent"
 

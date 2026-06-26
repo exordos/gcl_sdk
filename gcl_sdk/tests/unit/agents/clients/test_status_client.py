@@ -15,12 +15,10 @@
 #    under the License.
 from __future__ import annotations
 
-import uuid as sys_uuid
 from unittest import mock
-
+import uuid as sys_uuid
 
 from gcl_sdk.agents.universal.clients.http import status as status_client
-
 
 NODE_UUID = sys_uuid.UUID("55c6968c-d26e-58a3-cfe2-11afde248319")
 

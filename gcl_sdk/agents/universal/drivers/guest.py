@@ -18,18 +18,17 @@ from __future__ import annotations
 import json
 import logging
 import os
-import subprocess
 import pathlib
-
-import yaml
+import subprocess
 
 from restalchemy.dm import properties
 from restalchemy.dm import types
 from restalchemy.dm import types_network
+import yaml
 
+from gcl_sdk.agents.universal import constants as c
 from gcl_sdk.agents.universal.drivers import meta
 from gcl_sdk.common import utils as common_utils
-from gcl_sdk.agents.universal import constants as c
 
 LOG = logging.getLogger(__name__)
 GUEST_MACHINE_KIND = "guest_machine"

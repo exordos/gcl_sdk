@@ -14,8 +14,8 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 import functools
-import uuid as sys_uuid
 import typing as tp
+import uuid as sys_uuid
 
 import bazooka
 

@@ -13,14 +13,14 @@
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
 #    under the License.
-import sys
-
-import importlib_metadata
 import logging
 import os
 import shutil
+import sys
 import tempfile
 import typing as tp
+
+import importlib_metadata
 from restalchemy.storage.sql import migrations
 
 if sys.platform.startswith("linux"):

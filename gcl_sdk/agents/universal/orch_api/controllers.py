@@ -15,8 +15,8 @@
 #    under the License.
 from restalchemy.api import actions
 from restalchemy.api import resources
-from gcl_sdk.agents.universal.api import controllers as sdk_controllers
 
+from gcl_sdk.agents.universal.api import controllers as sdk_controllers
 from gcl_sdk.agents.universal.dm import models
 
 

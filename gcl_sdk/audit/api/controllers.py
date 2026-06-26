@@ -1,5 +1,6 @@
 from gcl_iam import controllers as iam_controllers
-from restalchemy.api import controllers, resources
+from restalchemy.api import controllers
+from restalchemy.api import resources
 
 from gcl_sdk.audit.dm import models
 

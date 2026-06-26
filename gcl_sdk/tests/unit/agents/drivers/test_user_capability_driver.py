@@ -15,11 +15,12 @@
 #    under the License.
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+from unittest.mock import patch
 import uuid as sys_uuid
-from unittest.mock import MagicMock, patch
 
-import pytest
 from bazooka import exceptions as bazooka_exc
+import pytest
 
 from gcl_sdk.agents.universal.clients.backend import core as core_back
 from gcl_sdk.agents.universal.clients.backend import exceptions as client_exc
