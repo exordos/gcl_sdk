@@ -176,12 +176,18 @@ class MetaFileStorageAgentDriver(base.AbstractCapabilityDriver):
         return [cap_model.restore_from_simple_view(**r) for r in capstor.values()]
 
     def _delete_from_meta(self, kind: str, uuid: sys_uuid.UUID) -> None:
-        """Remove the resource from the meta file."""
+        """Remove the resource from the meta file.
+
+        It's safe to call this method even if the resource is already
+        missing from the meta storage (e.g. duplicate delete calls).
+        """
 
         uuid = str(uuid)
 
-        self._storage[kind]["resources"].pop(uuid)
-        LOG.debug("Deleted meta resource %s", uuid)
+        if self._storage[kind]["resources"].pop(uuid, None) is None:
+            LOG.warning("Missing meta storage item for %s(%s)", uuid, kind)
+        else:
+            LOG.debug("Deleted meta resource %s", uuid)
 
     def _add_to_meta(self, capability: str, meta_object: MetaDataPlaneModel) -> None:
         """Add the resource from the meta file."""
@@ -315,8 +321,21 @@ class MetaFileStorageAgentDriver(base.AbstractCapabilityDriver):
         try:
             self.get(resource)
         except driver_exc.ResourceNotFound:
-            # Nothing to do, the resource does not exist
+            # Nothing to do, the resource does not exist either in the
+            # meta storage or on the data plane (or both). Proceed anyway:
+            # `delete_from_dp`/`_delete_from_meta` are expected to be
+            # safe no-ops in that case, so the resource is guaranteed to
+            # be gone after this call returns.
             pass
+        except driver_exc.InvalidDataPlaneObjectError:
+            # TODO(akremenetsky): Seems some destructive actions happened
+            # on the data plane. It's not clear what happened but the
+            # object is invalid. We need to save this information in the
+            # audit journal.
+            LOG.error(
+                "Invalid data plane object: %s. It will be removed anyway.",
+                resource.uuid,
+            )
 
         # Restore object from the resource
         cap_model = self.__model_map__[resource.kind]
@@ -574,8 +593,21 @@ class MetaCoordinatorAgentDriver(MetaFileStorageAgentDriver):
         try:
             self.get(resource)
         except driver_exc.ResourceNotFound:
-            # Nothing to do, the resource does not exist
+            # Nothing to do, the resource does not exist either in the
+            # meta storage or on the data plane (or both). Proceed anyway:
+            # `delete_from_dp`/`_delete_from_meta` are expected to be
+            # safe no-ops in that case, so the resource is guaranteed to
+            # be gone after this call returns.
             pass
+        except driver_exc.InvalidDataPlaneObjectError:
+            # TODO(akremenetsky): Seems some destructive actions happened
+            # on the data plane. It's not clear what happened but the
+            # object is invalid. We need to save this information in the
+            # audit journal.
+            LOG.error(
+                "Invalid data plane object: %s. It will be removed anyway.",
+                resource.uuid,
+            )
 
         # Restore object from the resource
         cap_model = self.__model_map__[resource.kind]
