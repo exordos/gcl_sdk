@@ -277,3 +277,48 @@ class TestMetaDriver:
         res = _make_resource("other")
         with pytest.raises(TypeError):
             drv.delete(res)
+
+    def test_delete_never_created_does_not_raise_or_crash(self, tmp_path):
+        meta_file = tmp_path / "meta.json"
+        drv = _Driver(meta_file=str(meta_file))
+
+        # The resource was never created. Deleting it should be a safe
+        # no-op (self-healing behavior) instead of crashing with a
+        # KeyError.
+        res = _make_resource("dummy")
+        drv.delete(res)
+
+        assert str(res.uuid) not in drv._storage["dummy"]["resources"]
+
+    def test_delete_twice_does_not_raise_a_key_error(self, tmp_path):
+        meta_file = tmp_path / "meta.json"
+        drv = _Driver(meta_file=str(meta_file))
+
+        res = _make_resource("dummy")
+        drv.create(res)
+
+        drv.delete(res)
+        assert str(res.uuid) not in drv._storage["dummy"]["resources"]
+
+        # Deleting an already deleted resource must not raise a KeyError
+        drv.delete(res)
+        assert str(res.uuid) not in drv._storage["dummy"]["resources"]
+
+    def test_delete_invalid_dp_object_is_still_removed_from_meta(self, tmp_path):
+        meta_file = tmp_path / "meta.json"
+        drv = _Driver(meta_file=str(meta_file))
+
+        uuid = sys_uuid.uuid4()
+        res = _make_resource(
+            "dummy",
+            uuid=uuid,
+            value={"uuid": str(uuid), "foo": 1, "invalid_dp": True},
+        )
+        drv.create(res)
+        assert str(uuid) in drv._storage["dummy"]["resources"]
+
+        # Should not raise even though restore_from_dp() reports the
+        # object as invalid; the meta entry must still be cleaned up.
+        drv.delete(res)
+
+        assert str(uuid) not in drv._storage["dummy"]["resources"]
