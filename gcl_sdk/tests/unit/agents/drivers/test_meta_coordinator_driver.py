@@ -17,12 +17,12 @@
 import typing as tp
 import uuid as sys_uuid
 
-
-from gcl_sdk.agents.universal.drivers import exceptions as driver_exc
-from gcl_sdk.agents.universal.drivers import meta
-from gcl_sdk.agents.universal.dm import models
 from restalchemy.dm import properties
 from restalchemy.dm import types
+
+from gcl_sdk.agents.universal.dm import models
+from gcl_sdk.agents.universal.drivers import exceptions as driver_exc
+from gcl_sdk.agents.universal.drivers import meta
 
 
 def _make_resource(

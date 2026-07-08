@@ -138,5 +138,7 @@ class SSHKeyCapabilityDriver(meta.MetaFileStorageAgentDriver):
 
     __model_map__ = {SSH_KEY_TARGET_KIND: SSHKey}
 
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, meta_file=self.SSH_KEY_META_PATH, **kwargs)
+    def __init__(self, *args, meta_file=None, **kwargs) -> None:
+        if meta_file is None:
+            meta_file = self.SSH_KEY_META_PATH
+        super().__init__(*args, meta_file=meta_file, **kwargs)

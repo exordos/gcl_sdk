@@ -195,7 +195,7 @@ class DirectAgentDriver(base.AbstractCapabilityDriver):
                         i, capability, storage_item.fields
                     )
                 else:
-                    LOG.warning("Missing storage item for %s", uuid)
+                    LOG.warning("Missing storage item for %s %s", capability, uuid)
             else:
                 uuid = i.get_resource_uuid()
 
@@ -209,7 +209,7 @@ class DirectAgentDriver(base.AbstractCapabilityDriver):
                         capability, i, storage_item.fields
                     )
                 else:
-                    LOG.warning("Missing storage item for %s", uuid)
+                    LOG.warning("Missing storage item for %s %s", capability, uuid)
 
         # If storage item or client item is missing, consider it as
         # a missing resource
