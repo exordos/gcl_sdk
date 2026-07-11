@@ -134,3 +134,105 @@ def test_multiple_rules_all_rendered():
     )._render_nft()
     assert nft.count("dnat to") == 2
     assert "ip saddr 192.168.100.0/24 masquerade" in nft
+
+
+# --- FORWARD-chain accept (shared filter chain, via iptables) ---------------
+
+
+class _FakeRun:
+    """Records _run() calls and returns canned output for `iptables -S FORWARD`."""
+
+    def __init__(self, listing=""):
+        self.calls = []
+        self._listing = listing
+
+    def __call__(self, cmd):
+        self.calls.append(cmd)
+        if cmd[:2] == [border.IPTABLES_BIN, "-S"]:
+            return self._listing
+        return ""
+
+
+_FWD = {
+    "proto": "tcp",
+    "listen_port": 443,
+    "to_host": "192.168.100.2",
+    "to_port": 443,
+}
+
+
+def test_forward_accept_specs_shape():
+    specs = _border(forwards=[_FWD])._forward_accept_specs()
+    assert specs == [
+        [
+            "-p", "tcp",
+            "-d", "192.168.100.2",
+            "--dport", "443",
+            "-m", "comment", "--comment", "exordos_border",
+            "-j", "ACCEPT",
+        ]
+    ]  # fmt: skip
+
+
+def test_forward_accept_specs_empty_without_forwards():
+    assert _border()._forward_accept_specs() == []
+
+
+def test_apply_forward_accepts_clears_then_inserts(monkeypatch):
+    fake = _FakeRun(listing="")
+    monkeypatch.setattr(border, "_run", fake)
+
+    _border(
+        forwards=[
+            _FWD,
+            {
+                "proto": "udp",
+                "listen_port": 53,
+                "to_host": "192.168.100.2",
+                "to_port": 5300,
+            },
+        ]
+    )._apply_forward_accepts()
+
+    # Clears first (lists the chain), then inserts each accept at position 1.
+    assert fake.calls[0] == [border.IPTABLES_BIN, "-S", "FORWARD"]
+    inserts = [c for c in fake.calls if c[1:4] == ["-I", "FORWARD", "1"]]
+    assert len(inserts) == 2
+    assert inserts[0] == [
+        border.IPTABLES_BIN,
+        "-I", "FORWARD", "1",
+        "-p", "tcp",
+        "-d", "192.168.100.2",
+        "--dport", "443",
+        "-m", "comment", "--comment", "exordos_border",
+        "-j", "ACCEPT",
+    ]  # fmt: skip
+
+
+def test_clear_forward_accepts_removes_only_our_tagged_rules(monkeypatch):
+    listing = "\n".join(
+        [
+            "-P FORWARD ACCEPT",
+            "-A FORWARD -d 192.168.100.2/32 -p tcp -m tcp --dport 443 "
+            '-m comment --comment "exordos_border" -j ACCEPT',
+            "-A FORWARD -o virbr1 -j REJECT",  # libvirt's, untagged
+        ]
+    )
+    fake = _FakeRun(listing=listing)
+    monkeypatch.setattr(border, "_run", fake)
+
+    _border()._clear_forward_accepts()
+
+    deletes = [c for c in fake.calls if len(c) > 1 and c[1] == "-D"]
+    assert len(deletes) == 1
+    assert "exordos_border" in deletes[0]  # comment survives shlex (unquoted)
+    assert "REJECT" not in " ".join(deletes[0])
+
+
+def test_apply_forward_accepts_missing_iptables_is_noop(monkeypatch):
+    def _raise(cmd):
+        raise FileNotFoundError()
+
+    monkeypatch.setattr(border, "_run", _raise)
+    # Must not raise when iptables is absent.
+    _border(forwards=[_FWD])._apply_forward_accepts()

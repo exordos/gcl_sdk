@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shlex
 import subprocess
 
 from gcl_sdk.agents.universal import constants
@@ -35,6 +36,10 @@ NFT_TABLE = "exordos_border"
 NFT_CONFIG_FILE = os.path.join(constants.WORK_DIR, "exordos_border.nft")
 NFT_BIN = "/usr/sbin/nft"
 SYSCTL_BIN = "/usr/sbin/sysctl"
+IPTABLES_BIN = "/usr/sbin/iptables"
+# Marks border-owned rules in the shared filter FORWARD chain so they can be
+# found and removed without touching anyone else's rules.
+FORWARD_COMMENT = "exordos_border"
 
 
 def _run(cmd: list[str]) -> str:
@@ -48,6 +53,16 @@ class Border(border_models.Border, meta.MetaDataPlaneModel):
     The whole ``exordos_border`` nft table is regenerated and atomically
     replaced on every apply, which keeps reconciliation idempotent without
     per-rule diffing (mirrors how evpn_connector owns its OVS table).
+
+    DNAT lands the forwarded packet on ``to_host:to_port``, but another
+    firewall on the box (typically a libvirt NAT network) installs a
+    ``FORWARD`` reject for inbound traffic to its bridge. nftables verdicts
+    are not terminal across tables, so an accept in our own table can't undo
+    that reject -- the accept has to sit in the *same* chain, ahead of it.
+    We therefore also insert comment-tagged ACCEPT rules at the top of the
+    shared filter ``FORWARD`` chain via ``iptables`` (the historical
+    ``iptables -I FORWARD 1 ... ACCEPT`` hook), tagged so we can remove only
+    our own rules.
     """
 
     META_PATH = os.path.join(constants.WORK_DIR, "border_meta.json")
@@ -93,6 +108,66 @@ class Border(border_models.Border, meta.MetaDataPlaneModel):
             "snat": "\n".join(snat_lines),
         }
 
+    def _forward_accept_specs(self) -> list[list[str]]:
+        """iptables rule bodies accepting the inbound forwarded connections.
+
+        One ACCEPT per forward, matched on the post-DNAT destination
+        (``to_host:to_port``) and tagged with our owner comment.
+        """
+        specs = []
+        for fwd in self.forwards or []:
+            proto = fwd.get("proto", "tcp")
+            specs.append(
+                [
+                    "-p",
+                    proto,
+                    "-d",
+                    str(fwd["to_host"]),
+                    "--dport",
+                    str(fwd["to_port"]),
+                    "-m",
+                    "comment",
+                    "--comment",
+                    FORWARD_COMMENT,
+                    "-j",
+                    "ACCEPT",
+                ]
+            )
+        return specs
+
+    def _clear_forward_accepts(self) -> None:
+        """Remove every border-owned FORWARD accept (found by our comment)."""
+        try:
+            listing = _run([IPTABLES_BIN, "-S", "FORWARD"])
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            return
+        for line in listing.splitlines():
+            if FORWARD_COMMENT not in line:
+                continue
+            spec = shlex.split(line)
+            if not spec or spec[0] != "-A":
+                continue
+            spec[0] = "-D"
+            try:
+                _run([IPTABLES_BIN, *spec])
+            except subprocess.CalledProcessError:
+                pass
+
+    def _apply_forward_accepts(self) -> None:
+        """Re-sync our FORWARD accepts: drop the old ones, insert the current."""
+        try:
+            self._clear_forward_accepts()
+            for spec in self._forward_accept_specs():
+                _run([IPTABLES_BIN, "-I", "FORWARD", "1", *spec])
+        except FileNotFoundError:
+            # No iptables on the box -> presumably no competing FORWARD reject
+            # either; the nft DNAT is enough.
+            LOG.warning("border: iptables not found, skipping FORWARD accepts")
+        except subprocess.CalledProcessError as e:
+            LOG.error("border: failed to add FORWARD accepts: %s", e.output)
+            self.status = ic.InstanceStatus.ERROR.value
+            raise driver_exc.InvalidDataPlaneObjectError(obj={"uuid": str(self.uuid)})
+
     def _apply(self) -> None:
         content = self._render_nft()
         os.makedirs(os.path.dirname(NFT_CONFIG_FILE), exist_ok=True)
@@ -105,6 +180,7 @@ class Border(border_models.Border, meta.MetaDataPlaneModel):
             LOG.error("border: failed to apply nftables: %s", e.output)
             self.status = ic.InstanceStatus.ERROR.value
             raise driver_exc.InvalidDataPlaneObjectError(obj={"uuid": str(self.uuid)})
+        self._apply_forward_accepts()
         self.status = ic.InstanceStatus.ACTIVE.value
 
     def dump_to_dp(self) -> None:
@@ -133,6 +209,7 @@ class Border(border_models.Border, meta.MetaDataPlaneModel):
             pass
         except FileNotFoundError:
             pass
+        self._clear_forward_accepts()
         try:
             os.remove(NFT_CONFIG_FILE)
         except FileNotFoundError:
