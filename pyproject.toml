@@ -153,6 +153,8 @@ GuestMachineCapabilityDriver = "gcl_sdk.agents.universal.drivers.guest:GuestMach
 CoreCapabilityDriver = "gcl_sdk.agents.universal.drivers.core:CoreCapabilityDriver"
 RestCoreCapabilityDriver = "gcl_sdk.agents.universal.drivers.core:RestCoreCapabilityDriver"
 UserCapabilityDriver = "gcl_sdk.agents.universal.drivers.core:UserCapabilityDriver"
+BorderAgentCapabilityDriver = "gcl_sdk.agents.universal.drivers.border:BorderAgentCapabilityDriver"
+BorderCapabilityDriver = "gcl_sdk.agents.universal.drivers.border:BorderCapabilityDriver"
 
 [tool.uv]
 package = true
