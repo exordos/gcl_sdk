@@ -673,6 +673,51 @@ class Config(
         )
 
 
+class Border(
+    ra_models.ModelWithRequiredUUID,
+    ra_models.ModelWithProject,
+    ra_models.ModelWithNameDesc,
+    ra_models.ModelWithTimestamp,
+    ua_models.TargetResourceKindAwareMixin,
+):
+    """Infra view of a Core network border (NAT gateway).
+
+    Created against Core's ``/v1/network/border/``. SNAT/DNAT rules are carried
+    inline; ``node`` optionally pins the border to a specific compute node
+    (``border_node`` / distributed egress) instead of the core node.
+    """
+
+    __init_resource_status__ = pc.InstanceStatus.NEW.value
+
+    # Optional target compute node; None -> the core node (border_agent).
+    node = properties.property(ra_types.AllowNone(ra_types.UUID()), default=None)
+    # [{source_cidr, mode: "masquerade"|"snat", snat_to}]
+    snat_rules = properties.property(ra_types.List(), default=list)
+    # [{proto: "tcp"|"udp", public_ip, listen_port, to_host, to_port}]
+    forwards = properties.property(ra_types.List(), default=list)
+    status = properties.property(
+        ra_types.Enum([s.value for s in pc.InstanceStatus]),
+    )
+
+    @classmethod
+    def get_resource_kind(cls) -> str:
+        """Return the resource kind."""
+        return "border"
+
+    def get_resource_target_fields(self) -> tp.Collection[str]:
+        """Return the collection of target fields."""
+        return frozenset(
+            (
+                "uuid",
+                "name",
+                "node",
+                "snat_rules",
+                "forwards",
+                "project_id",
+            )
+        )
+
+
 class Profile(
     ua_models.TargetResourceKindAwareMixin,
     ra_models.ModelWithRequiredUUID,
