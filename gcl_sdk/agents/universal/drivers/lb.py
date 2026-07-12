@@ -209,9 +209,50 @@ class LB(lb_models.LB, meta.MetaDataPlaneModel):
             "backend_pools",
         }
 
+    def _dataplane_views(self) -> list[dict]:
+        """All LB views sharing this node's nginx dataplane, self included.
+
+        The nginx config files are one shared dataplane, but the agent may
+        carry several LB resources (e.g. the element's own core_agent LB and
+        the ecosystem's realm-ingress LB). Rendering only ``self`` would make
+        every apply of one LB wipe the other's vhosts and the two resources'
+        validations flip-flop forever, reload-storming nginx. So every render
+        and validation is done over the union of all LB resources in the meta
+        storage, uuid-sorted — every resource produces the byte-identical
+        file, so a correct file satisfies all of them at once.
+
+        ``self`` is authoritative for its own uuid (the meta may hold its
+        pre-update view while an update is being applied).
+        """
+        views = {}
+        for capstor in self._common_storage.values():
+            # Skip non-capability entries such as lb_driver_info.
+            if not isinstance(capstor, dict) or "resources" not in capstor:
+                continue
+            for view_uuid, view in capstor["resources"].items():
+                views[str(view_uuid)] = view
+        views[str(self.uuid)] = {
+            "uuid": str(self.uuid),
+            "vhosts": self.vhosts,
+            "backend_pools": self.backend_pools,
+        }
+        return [views[u] for u in sorted(views)]
+
+    def _agg_vhosts(self) -> list[dict]:
+        vhosts = []
+        for view in self._dataplane_views():
+            vhosts.extend(view.get("vhosts") or [])
+        return vhosts
+
+    def _agg_pools(self) -> dict:
+        pools = {}
+        for view in self._dataplane_views():
+            pools.update(view.get("backend_pools") or {})
+        return pools
+
     def _gen_backends(self, proto_lvl):
         upstreams = []
-        for pid, pool in self.backend_pools.items():
+        for pid, pool in self._agg_pools().items():
             servers = "\n    ".join(
                 f"server {e['host']}:{e['port']} weight={e['weight']};"
                 for e in pool["endpoints"]
@@ -248,11 +289,18 @@ class LB(lb_models.LB, meta.MetaDataPlaneModel):
         vhosts_l4 = []
         vhosts_l7 = []
         ext_sources = {}
-        for v in self.vhosts:
+        # Only one server per port may carry default_server; with several
+        # catch-all ("_") vhosts aggregated the first (uuid-sorted, so
+        # deterministic) wins instead of failing the whole nginx config.
+        default_ports = set()
+        for v in self._agg_vhosts():
             if len(v["routes"]) == 0:
                 continue
             if v["proto"].startswith("http"):
-                vhosts_l7.append(self._gen_vhost_l7(v))
+                is_default = "_" in v["domains"] and v["port"] not in default_ports
+                if is_default:
+                    default_ports.add(v["port"])
+                vhosts_l7.append(self._gen_vhost_l7(v, is_default))
                 proto = "tcp"
             else:
                 vhosts_l4.append(self._gen_vhost_l4(v))
@@ -291,7 +339,7 @@ stream {{
 }}
 """
 
-    def _gen_vhost_l7(self, v):
+    def _gen_vhost_l7(self, v, is_default=False):
         locations = [ROOT_LOCATION]
         for r in v["routes"].values():
             c = r["cond"]
@@ -364,12 +412,13 @@ ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDS
         locs = "\n    ".join(locations)
         ips = "    \n".join(f"allow {ip};" for ip in c["allowed_ips"])
 
+        default_server = " default_server" if is_default else ""
         return f"""\
 server {{
 gzip_proxied any;
 client_max_body_size 0;
 server_tokens off;
-listen 0.0.0.0:{v["port"]}{" ssl http2" if v["proto"] == "https" else ""}{" proxy_protocol" if v.get("proxy_proto_from") else ""};
+listen 0.0.0.0:{v["port"]}{" ssl http2" if v["proto"] == "https" else ""}{" proxy_protocol" if v.get("proxy_proto_from") else ""}{default_server};
 {part}
 server_name {" ".join(v["domains"])};{ssl_info}
 {ips}
@@ -491,8 +540,11 @@ map $http_upgrade $connection_upgrade {
         return True
 
     def _get_target_paths(self):
+        # Aggregated: the orphan-dir cleanup in _actualize_downloaded_dirs
+        # removes anything outside this set, so it must span every LB
+        # sharing the dataplane, not just self.
         target_paths = {}
-        for v in self.vhosts:
+        for v in self._agg_vhosts():
             if len(v["routes"]) == 0:
                 continue
             if not v["proto"].startswith("http"):
@@ -564,8 +616,11 @@ map $http_upgrade $connection_upgrade {
         with open(NGINX_L7_CONFIG_FILE, "w") as f:
             f.write(self._gen_file_content_l7(vhosts_l7))
 
+        # Aggregated: the not-in-use cleanup below removes any cert file
+        # outside actual_keys, so certs of every LB sharing the dataplane
+        # must be written/kept, not just self's.
         actual_keys = set()
-        for v in self.vhosts:
+        for v in self._agg_vhosts():
             if v["proto"] != "https":
                 continue
             crt_name = f"{NGINX_SSL_DIR}{v['uuid']}_exordos.crt"
@@ -757,19 +812,14 @@ map $http_upgrade $connection_upgrade {
                     pass
 
     def delete_from_dp(self) -> None:
-        self._remove_file(NGINX_L4_CONFIG_FILE)
-        self._remove_file(NGINX_L7_CONFIG_FILE)
-
-        for v in self.vhosts:
-            if v["proto"] == "https":
-                self._remove_file(f"{NGINX_SSL_DIR}{v['uuid']}_exordos.crt")
-                self._remove_file(f"{NGINX_SSL_DIR}{v['uuid']}_exordos.key")
-
-        self._actualize_downloaded_dirs()
-        self._reload_or_restart_nginx()
-
-        # external sources
-        self._remove_external_sources()
+        # The config files are a shared dataplane: re-render it without this
+        # LB instead of removing them, so sibling LBs keep their vhosts.
+        # With nothing contributed by self, dump_to_dp's aggregated cleanups
+        # also drop self's certs, downloaded dirs and tunnels (our meta view
+        # is deleted from storage right after this returns).
+        self.vhosts = []
+        self.backend_pools = {}
+        self.dump_to_dp()
 
     def update_on_dp(self) -> None:
         self.dump_to_dp()
