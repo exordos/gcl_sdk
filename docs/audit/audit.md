@@ -1,67 +1,82 @@
 # Audit
 
-Audit logs enhance system security by tracking changes to key entities (records in tables).
+`gcl_sdk.audit` provides a transactional local audit outbox, a project-aware
+read API, and a background delivery service for a central Audit installation.
 
-Main components:
+## Recording changes
 
-- Audit data model - **AuditRecord** (stored in the **gcl_sdk_audit_logs** table).
-- Mixin for models - **AuditLogSQLStorableMixin** automatically creates entries in the Audit model.
-- API endpoints - **/audit** endpoint for viewing data from AuditRecord (requires **audit_log.audit_record.read** access rights)
+Replace `orm.SQLStorableMixin` with `AuditLogSQLStorableMixin` and set the
+resource type and service name:
 
-## AuditLogSQLStorableMixin summary
+```python
+from gcl_sdk.audit.dm import models as audit_models
 
-AuditLogSQLStorableMixin extends the insert, update and delete methods of SQLStorableMixin.
 
-Adds new **action** and **object_type** strings parameters to these methods.
+class Node(audit_models.AuditLogSQLStorableMixin, ...):
+    __audit_service_name__ = "compute"
+    __audit_resource_type__ = "node"
+```
 
--   Action refers to the operation performed on an object. If not specified, the base method name is used ("insert" is replaced with "create").
+`AuditEventBase` defines the immutable event contract shared with central Audit
+storage. `insert`, `update`, and `delete` write an `AuditDeliveryEvent`, which
+adds local outbox persistence and delivery status, in the same database
+transaction as the resource mutation. New rows start with delivery status
+`NEW`. A successful or idempotently acknowledged central ingest removes the
+local outbox row. A permanent central UUID/payload conflict is retained and
+marked `ERROR`.
 
--   Object Type refers to the type of object being operated on. If not specified, the table name is used.
+## Local API
 
-Also attempts to retrieve the **user_uuid** from the IAM context for the corresponding field in the AuditRecord table.
-
-Within the transaction, the base method is called followed by inserting an entry in the audit table.
-
-## Quick start
-
-Replace **orm.SQLStorableMixin** with **AuditLogSQLStorableMixin** in any model that requires audit tracking.
-
-API routes:
+Attach `AuditRoute` to the service route tree. Reads require
+`audit.events.read` or `audit.events.read_all` and are project-scoped by the IAM
+context.
 
 ```python
 from gcl_sdk.audit.api import routes as audit_routes
-...
+
+
 class ApiEndpointRoute(routes.Route):
-    ...
     audit = routes.route(audit_routes.AuditRoute)
 ```
 
-SDK migrations on startup (cmd/user_api):
+Applications must apply SDK migrations before using the model. Migration
+`0007` creates `gcl_sdk_audit_events` together with the delivery state and the
+`(status, created_at, uuid)` worker index.
+
+## Delivery daemon
+
+Register the options and add `AuditSenderService` to the host service loop only
+when delivery is enabled:
 
 ```python
-from gcl_sdk import migrations as sdk_migrations
+from gcl_sdk.audit import opts as audit_opts
+from gcl_sdk.audit.services import senders
 
-def main():
-    ...
-    sdk_migrations.apply_migrations(CONF)
-    ...
+audit_opts.register_audit_delivery_opts(CONF)
+
+if audit_opts.get_audit_delivery_config().enabled:
+    audit_sender = senders.AuditSenderService.build_from_config()
 ```
 
-Migration for test and applications - create a new migration as usual, then add this code
+Configuration:
 
-```python
-from gcl_sdk.common.utils import MigrationEngine
-from gcl_sdk import migrations as sdk_migrations
-
-SDK_MIGRATION_FILE_NAME = "0002-init-auditlog-table-c6f740.py"
-
-class MigrationStep(migrations.AbstractMigrationStep):
-    ...
-    def upgrade(self, session):
-        migration_engine = MigrationEngine._get_migration_engine(sdk_migrations)
-        migration_engine.apply_migration(SDK_MIGRATION_FILE_NAME, session)
-
-    def downgrade(self, session):
-        migration_engine = MigrationEngine._get_migration_engine(sdk_migrations)
-        migration_engine.rollback_migration(SDK_MIGRATION_FILE_NAME, session)
+```ini
+[audit_delivery]
+enabled = true
+endpoint = http://audit.local.genesis-core.tech:8080/
+api_version = v1
+auth_token = <token with audit.events.create>
+timeout = 5
+batch_size = 100
 ```
+
+The worker sends events strictly from oldest to newest. A transient HTTP or
+network error leaves the earliest row in `NEW` and stops the iteration, so later
+events cannot overtake it. An `ERROR` row blocks the source outbox until an
+operator resolves it. Central ingest is idempotent by UUID, therefore a retry
+after an uncertain response does not create a duplicate.
+
+The bearer token is currently configured manually. Automatic scoped service
+token issuance and rotation is tracked in
+[`exordos_core#470`](https://github.com/exordos/exordos_core/issues/470).
+Never write the token to logs or test reports.
