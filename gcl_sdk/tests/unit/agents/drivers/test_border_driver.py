@@ -236,3 +236,25 @@ def test_apply_forward_accepts_missing_iptables_is_noop(monkeypatch):
     monkeypatch.setattr(border, "_run", _raise)
     # Must not raise when iptables is absent.
     _border(forwards=[_FWD])._apply_forward_accepts()
+
+
+def test_full_nat_forward_masquerades_the_dnated_flow():
+    b = border.Border(
+        uuid=sys_uuid.uuid4(),
+        forwards=[
+            {
+                "proto": "tcp",
+                "public_ip": None,
+                "listen_port": 2222,
+                "to_host": "10.20.0.2",
+                "to_port": 22,
+                "full_nat": True,
+            }
+        ],
+        snat_rules=[],
+    )
+    nft = b._render_nft()
+    assert "tcp dport 2222 dnat to 10.20.0.2:22" in nft
+    # The reply path: the forwarded flow is masqueraded so the target
+    # answers through this border, not directly to the client.
+    assert "ip daddr 10.20.0.2 tcp dport 22 masquerade" in nft

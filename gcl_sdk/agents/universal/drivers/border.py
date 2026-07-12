@@ -34,9 +34,9 @@ BORDER_NODE_TARGET_KIND = "border_node"
 # Dedicated nftables table fully owned (and atomically replaced) by the agent.
 NFT_TABLE = "exordos_border"
 NFT_CONFIG_FILE = os.path.join(constants.WORK_DIR, "exordos_border.nft")
-NFT_BIN = "/usr/sbin/nft"
-SYSCTL_BIN = "/usr/sbin/sysctl"
-IPTABLES_BIN = "/usr/sbin/iptables"
+NFT_BIN = "nft"
+SYSCTL_BIN = "sysctl"
+IPTABLES_BIN = "iptables"
 # Marks border-owned rules in the shared filter FORWARD chain so they can be
 # found and removed without touching anyone else's rules.
 FORWARD_COMMENT = "exordos_border"
@@ -70,7 +70,9 @@ class Border(border_models.Border, meta.MetaDataPlaneModel):
     def _render_nft(self) -> str:
         snat_lines = []
         for rule in self.snat_rules or []:
-            src = rule["source_cidr"]
+            src = rule.get("source_cidr")
+            if not src:
+                continue
             if rule.get("mode") == "snat" and rule.get("snat_to"):
                 snat_lines.append(
                     "        ip saddr %s snat to %s" % (src, rule["snat_to"])
@@ -81,13 +83,25 @@ class Border(border_models.Border, meta.MetaDataPlaneModel):
         dnat_lines = []
         for fwd in self.forwards or []:
             proto = fwd.get("proto", "tcp")
+            listen_port = fwd.get("listen_port")
+            to_host = fwd.get("to_host")
+            to_port = fwd.get("to_port")
+            if not listen_port or not to_host or not to_port:
+                continue
             match = ""
             if fwd.get("public_ip"):
                 match += "ip daddr %s " % fwd["public_ip"]
-            match += "%s dport %s" % (proto, fwd["listen_port"])
-            dnat_lines.append(
-                "        %s dnat to %s:%s" % (match, fwd["to_host"], fwd["to_port"])
-            )
+            match += "%s dport %s" % (proto, listen_port)
+            dnat_lines.append("        %s dnat to %s:%s" % (match, to_host, to_port))
+            # Out-of-path DNAT (the target does not route its replies back
+            # through this border, e.g. a dedicated VM gateway forwarding
+            # to a host on the same L2): full-NAT the flow so replies
+            # return here instead of racing to the client directly.
+            if fwd.get("full_nat"):
+                snat_lines.append(
+                    "        ip daddr %s %s dport %s masquerade"
+                    % (to_host, proto, to_port)
+                )
 
         return (
             "add table ip %(t)s\n"
@@ -117,14 +131,18 @@ class Border(border_models.Border, meta.MetaDataPlaneModel):
         specs = []
         for fwd in self.forwards or []:
             proto = fwd.get("proto", "tcp")
+            to_host = fwd.get("to_host")
+            to_port = fwd.get("to_port")
+            if not to_host or not to_port:
+                continue
             specs.append(
                 [
                     "-p",
                     proto,
                     "-d",
-                    str(fwd["to_host"]),
+                    str(to_host),
                     "--dport",
-                    str(fwd["to_port"]),
+                    str(to_port),
                     "-m",
                     "comment",
                     "--comment",
