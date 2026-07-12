@@ -204,7 +204,17 @@ class DatabaseBackendClient(base.AbstractBackendClient):
             if not prop or prop.is_read_only():
                 continue
             setattr(obj, field_name, getattr(updated_obj, field_name))
-        obj.update(session=session)
+
+        # Only write when a target field actually changed. A no-op update()
+        # is not free: models may run side effects on write (e.g. a child
+        # model touching its parent's updated_at). If the desired target
+        # carries only read-only/id fields (or already matches the DB), an
+        # unconditional update() bumps timestamps every iteration, which
+        # makes every other reconciler sharing that row see it as "changed"
+        # and re-actualize forever — a self-sustaining write loop that never
+        # settles. Skipping a clean update keeps reconciliation idempotent.
+        if obj.is_dirty():
+            obj.update(session=session)
 
         return obj
 
