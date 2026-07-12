@@ -229,6 +229,7 @@ class TestDatabaseBackendClient:
         existing_obj.properties = {"a": prop_a, "b": prop_b}
         existing_obj.a = 1
         existing_obj.b = 2
+        existing_obj.is_dirty.return_value = True
 
         manager = MagicMock()
         manager.get_one_or_none.return_value = existing_obj
@@ -253,6 +254,42 @@ class TestDatabaseBackendClient:
         # b is writable -> updated
         assert existing_obj.b == 20
         existing_obj.update.assert_called_once()
+        assert actual is existing_obj
+
+    def test_update_is_a_noop_when_nothing_changed(self):
+        # The desired target carries only a read-only field, so the object
+        # is left clean (is_dirty False). update() must NOT be called: a
+        # no-op write still fires model side effects (e.g. a child touching
+        # its parent's updated_at), which self-sustains a churn loop across
+        # reconcilers sharing the row.
+        kind = "config"
+        uid = str(sys_uuid.uuid4())
+        resource = _make_resource(kind, value={"uuid": uid, "a": 10})
+
+        prop_a = MagicMock()
+        prop_a.is_read_only.return_value = True
+
+        existing_obj = MagicMock()
+        existing_obj.properties = {"a": prop_a}
+        existing_obj.a = 1
+        existing_obj.is_dirty.return_value = False
+
+        manager = MagicMock()
+        manager.get_one_or_none.return_value = existing_obj
+
+        model = MagicMock()
+        model.objects = manager
+        model.from_ua_resource.return_value = MagicMock(a=10)
+
+        ms = ModelSpec(model=model, kind=kind, filters={})
+        client = DatabaseBackendClient(model_specs=[ms], tf_storage=MagicMock())
+        client.set_session(object())
+
+        actual = client.update(resource)
+
+        # read-only field left untouched, and no write issued
+        assert existing_obj.a == 1
+        existing_obj.update.assert_not_called()
         assert actual is existing_obj
 
     def test_delete_deletes_when_found_and_noop_when_missing(self):
