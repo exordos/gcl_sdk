@@ -46,7 +46,7 @@ build-backend = "setuptools.build_meta"
 dev = [
     "tox>=4.0.0",
     "tox-uv",
-    "pytest>=7.0.0",
+    "pytest>=8.0.0,<10.0.0",
 ]
 test = [
     "coverage>=4.0",
@@ -64,7 +64,7 @@ shellcheck = [
     "shellcheck-py",
 ]
 docs = [
-    "mkdocs-material==9.1.0",
+    "mkdocs-material==9.7.6",
     "mkdocs-glightbox",
     "mkdocs-static-i18n[material]"
 ]
