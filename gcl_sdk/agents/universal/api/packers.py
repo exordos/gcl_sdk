@@ -30,6 +30,7 @@ ENCRYPTED_JSON_CONTENT_TYPE = "application/x-genesis-agent-chacha20-poly1305-enc
 
 EXORDOS_NODE_UUID_HEADER = "X-Genesis-Node-UUID"
 EXORDOS_NONCE_HEADER = "X-Genesis-Nonce"
+REMOTE_ADDR_HEADER = "REMOTE_ADDR"
 
 
 class BaseEncryptionInformation(metaclass=abc.ABCMeta):
@@ -90,6 +91,11 @@ class EncryptionInformation(BaseEncryptionInformation):
             self._node_uuid = sys_uuid.UUID(node_uuid_str)
             return self._node_uuid
 
+        remote_addr = self._request.environ.get(REMOTE_ADDR_HEADER)
+        if remote_addr:
+            raise ValueError(
+                f"{EXORDOS_NODE_UUID_HEADER} header is missing or invalid from remote address {remote_addr}"
+            )
         raise ValueError(f"{EXORDOS_NODE_UUID_HEADER} header is missing or invalid")
 
     @property
@@ -105,6 +111,11 @@ class EncryptionInformation(BaseEncryptionInformation):
         if self._request_nonce_base64:
             return self._request_nonce_base64
 
+        remote_addr = self._request.environ.get(REMOTE_ADDR_HEADER)
+        if remote_addr:
+            raise ValueError(
+                f"{EXORDOS_NONCE_HEADER} header is missing or invalid from remote address {remote_addr}"
+            )
         raise ValueError(f"{EXORDOS_NONCE_HEADER} header is missing or invalid")
 
     @property
