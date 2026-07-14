@@ -714,25 +714,18 @@ map $http_upgrade $connection_upgrade {
                 )
         for path, future in self._download_dirs_futures.copy().items():
             try:
-                if (ret := future.result(timeout=0)) is not True:
-                    LOG.error(
-                        "Future for %s failed with errors:\n%s\n",
-                        self._download_dirs[path],
-                        ret,
-                    )
-                    self.status = ic.InstanceStatus.ERROR.value
-                    self._download_dirs_futures.pop(path, None)
-                    raise driver_exc.InvalidDataPlaneObjectError(
-                        obj={"uuid": str(self.uuid)}
-                    )
+                ret = future.result(timeout=0)
             except TimeoutError:
                 # Future is not finished yet
                 continue
             except Exception as e:
-                # Future got exception
+                # Future got exception. `path` is not yet a key of
+                # `_download_dirs` at this point (that dict is only
+                # populated on a successful download), so log `path`
+                # itself rather than looking it up there.
                 LOG.error(
                     "Future for %s failed with exception:\n%s",
-                    self._download_dirs[path],
+                    path,
                     e,
                 )
                 self.status = ic.InstanceStatus.ERROR.value
@@ -741,6 +734,16 @@ map $http_upgrade $connection_upgrade {
                     obj={"uuid": str(self.uuid)}
                 )
             self._download_dirs_futures.pop(path, None)
+            if ret is not True:
+                LOG.error(
+                    "Future for %s failed with errors:\n%s\n",
+                    path,
+                    ret,
+                )
+                self.status = ic.InstanceStatus.ERROR.value
+                raise driver_exc.InvalidDataPlaneObjectError(
+                    obj={"uuid": str(self.uuid)}
+                )
         if not self._validate_downloaded_dirs():
             raise driver_exc.InvalidDataPlaneObjectError(obj={"uuid": str(self.uuid)})
 
