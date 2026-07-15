@@ -673,6 +673,32 @@ class Config(
         )
 
 
+class BorderTypeCoreAgentKind(
+    types_dynamic.AbstractKindModel, ra_models.SimpleViewMixin
+):
+    KIND = "core_agent"
+
+
+class BorderTypeCoreKind(types_dynamic.AbstractKindModel, ra_models.SimpleViewMixin):
+    """A dedicated VM-based border (calque of LBTypeCoreKind).
+
+    A border is a single gateway; there is no nodes_number — an HA pair
+    would need VRRP/conntrack sync, which this deliberately does not claim.
+    The image must ship the universal agent with BorderCapabilityDriver.
+    """
+
+    KIND = "core"
+
+    cpu = properties.property(ra_types.Integer(min_value=1, max_value=128), default=1)
+    ram = properties.property(
+        ra_types.Integer(min_value=512, max_value=1024**3), default=512
+    )
+    disk_size = properties.property(
+        ra_types.Integer(min_value=10, max_value=1024**3),
+        default=10,
+    )
+
+
 class Border(
     ra_models.ModelWithRequiredUUID,
     ra_models.ModelWithProject,
@@ -697,6 +723,18 @@ class Border(
     forwards = properties.property(ra_types.List(), default=list)
     status = properties.property(
         ra_types.Enum([s.value for s in pc.InstanceStatus]),
+    )
+    type = properties.property(
+        types_dynamic.KindModelSelectorType(
+            types_dynamic.KindModelType(BorderTypeCoreAgentKind),
+            types_dynamic.KindModelType(BorderTypeCoreKind),
+        ),
+        default=BorderTypeCoreAgentKind,
+        required=True,
+    )
+    ipsv4 = properties.property(
+        ra_types.TypedList(ra_types.String(max_length=15)),
+        default=list,
     )
 
     @classmethod
