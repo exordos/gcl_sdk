@@ -234,9 +234,11 @@ class DirectAgentDriver(base.AbstractCapabilityDriver):
 
         try:
             resp = self._client.create(resource)
-            LOG.debug("Created resource: %s", resource.uuid)
+            LOG.debug("Created %s resource: %s", resource.kind, resource.uuid)
         except client_exc.ResourceAlreadyExists:
-            LOG.error("The resource already exists: %s", resource.uuid)
+            LOG.error(
+                "The resource %s already exists: %s", resource.kind, resource.uuid
+            )
             raise driver_exc.ResourceAlreadyExists(resource=resource)
 
         # Convert response to the resource
@@ -255,9 +257,11 @@ class DirectAgentDriver(base.AbstractCapabilityDriver):
         try:
             resp = self._client.update(resource)
             self._storage.update(storage_item)
-            LOG.debug("Updated resource: %s", resource.uuid)
+            LOG.debug("Updated %s resource: %s", resource.kind, resource.uuid)
         except client_exc.ResourceNotFound:
-            LOG.error("The resource does not exist: %s", resource.uuid)
+            LOG.error(
+                "The resource %s does not exist: %s", resource.kind, resource.uuid
+            )
             raise driver_exc.ResourceNotFound(resource=resource)
 
         # Convert response to the resource
@@ -269,9 +273,11 @@ class DirectAgentDriver(base.AbstractCapabilityDriver):
 
         try:
             self._client.delete(resource)
-            LOG.debug("Deleted resource: %s", resource.uuid)
+            LOG.debug("Deleted %s resource: %s", resource.kind, resource.uuid)
         except client_exc.ResourceNotFound:
-            LOG.warning("The resource is already deleted: %s", resource.uuid)
+            LOG.warning(
+                "The resource %s is already deleted: %s", resource.kind, resource.uuid
+            )
 
         storage_item = storage_base.TargetFieldItem(
             resource.kind, resource.uuid, frozenset()
