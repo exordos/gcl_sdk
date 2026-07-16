@@ -91,6 +91,12 @@ class Border(border_models.Border, meta.MetaDataPlaneModel):
             match = ""
             if fwd.get("public_ip"):
                 match += "ip daddr %s " % fwd["public_ip"]
+            else:
+                # Only intercept traffic addressed to this box. A bare dport
+                # match also catches *transit* traffic routed through the
+                # border (e.g. a guest behind it talking to an external
+                # host on the same port) and hairpins it back to to_host.
+                match += "fib daddr type local "
             match += "%s dport %s" % (proto, listen_port)
             dnat_lines.append("        %s dnat to %s:%s" % (match, to_host, to_port))
             # Out-of-path DNAT (the target does not route its replies back
