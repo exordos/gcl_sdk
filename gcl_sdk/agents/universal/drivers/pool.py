@@ -31,6 +31,7 @@ from restalchemy.dm import types_dynamic
 from restalchemy.dm import types_network as types_net
 
 from gcl_sdk.agents.universal import constants as c
+from gcl_sdk.agents.universal.dm import models as ua_models
 from gcl_sdk.agents.universal.drivers import exceptions as ua_driver_exc
 from gcl_sdk.agents.universal.drivers import meta
 from gcl_sdk.common import exceptions
@@ -1443,3 +1444,11 @@ class LocalPoolAgentDriver(PoolAgentDriver):
     def get_capabilities(self) -> list[str]:
         """Returns a list of capabilities supported by the driver."""
         return super().get_capabilities() + ["local_pool"]
+
+    def list(self, capability: str) -> list[ua_models.Resource]:
+        # "local_pool" is a scheduling-only marker capability (matches
+        # this agent to exordos_local_hyper pools pinned to its node), not
+        # an actualizable resource kind - there's nothing to list for it.
+        if capability == "local_pool":
+            return []
+        return super().list(capability)

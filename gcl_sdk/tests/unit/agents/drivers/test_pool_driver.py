@@ -100,3 +100,25 @@ class TestPoolAgentDriver:
 
         drv = pool_driver.PoolAgentDriver(meta_file=str(tmp_path / "meta.json"))
         assert "pool" in drv.get_capabilities()
+
+    def test_local_pool_agent_driver_lists_local_pool_as_empty(self, tmp_path):
+        """"local_pool" is a scheduling-only marker, not a real resource
+        kind: the generic actualization loop calls list() for every
+        advertised capability, so it must not raise for this one.
+        """
+        local_drv = pool_driver.LocalPoolAgentDriver(
+            meta_file=str(tmp_path / "meta.json")
+        )
+        local_drv.start()
+
+        assert local_drv.list("local_pool") == []
+
+    def test_local_pool_agent_driver_lists_pool_normally(self, tmp_path):
+        local_drv = pool_driver.LocalPoolAgentDriver(
+            meta_file=str(tmp_path / "meta.json")
+        )
+        local_drv.start()
+        pool_uuid = _make_pool(local_drv)
+
+        listed = local_drv.list("pool")
+        assert [r.uuid for r in listed] == [pool_uuid]
