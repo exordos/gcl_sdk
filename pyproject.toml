@@ -68,6 +68,9 @@ docs = [
     "mkdocs-glightbox",
     "mkdocs-static-i18n[material]"
 ]
+libvirt = [
+    "libvirt-python>=11.0.0,<13.0.0",  # GNU Lesser General Public License v2 or later (LGPLv2+)
+]
 
 [tool.ruff]
 exclude = [
@@ -155,6 +158,12 @@ RestCoreCapabilityDriver = "gcl_sdk.agents.universal.drivers.core:RestCoreCapabi
 UserCapabilityDriver = "gcl_sdk.agents.universal.drivers.core:UserCapabilityDriver"
 BorderAgentCapabilityDriver = "gcl_sdk.agents.universal.drivers.border:BorderAgentCapabilityDriver"
 BorderCapabilityDriver = "gcl_sdk.agents.universal.drivers.border:BorderCapabilityDriver"
+PoolAgentDriver = "gcl_sdk.agents.universal.drivers.pool:PoolAgentDriver"
+LocalPoolAgentDriver = "gcl_sdk.agents.universal.drivers.pool:LocalPoolAgentDriver"
+
+[project.entry-points."gcl_sdk_machine_pool_driver"]
+dummy = "gcl_sdk.agents.universal.drivers.pool:DummyPoolDriver"
+libvirt = "gcl_sdk.agents.universal.drivers.libvirt:LibvirtPoolDriver"
 
 [tool.uv]
 package = true
