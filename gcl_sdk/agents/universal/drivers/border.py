@@ -158,12 +158,15 @@ class Border(border_models.Border, meta.MetaDataPlaneModel):
             )
         return specs
 
-    def _clear_forward_accepts(self) -> None:
-        """Remove every border-owned FORWARD accept (found by our comment)."""
+    def _list_forward_accept_delete_specs(self) -> list[list[str]]:
+        """``iptables -D ...`` argv for every currently-installed rule
+        tagged with our owner comment, parsed from ``iptables -S FORWARD``.
+        """
         try:
             listing = _run([IPTABLES_BIN, "-S", "FORWARD"])
         except (subprocess.CalledProcessError, FileNotFoundError):
-            return
+            return []
+        specs = []
         for line in listing.splitlines():
             if FORWARD_COMMENT not in line:
                 continue
@@ -171,23 +174,46 @@ class Border(border_models.Border, meta.MetaDataPlaneModel):
             if not spec or spec[0] != "-A":
                 continue
             spec[0] = "-D"
+            specs.append(spec)
+        return specs
+
+    def _clear_forward_accepts(self) -> None:
+        """Remove every border-owned FORWARD accept (found by our comment)."""
+        for spec in self._list_forward_accept_delete_specs():
             try:
                 _run([IPTABLES_BIN, *spec])
             except subprocess.CalledProcessError:
                 pass
 
     def _apply_forward_accepts(self) -> None:
-        """Re-sync our FORWARD accepts: drop the old ones, insert the current."""
+        """Re-sync our FORWARD accepts to the current forward set.
+
+        Inserts the desired accepts *before* removing whatever was
+        previously installed -- not the other way around -- so a
+        still-wanted rule (unchanged, or being replaced) is never briefly
+        absent from the chain. Another firewall on the box may install a
+        competing FORWARD reject ahead of any accept we don't currently
+        have in place (see class docstring): clearing first would open a
+        window where in-flight forwarded traffic hits that reject. A
+        transient duplicate of an unchanged rule is harmless -- same
+        match, same ACCEPT verdict, order between two ACCEPTs doesn't
+        matter.
+        """
         try:
-            self._clear_forward_accepts()
+            stale = self._list_forward_accept_delete_specs()
             for spec in self._forward_accept_specs():
                 _run([IPTABLES_BIN, "-I", "FORWARD", "1", *spec])
+            for spec in stale:
+                try:
+                    _run([IPTABLES_BIN, *spec])
+                except subprocess.CalledProcessError:
+                    pass
         except FileNotFoundError:
             # No iptables on the box -> presumably no competing FORWARD reject
             # either; the nft DNAT is enough.
             LOG.warning("border: iptables not found, skipping FORWARD accepts")
         except subprocess.CalledProcessError as e:
-            LOG.error("border: failed to add FORWARD accepts: %s", e.output)
+            LOG.error("border: failed to sync FORWARD accepts: %s", e.output)
             self.status = ic.InstanceStatus.ERROR.value
             raise driver_exc.InvalidDataPlaneObjectError(obj={"uuid": str(self.uuid)})
 
