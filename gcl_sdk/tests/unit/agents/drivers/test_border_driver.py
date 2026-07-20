@@ -178,7 +178,7 @@ def test_forward_accept_specs_empty_without_forwards():
     assert _border()._forward_accept_specs() == []
 
 
-def test_apply_forward_accepts_clears_then_inserts(monkeypatch):
+def test_apply_forward_accepts_lists_then_inserts(monkeypatch):
     fake = _FakeRun(listing="")
     monkeypatch.setattr(border, "_run", fake)
 
@@ -194,7 +194,8 @@ def test_apply_forward_accepts_clears_then_inserts(monkeypatch):
         ]
     )._apply_forward_accepts()
 
-    # Clears first (lists the chain), then inserts each accept at position 1.
+    # Lists the chain first (to find anything stale -- none here), then
+    # inserts each accept at position 1. Nothing to delete.
     assert fake.calls[0] == [border.IPTABLES_BIN, "-S", "FORWARD"]
     inserts = [c for c in fake.calls if c[1:4] == ["-I", "FORWARD", "1"]]
     assert len(inserts) == 2
@@ -207,6 +208,37 @@ def test_apply_forward_accepts_clears_then_inserts(monkeypatch):
         "-m", "comment", "--comment", "exordos_border",
         "-j", "ACCEPT",
     ]  # fmt: skip
+    assert not any(c[1] == "-D" for c in fake.calls if len(c) > 1)
+
+
+def test_apply_forward_accepts_inserts_new_before_deleting_stale(monkeypatch):
+    # An old forward (port 80) is no longer wanted; a new one (port 443) is.
+    listing = "\n".join(
+        [
+            "-P FORWARD ACCEPT",
+            "-A FORWARD -d 192.168.100.2/32 -p tcp -m tcp --dport 80 "
+            '-m comment --comment "exordos_border" -j ACCEPT',
+        ]
+    )
+    fake = _FakeRun(listing=listing)
+    monkeypatch.setattr(border, "_run", fake)
+
+    _border(forwards=[_FWD])._apply_forward_accepts()
+
+    kinds = [
+        "insert"
+        if c[1:3] == ["-I", "FORWARD"]
+        else "delete"
+        if c[1] == "-D"
+        else "list"
+        for c in fake.calls
+    ]
+    # Listing (to find what's stale), then every insert, then every
+    # delete -- the old port-80 accept is never absent from the chain
+    # at the same time the new port-443 one is missing too.
+    assert kinds == ["list", "insert", "delete"]
+    delete_call = fake.calls[kinds.index("delete")]
+    assert "80" in delete_call
 
 
 def test_clear_forward_accepts_removes_only_our_tagged_rules(monkeypatch):
