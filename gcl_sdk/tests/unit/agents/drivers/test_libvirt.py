@@ -26,19 +26,17 @@ import pytest
 # instead of failing collection when it's not installed.
 pytest.importorskip("libvirt")
 
+from gcl_sdk.agents.universal.drivers import libvirt as libvirt_driver  # noqa: E402
 from gcl_sdk.agents.universal.drivers import pool as pool_base  # noqa: E402
-from gcl_sdk.agents.universal.drivers.libvirt import LibvirtPoolDriver  # noqa: E402
-from gcl_sdk.agents.universal.drivers.libvirt import XMLLibvirtInstance  # noqa: E402
-from gcl_sdk.agents.universal.drivers.libvirt import domain_template  # noqa: E402
 
 
-def _local_driver() -> LibvirtPoolDriver:
+def _local_driver() -> libvirt_driver.LibvirtPoolDriver:
     # libvirt's built-in "test" driver simulates a hypervisor in-memory -
     # no real virtualization or daemon needed, so real libvirt calls
     # (lookupByUUIDString, etc.) can be exercised end-to-end.
     spec = pool_base.LibvirtPoolDriverSpec(connection_uri="test:///default")
     pool = pool_base.MachinePool(uuid=sys_uuid.uuid4(), name="test-pool", driver_spec=spec)
-    return LibvirtPoolDriver(pool)
+    return libvirt_driver.LibvirtPoolDriver(pool)
 
 
 class TestDeleteMachine:
@@ -85,7 +83,7 @@ class TestDeleteMachine:
         pool = pool_base.MachinePool(
             uuid=sys_uuid.uuid4(), name="test-pool", driver_spec=spec
         )
-        driver = LibvirtPoolDriver(pool)
+        driver = libvirt_driver.LibvirtPoolDriver(pool)
         machine = pool_base.Machine(
             uuid=sys_uuid.uuid4(),
             project_id=sys_uuid.uuid4(),
@@ -128,7 +126,7 @@ class TestRemoveDirectChildren:
         )
         root = doc.firstChild
 
-        XMLLibvirtInstance._remove_direct_children(root, "a")
+        libvirt_driver.XMLLibvirtInstance._remove_direct_children(root, "a")
 
         assert root.getElementsByTagName("a") == doc.getElementsByTagName("b")[
             0
@@ -140,7 +138,7 @@ class TestRemoveDirectChildren:
         doc = minidom.parseString("<root><a>1</a><c>2</c></root>")
         root = doc.firstChild
 
-        XMLLibvirtInstance._remove_direct_children(root, "a")
+        libvirt_driver.XMLLibvirtInstance._remove_direct_children(root, "a")
 
         assert len(doc.getElementsByTagName("a")) == 0
         assert len(doc.getElementsByTagName("c")) == 1
@@ -149,7 +147,7 @@ class TestRemoveDirectChildren:
         # Regression: domain_set_vcpu/domain_set_memory/etc. re-set their
         # tag on every call - this must not crash even if some unrelated
         # nested element happens to share the tag name.
-        domain = XMLLibvirtInstance(domain_template)
+        domain = libvirt_driver.XMLLibvirtInstance(libvirt_driver.domain_template)
         devices = ET.fromstring(domain.xml).find("devices")
         assert devices is not None  # sanity: domain_template has one
 
@@ -166,7 +164,7 @@ class TestRemoveDirectChildren:
 def test_domain_console_logs_to_file():
     log_path = "/var/log/libvirt/qemu/test-vm.console.log"
 
-    domain = XMLLibvirtInstance(domain_template)
+    domain = libvirt_driver.XMLLibvirtInstance(libvirt_driver.domain_template)
     domain.set_console_log(log_path)
 
     console = ET.fromstring(domain.xml).find(".//devices/console")
