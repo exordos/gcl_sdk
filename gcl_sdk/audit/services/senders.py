@@ -8,9 +8,10 @@ from typing import Any
 
 from bazooka import exceptions as bzk_exceptions
 from gcl_looper.services import basic
+
 from gcl_sdk.audit import clients
-from gcl_sdk.audit.dm import models
 from gcl_sdk.audit import opts
+from gcl_sdk.audit.dm import models
 
 LOG = logging.getLogger(__name__)
 

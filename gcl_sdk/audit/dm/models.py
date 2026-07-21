@@ -14,8 +14,8 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import uuid as sys_uuid
 from typing import Any
+import uuid as sys_uuid
 
 from gcl_iam import exceptions as iam_exceptions
 from restalchemy.common import contexts
@@ -161,9 +161,7 @@ class AuditLogSQLStorableMixin(orm.SQLStorableMixin):
         try:
             context = contexts.get_context()
             iam_context = getattr(context, "iam_context", None)
-            return getattr(
-                getattr(iam_context, "token_info", None), "user_uuid", None
-            )
+            return getattr(getattr(iam_context, "token_info", None), "user_uuid", None)
         except (
             contexts.ContextIsNotExistsInStorage,
             iam_exceptions.NoIamSessionStored,

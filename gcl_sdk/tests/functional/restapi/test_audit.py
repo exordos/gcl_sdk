@@ -31,8 +31,8 @@ from restalchemy.common import contexts
 
 from gcl_sdk.agents.universal.dm import models
 from gcl_sdk.audit.api import controllers as audit_controllers
-from gcl_sdk.audit.dm.models import AuditLogSQLStorableMixin
 from gcl_sdk.audit.dm.models import AuditDeliveryEvent
+from gcl_sdk.audit.dm.models import AuditLogSQLStorableMixin
 from gcl_sdk.audit.services import senders as audit_senders
 from gcl_sdk.tests.functional import conftest
 from gcl_sdk.tests.functional import utils as test_utils
@@ -53,9 +53,7 @@ class DummyIamContext:
     def __init__(self, permissions, project_id):
         self.enforcer = Enforcer(permissions)
         self._introspection_info = DummyDriver().get_introspection_info(None)
-        self._introspection_info["project_id"] = (
-            str(project_id) if project_id else None
-        )
+        self._introspection_info["project_id"] = str(project_id) if project_id else None
 
     def introspection_info(self):
         return self._introspection_info
