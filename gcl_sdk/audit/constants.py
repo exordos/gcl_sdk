@@ -16,7 +16,6 @@
 
 import enum
 
-
 DOMAIN = "audit_delivery"
 
 INGEST_FIELDS = (

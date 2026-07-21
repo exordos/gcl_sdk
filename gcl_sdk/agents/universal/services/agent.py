@@ -202,7 +202,9 @@ class UniversalAgentService(looper_basic.BasicService):
             except Exception:
                 # The resource wasn't deleted so add it back
                 collected_resources.append(r)
-                LOG.exception("Error deleting resource %s", r.uuid)
+                LOG.exception(
+                    "Error deleting resource %s with uuid (%s)", capability, r.uuid
+                )
 
         for r in target_resources.keys() & actual_resources.keys():
             # set does not guarantee which instance will be given on
@@ -220,7 +222,9 @@ class UniversalAgentService(looper_basic.BasicService):
                 resource = self._update_resource(driver, target_resource)
                 collected_resources.append(resource)
             except Exception:
-                LOG.exception("Error updating resource %s", r.uuid)
+                LOG.exception(
+                    "Error updating resource %s with uuid (%s)", capability, r.uuid
+                )
 
         return collected_resources
 

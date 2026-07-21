@@ -16,11 +16,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 import threading
 
 from gcl_sdk.common import utils
+
+LOG = logging.getLogger(__name__)
 
 
 class JsonFileStorageSingleton(dict):
@@ -38,9 +41,13 @@ class JsonFileStorageSingleton(dict):
             self.clear()
             return
 
-        with open(self._storage_path) as f:
-            data = json.load(f)
-
+        try:
+            with open(self._storage_path) as f:
+                data = json.load(f)
+        except json.JSONDecodeError as e:
+            # NOTE(slashburygin): maybe we should delete the file, if we can't decode the file
+            LOG.error("Error loading storage from %s: %s", self._storage_path, e)
+            raise
         self.clear()
         self.update(data)
 
