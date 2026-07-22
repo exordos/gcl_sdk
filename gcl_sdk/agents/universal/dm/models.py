@@ -463,8 +463,15 @@ class NodeEncryptionKey(
             if private_key is None:
                 _, private_key = crypto.generate_key_base64()
             key = cls(uuid=node, private_key=private_key)
-            key.insert(session=session)
-            return key
+            try:
+                key.insert(session=session)
+            except ra_storage_exceptions.ConflictRecords:
+                # Another caller raced us and already created it.
+                key = cls.objects.get_one(
+                    filters={"uuid": dm_filters.EQ(node)}, session=session
+                )
+            else:
+                return key
 
         if private_key is not None and key.private_key != private_key:
             key.private_key = private_key
