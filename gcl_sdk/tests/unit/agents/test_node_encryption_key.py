@@ -48,6 +48,11 @@ class TestNodeEncryptionKeyGetOrCreate:
             key = ua_models.NodeEncryptionKey.get_or_create(node)
 
         assert key is winner
+        # The loser generated its own random key to attempt the insert;
+        # once it loses the race that value must be discarded, not
+        # synced onto the winner's already-established key.
+        assert winner.private_key == "winners-key"
+        winner.save.assert_not_called()
 
     def test_syncs_the_winners_key_to_an_explicit_one_on_race(self):
         node = sys_uuid.uuid4()

@@ -460,13 +460,17 @@ class NodeEncryptionKey(
                 filters={"uuid": dm_filters.EQ(node)}, session=session
             )
         except ra_storage_exceptions.RecordNotFound:
-            if private_key is None:
-                _, private_key = crypto.generate_key_base64()
-            key = cls(uuid=node, private_key=private_key)
+            new_private_key = private_key
+            if new_private_key is None:
+                _, new_private_key = crypto.generate_key_base64()
+            key = cls(uuid=node, private_key=new_private_key)
             try:
                 key.insert(session=session)
             except ra_storage_exceptions.ConflictRecords:
-                # Another caller raced us and already created it.
+                # Another caller raced us and already created it. Fall
+                # back to their key rather than treating our own
+                # randomly-generated (and now discarded) one as the
+                # value to sync to below.
                 key = cls.objects.get_one(
                     filters={"uuid": dm_filters.EQ(node)}, session=session
                 )
