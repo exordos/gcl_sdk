@@ -44,6 +44,16 @@ class TestNodeEncryptionKeyGetOrCreate:
             mock.patch.object(
                 ua_models.NodeEncryptionKey, "insert", side_effect=conflict
             ),
+            # No engine is configured in this unit test, so simulate
+            # the standalone (no ambient session) path rather than
+            # letting the ambient-session check blow up looking for
+            # one. The savepoint-protected path is covered by a real
+            # Postgres in the functional tests.
+            mock.patch.object(
+                ua_models.contexts.Context,
+                "get_session",
+                side_effect=ua_models.sql_sessions.SessionNotFound,
+            ),
         ):
             key = ua_models.NodeEncryptionKey.get_or_create(node)
 
@@ -70,6 +80,16 @@ class TestNodeEncryptionKeyGetOrCreate:
             ),
             mock.patch.object(
                 ua_models.NodeEncryptionKey, "insert", side_effect=conflict
+            ),
+            # No engine is configured in this unit test, so simulate
+            # the standalone (no ambient session) path rather than
+            # letting the ambient-session check blow up looking for
+            # one. The savepoint-protected path is covered by a real
+            # Postgres in the functional tests.
+            mock.patch.object(
+                ua_models.contexts.Context,
+                "get_session",
+                side_effect=ua_models.sql_sessions.SessionNotFound,
             ),
         ):
             key = ua_models.NodeEncryptionKey.get_or_create(

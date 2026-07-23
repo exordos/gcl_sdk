@@ -23,6 +23,7 @@ import os
 import typing as tp
 import uuid as sys_uuid
 
+from restalchemy.common import contexts
 from restalchemy.dm import filters as dm_filters
 from restalchemy.dm import models
 from restalchemy.dm import properties
@@ -32,6 +33,8 @@ from restalchemy.storage import exceptions as ra_storage_exceptions
 from restalchemy.storage.sql import engines
 from restalchemy.storage.sql import filters as sql_filters
 from restalchemy.storage.sql import orm
+from restalchemy.storage.sql import sessions as sql_sessions
+from restalchemy.storage.sql import utils as sql_utils
 import xxhash
 
 from gcl_sdk.agents.universal import constants as c
@@ -465,7 +468,25 @@ class NodeEncryptionKey(
                 _, new_private_key = crypto.generate_key_base64()
             key = cls(uuid=node, private_key=new_private_key)
             try:
-                key.insert(session=session)
+                try:
+                    contexts.Context().get_session()
+                except sql_sessions.SessionNotFound:
+                    # No ambient transaction to protect (e.g. a
+                    # standalone script/test, not within a request) -
+                    # insert() already manages its own self-contained
+                    # transaction for this call, so there's nothing a
+                    # savepoint here would protect.
+                    key.insert(session=session)
+                else:
+                    # Several statements may already share one
+                    # longer-lived transaction (e.g. within an HTTP
+                    # request). PostgreSQL aborts the whole thing on a
+                    # failed statement, so a bare insert here would
+                    # leave it unusable for the fallback lookup below
+                    # (see https://github.com/exordos/exordos_core/issues/64).
+                    # The savepoint scopes the rollback to just this insert.
+                    with sql_utils.savepoint():
+                        key.insert(session=session)
             except ra_storage_exceptions.ConflictRecords:
                 # Another caller raced us and already created it. Fall
                 # back to their key rather than treating our own
