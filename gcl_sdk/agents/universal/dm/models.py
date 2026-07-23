@@ -23,7 +23,6 @@ import os
 import typing as tp
 import uuid as sys_uuid
 
-from restalchemy.common import contexts
 from restalchemy.dm import filters as dm_filters
 from restalchemy.dm import models
 from restalchemy.dm import properties
@@ -33,8 +32,6 @@ from restalchemy.storage import exceptions as ra_storage_exceptions
 from restalchemy.storage.sql import engines
 from restalchemy.storage.sql import filters as sql_filters
 from restalchemy.storage.sql import orm
-from restalchemy.storage.sql import sessions as sql_sessions
-from restalchemy.storage.sql import utils as sql_utils
 import xxhash
 
 from gcl_sdk.agents.universal import constants as c
@@ -440,9 +437,11 @@ class NodeEncryptionKey(
     ) -> "NodeEncryptionKey":
         """Return the node's encryption key, provisioning one if missing.
 
-        A node uuid is the key's identity regardless of which agent
-        process uses it, so callers that race to provision the same
-        node get back the same key instead of conflicting.
+        Two callers racing to provision the same node uuid will not
+        both succeed - the loser gets ra_storage_exceptions.ConflictRecords
+        from the insert. Callers that run on a retry loop (e.g.
+        reconciliation) don't need to handle this specially: the next
+        attempt finds the winner's key already in place.
 
         Args:
             node: The node uuid to get or create the key for.
@@ -463,40 +462,11 @@ class NodeEncryptionKey(
                 filters={"uuid": dm_filters.EQ(node)}, session=session
             )
         except ra_storage_exceptions.RecordNotFound:
-            new_private_key = private_key
-            if new_private_key is None:
-                _, new_private_key = crypto.generate_key_base64()
-            key = cls(uuid=node, private_key=new_private_key)
-            try:
-                try:
-                    contexts.Context().get_session()
-                except sql_sessions.SessionNotFound:
-                    # No ambient transaction to protect (e.g. a
-                    # standalone script/test, not within a request) -
-                    # insert() already manages its own self-contained
-                    # transaction for this call, so there's nothing a
-                    # savepoint here would protect.
-                    key.insert(session=session)
-                else:
-                    # Several statements may already share one
-                    # longer-lived transaction (e.g. within an HTTP
-                    # request). PostgreSQL aborts the whole thing on a
-                    # failed statement, so a bare insert here would
-                    # leave it unusable for the fallback lookup below
-                    # (see https://github.com/exordos/exordos_core/issues/64).
-                    # The savepoint scopes the rollback to just this insert.
-                    with sql_utils.savepoint():
-                        key.insert(session=session)
-            except ra_storage_exceptions.ConflictRecords:
-                # Another caller raced us and already created it. Fall
-                # back to their key rather than treating our own
-                # randomly-generated (and now discarded) one as the
-                # value to sync to below.
-                key = cls.objects.get_one(
-                    filters={"uuid": dm_filters.EQ(node)}, session=session
-                )
-            else:
-                return key
+            if private_key is None:
+                _, private_key = crypto.generate_key_base64()
+            key = cls(uuid=node, private_key=private_key)
+            key.insert(session=session)
+            return key
 
         if private_key is not None and key.private_key != private_key:
             key.private_key = private_key

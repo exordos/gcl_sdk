@@ -18,18 +18,20 @@ from __future__ import annotations
 from unittest import mock
 import uuid as sys_uuid
 
+import pytest
 from restalchemy.storage import exceptions as ra_storage_exceptions
 
 from gcl_sdk.agents.universal.dm import models as ua_models
 
 
 class TestNodeEncryptionKeyGetOrCreate:
-    def test_falls_back_to_the_winner_on_insert_race(self):
-        # Two callers both see no key, both try to create one - the
-        # loser's insert conflicts on the unique node uuid, so it must
-        # fall back to the winner's key instead of raising.
+    def test_propagates_a_conflict_when_racing_to_insert(self):
+        # Two callers both see no key and both try to create one - the
+        # loser's insert conflicts on the unique node uuid. This isn't
+        # handled specially here: it's left to the caller's own retry
+        # (e.g. a reconciliation loop), which finds the winner's key
+        # already in place on the next attempt.
         node = sys_uuid.uuid4()
-        winner = mock.MagicMock(private_key="winners-key")
         not_found = ra_storage_exceptions.RecordNotFound(model=None, filters={})
         conflict = ra_storage_exceptions.ConflictRecords(model=None, msg="dup")
 
@@ -37,65 +39,11 @@ class TestNodeEncryptionKeyGetOrCreate:
             mock.patch.object(
                 ua_models.NodeEncryptionKey,
                 "objects",
-                mock.MagicMock(
-                    get_one=mock.MagicMock(side_effect=[not_found, winner])
-                ),
+                mock.MagicMock(get_one=mock.MagicMock(side_effect=not_found)),
             ),
             mock.patch.object(
                 ua_models.NodeEncryptionKey, "insert", side_effect=conflict
             ),
-            # No engine is configured in this unit test, so simulate
-            # the standalone (no ambient session) path rather than
-            # letting the ambient-session check blow up looking for
-            # one. The savepoint-protected path is covered by a real
-            # Postgres in the functional tests.
-            mock.patch.object(
-                ua_models.contexts.Context,
-                "get_session",
-                side_effect=ua_models.sql_sessions.SessionNotFound,
-            ),
+            pytest.raises(ra_storage_exceptions.ConflictRecords),
         ):
-            key = ua_models.NodeEncryptionKey.get_or_create(node)
-
-        assert key is winner
-        # The loser generated its own random key to attempt the insert;
-        # once it loses the race that value must be discarded, not
-        # synced onto the winner's already-established key.
-        assert winner.private_key == "winners-key"
-        winner.save.assert_not_called()
-
-    def test_syncs_the_winners_key_to_an_explicit_one_on_race(self):
-        node = sys_uuid.uuid4()
-        winner = mock.MagicMock(private_key="stale-key")
-        not_found = ra_storage_exceptions.RecordNotFound(model=None, filters={})
-        conflict = ra_storage_exceptions.ConflictRecords(model=None, msg="dup")
-
-        with (
-            mock.patch.object(
-                ua_models.NodeEncryptionKey,
-                "objects",
-                mock.MagicMock(
-                    get_one=mock.MagicMock(side_effect=[not_found, winner])
-                ),
-            ),
-            mock.patch.object(
-                ua_models.NodeEncryptionKey, "insert", side_effect=conflict
-            ),
-            # No engine is configured in this unit test, so simulate
-            # the standalone (no ambient session) path rather than
-            # letting the ambient-session check blow up looking for
-            # one. The savepoint-protected path is covered by a real
-            # Postgres in the functional tests.
-            mock.patch.object(
-                ua_models.contexts.Context,
-                "get_session",
-                side_effect=ua_models.sql_sessions.SessionNotFound,
-            ),
-        ):
-            key = ua_models.NodeEncryptionKey.get_or_create(
-                node, private_key="fresh-key"
-            )
-
-        assert key is winner
-        assert winner.private_key == "fresh-key"
-        winner.save.assert_called_once()
+            ua_models.NodeEncryptionKey.get_or_create(node)
