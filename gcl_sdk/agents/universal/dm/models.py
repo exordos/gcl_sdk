@@ -28,6 +28,7 @@ from restalchemy.dm import models
 from restalchemy.dm import properties
 from restalchemy.dm import relationships
 from restalchemy.dm import types
+from restalchemy.storage import exceptions as ra_storage_exceptions
 from restalchemy.storage.sql import engines
 from restalchemy.storage.sql import filters as sql_filters
 from restalchemy.storage.sql import orm
@@ -35,6 +36,7 @@ import xxhash
 
 from gcl_sdk.agents.universal import constants as c
 from gcl_sdk.agents.universal import utils
+from gcl_sdk.agents.universal.api import crypto
 from gcl_sdk.common import utils as common_utils
 
 LOG = logging.getLogger(__name__)
@@ -425,6 +427,52 @@ class NodeEncryptionKey(
         types.UTCDateTimeZ(),
         default=lambda: datetime.datetime.now(datetime.timezone.utc),
     )
+
+    @classmethod
+    def get_or_create(
+        cls,
+        node: sys_uuid.UUID,
+        private_key: str | None = None,
+        session=None,
+    ) -> "NodeEncryptionKey":
+        """Return the node's encryption key, provisioning one if missing.
+
+        Two callers racing to provision the same node uuid will not
+        both succeed - the loser gets ra_storage_exceptions.ConflictRecords
+        from the insert. Callers that run on a retry loop (e.g.
+        reconciliation) don't need to handle this specially: the next
+        attempt finds the winner's key already in place.
+
+        Args:
+            node: The node uuid to get or create the key for.
+            private_key: If given and a key doesn't exist yet, seeds the
+                new key with this value instead of a random one - e.g.
+                to keep in sync with a key already deployed to the
+                agent's disk by another trusted channel. If a key
+                already exists and differs from this value, it's
+                updated to match, so a caller that already deployed a
+                specific key always ends up in sync with the DB.
+            session: Optional DB session.
+
+        Returns:
+            The existing or newly created NodeEncryptionKey.
+        """
+        try:
+            key = cls.objects.get_one(
+                filters={"uuid": dm_filters.EQ(node)}, session=session
+            )
+        except ra_storage_exceptions.RecordNotFound:
+            if private_key is None:
+                _, private_key = crypto.generate_key_base64()
+            key = cls(uuid=node, private_key=private_key)
+            key.insert(session=session)
+            return key
+
+        if private_key is not None and key.private_key != private_key:
+            key.private_key = private_key
+            key.save(session=session)
+
+        return key
 
 
 class Resource(
