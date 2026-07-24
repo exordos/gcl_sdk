@@ -223,7 +223,9 @@ class UniversalAgentService(looper_basic.BasicService):
                 collected_resources.append(resource)
             except Exception:
                 LOG.exception(
-                    "Error updating resource %s with uuid (%s)", capability, r.uuid
+                    "Error updating resource %s with uuid (%s)",
+                    capability,
+                    r.uuid,
                 )
 
         return collected_resources
@@ -282,7 +284,9 @@ class UniversalAgentService(looper_basic.BasicService):
             try:
                 self._orch_client.resources_update(kind, res_uuid, **resource)
             except Exception:
-                LOG.exception("Error updating resource %s", uuid)
+                LOG.exception(
+                    "Error updating resource %s with uuid (%s)", kind, res_uuid
+                )
 
     def _actualize_facts(self, target_facts: dict, actual_facts: dict) -> None:
         """Actualize facts in Status API.
