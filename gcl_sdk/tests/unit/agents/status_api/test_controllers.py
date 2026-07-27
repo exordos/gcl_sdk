@@ -23,6 +23,7 @@ from webob.request import Request
 
 from gcl_sdk.agents.universal import constants as c
 from gcl_sdk.agents.universal.status_api import controllers
+from gcl_sdk.agents.universal.status_api.dm import models as status_models
 
 
 def _req_for_method(method):
@@ -33,14 +34,28 @@ def _req_for_method(method):
 
 
 class TestUniversalAgentsControllerFieldPermissions:
-    def test_status_is_read_only_for_update_only(self):
-        # Regression: a blanket ra_c.ALL RO permission also covers CREATE,
-        # which would reject agent registration outright - a fresh agent's
-        # register payload always includes its own initial status.
+    def test_status_is_read_only_for_create_and_update(self):
         perms = controllers.UniversalAgentsController.__resource__._fields_permissions
 
-        assert perms.is_readonly("status", _req_for_method(ra_c.CREATE)) is False
+        assert perms.is_readonly("status", _req_for_method(ra_c.CREATE)) is True
         assert perms.is_readonly("status", _req_for_method(ra_c.UPDATE)) is True
+
+
+class TestUniversalAgentsControllerCreate:
+    def test_create_always_starts_the_agent_active(self):
+        # A client can never set the agent's initial status either - the
+        # server decides it, same as on update.
+        controller = controllers.UniversalAgentsController(mock.MagicMock())
+
+        with mock.patch.object(status_models.UniversalAgent, "insert"):
+            result = controller.create(
+                uuid=sys_uuid.uuid4(),
+                name="agent",
+                node=sys_uuid.uuid4(),
+                status=c.AgentStatus.DISABLED.value,
+            )
+
+        assert result.status == c.AgentStatus.ACTIVE.value
 
 
 class TestUniversalAgentsControllerUpdate:

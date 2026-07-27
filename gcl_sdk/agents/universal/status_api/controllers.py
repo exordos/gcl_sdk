@@ -73,13 +73,23 @@ class UniversalAgentsController(sdk_controllers.BaseSdkResourceController):
         fields_permissions=field_p.FieldsPermissions(
             default=field_p.Permissions.RW,
             fields={
-                # UPDATE only - CREATE must still accept it, since a fresh
-                # agent's registration payload always includes its own
-                # (client-chosen) initial status.
-                "status": {ra_c.UPDATE: field_p.Permissions.RO},
+                "status": {ra_c.ALL: field_p.Permissions.RO},
             },
         ),
     )
+
+    def create(self, **kwargs):
+        """Create the agent, always starting it ACTIVE.
+
+        `status` is read-only over the API - the server decides it, even
+        the initial one, instead of trusting the registering agent's own
+        (client-side default) value. The client itself must not send it
+        either (see UniversalAgentsClient.create()), since this field is
+        read-only for CREATE too and a present-but-ignored value would
+        still be rejected by the RA request unpacker.
+        """
+        kwargs["status"] = c.AgentStatus.ACTIVE.value
+        return super().create(**kwargs)
 
     def update(self, uuid: sys_uuid.UUID, **kwargs):
         """Update the agent, always (re)activating it.
