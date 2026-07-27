@@ -25,9 +25,9 @@ from gcl_sdk.agents.universal.dm import models
 class TestHttpOrchClientAgentsUpdate:
     """Tests for HttpOrchClient.agents_update.
 
-    `status` is read-only over the API (see UniversalAgent.status) - the
-    client must not send its own self-reported value. The server activates
-    a re-registering agent itself (see UniversalAgentsController.update).
+    `status` is read-only over the API (see UniversalAgentsController) -
+    the client must not send its own self-reported value. The server
+    activates a re-registering agent itself instead.
     """
 
     def setup_method(self):

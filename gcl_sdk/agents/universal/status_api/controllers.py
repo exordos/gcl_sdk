@@ -16,6 +16,8 @@
 import uuid as sys_uuid
 
 from restalchemy.api import actions
+from restalchemy.api import constants as ra_c
+from restalchemy.api import field_permissions as field_p
 from restalchemy.api import resources
 from restalchemy.dm import filters as dm_filters
 
@@ -68,6 +70,12 @@ class UniversalAgentsController(sdk_controllers.BaseSdkResourceController):
         model_class=models.UniversalAgent,
         process_filters=True,
         convert_underscore=False,
+        fields_permissions=field_p.FieldsPermissions(
+            default=field_p.Permissions.RW,
+            fields={
+                "status": {ra_c.ALL: field_p.Permissions.RO},
+            },
+        ),
     )
 
     def update(self, uuid: sys_uuid.UUID, **kwargs):
@@ -78,12 +86,8 @@ class UniversalAgentsController(sdk_controllers.BaseSdkResourceController):
         so the server activates it here rather than trusting a client-
         supplied `status` value.
         """
-        agent = self.get(uuid=uuid)
-        kwargs = self._apply_autovalues(kwargs)
-        agent.update_dm(values=kwargs)
-        agent.properties["status"].set_value_force(c.AgentStatus.ACTIVE.value)
-        agent.update()
-        return agent
+        kwargs["status"] = c.AgentStatus.ACTIVE.value
+        return super().update(uuid, **kwargs)
 
 
 class NodeVerifierController(sdk_controllers.BaseSdkResourceController):

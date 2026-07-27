@@ -26,7 +26,9 @@ class TestUniversalAgentsControllerUpdate:
         # A re-registering agent (e.g. after its capabilities changed) goes
         # through this path - it must always end up ACTIVE, regardless of
         # what status it was in before or what the client sends, since
-        # `status` is read-only over the API (see UniversalAgent.status).
+        # `status` is read-only over the API (see the controller's
+        # fields_permissions) even though the underlying model field itself
+        # stays freely writable for other in-process code (builders, etc).
         controller = controllers.UniversalAgentsController(mock.MagicMock())
         agent = mock.MagicMock()
         uuid = sys_uuid.uuid4()
@@ -35,9 +37,8 @@ class TestUniversalAgentsControllerUpdate:
             result = controller.update(uuid, name="new-name")
 
         mock_get.assert_called_once_with(uuid=uuid)
-        agent.update_dm.assert_called_once_with(values={"name": "new-name"})
-        agent.properties["status"].set_value_force.assert_called_once_with(
-            c.AgentStatus.ACTIVE.value
+        agent.update_dm.assert_called_once_with(
+            values={"name": "new-name", "status": c.AgentStatus.ACTIVE.value}
         )
         agent.update.assert_called_once_with()
         assert result is agent

@@ -25,9 +25,9 @@ from gcl_sdk.agents.universal.dm import models
 class TestDatabaseOrchClientAgentsUpdate:
     def test_agents_update_activates_the_agent(self):
         # A re-registering agent (uuid already exists) goes through this
-        # path - it must always end up ACTIVE, since `status` is read-only
-        # (see UniversalAgent.status) and this client is the trusted
-        # in-process caller responsible for activating it directly.
+        # path - it must always end up ACTIVE. `status` is read-only over
+        # the API (see UniversalAgentsController), but this client talks to
+        # the DB directly, so it's the one responsible for activating it.
         client = orch_db.DatabaseOrchClient()
         agent_uuid = sys_uuid.uuid4()
 

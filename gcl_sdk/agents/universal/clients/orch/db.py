@@ -105,12 +105,10 @@ class DatabaseOrchClient(base.AbstractOrchClient):
                 origin_agent.facts = agent.facts
                 origin_agent.name = agent.name
 
-                # `status` is read-only (see UniversalAgent.status) - this
-                # client is a trusted in-process caller, so it activates the
-                # agent directly instead of going through the API.
-                origin_agent.properties["status"].set_value_force(
-                    c.AgentStatus.ACTIVE.value
-                )
+                # `status` is read-only over the API (see
+                # UniversalAgentsController) - this client talks to the DB
+                # directly, so it activates the agent itself the same way.
+                origin_agent.status = c.AgentStatus.ACTIVE.value
 
                 origin_agent.save()
 
