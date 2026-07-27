@@ -24,6 +24,7 @@ from restalchemy.common import contexts
 from restalchemy.dm import filters as dm_filters
 from restalchemy.storage import exceptions as ra_exc
 
+from gcl_sdk.agents.universal import constants as c
 from gcl_sdk.agents.universal.clients.orch import base
 from gcl_sdk.agents.universal.clients.orch import exceptions
 from gcl_sdk.agents.universal.dm import models
@@ -103,6 +104,13 @@ class DatabaseOrchClient(base.AbstractOrchClient):
                 origin_agent.capabilities = agent.capabilities
                 origin_agent.facts = agent.facts
                 origin_agent.name = agent.name
+
+                # `status` is read-only (see UniversalAgent.status) - this
+                # client is a trusted in-process caller, so it activates the
+                # agent directly instead of going through the API.
+                origin_agent.properties["status"].set_value_force(
+                    c.AgentStatus.ACTIVE.value
+                )
 
                 origin_agent.save()
 

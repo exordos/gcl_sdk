@@ -272,9 +272,13 @@ class UniversalAgent(
     capabilities = properties.property(types.Dict(), default=dict)
     facts = properties.property(types.Dict(), default=dict)
     node = properties.property(types.UUID(), required=True)
+    # Read-only over the API - only the server (see UniversalAgentsController)
+    # or a trusted in-process client (see DatabaseOrchClient) may transition
+    # it, never the agent's own self-reported value.
     status = properties.property(
         types.Enum([s.value for s in c.AgentStatus]),
         default=c.AgentStatus.NEW.value,
+        read_only=True,
     )
 
     @property

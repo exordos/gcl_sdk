@@ -19,6 +19,7 @@ from restalchemy.api import actions
 from restalchemy.api import resources
 from restalchemy.dm import filters as dm_filters
 
+from gcl_sdk.agents.universal import constants as c
 from gcl_sdk.agents.universal.api import controllers as sdk_controllers
 from gcl_sdk.agents.universal.api import crypto
 from gcl_sdk.agents.universal.status_api.dm import models
@@ -68,6 +69,21 @@ class UniversalAgentsController(sdk_controllers.BaseSdkResourceController):
         process_filters=True,
         convert_underscore=False,
     )
+
+    def update(self, uuid: sys_uuid.UUID, **kwargs):
+        """Update the agent, always (re)activating it.
+
+        `status` is read-only over the API - an agent successfully calling
+        this endpoint (e.g. on re-registration) is what proves it's alive,
+        so the server activates it here rather than trusting a client-
+        supplied `status` value.
+        """
+        agent = self.get(uuid=uuid)
+        kwargs = self._apply_autovalues(kwargs)
+        agent.update_dm(values=kwargs)
+        agent.properties["status"].set_value_force(c.AgentStatus.ACTIVE.value)
+        agent.update()
+        return agent
 
 
 class NodeVerifierController(sdk_controllers.BaseSdkResourceController):
