@@ -17,8 +17,30 @@
 import uuid as sys_uuid
 from unittest import mock
 
+from restalchemy.api import constants as ra_c
+from restalchemy.api import contexts
+from webob.request import Request
+
 from gcl_sdk.agents.universal import constants as c
 from gcl_sdk.agents.universal.status_api import controllers
+
+
+def _req_for_method(method):
+    req = Request(environ={})
+    req.api_context = contexts.RequestContext(req)
+    req.api_context.set_active_method(method)
+    return req
+
+
+class TestUniversalAgentsControllerFieldPermissions:
+    def test_status_is_read_only_for_update_only(self):
+        # Regression: a blanket ra_c.ALL RO permission also covers CREATE,
+        # which would reject agent registration outright - a fresh agent's
+        # register payload always includes its own initial status.
+        perms = controllers.UniversalAgentsController.__resource__._fields_permissions
+
+        assert perms.is_readonly("status", _req_for_method(ra_c.CREATE)) is False
+        assert perms.is_readonly("status", _req_for_method(ra_c.UPDATE)) is True
 
 
 class TestUniversalAgentsControllerUpdate:

@@ -73,7 +73,10 @@ class UniversalAgentsController(sdk_controllers.BaseSdkResourceController):
         fields_permissions=field_p.FieldsPermissions(
             default=field_p.Permissions.RW,
             fields={
-                "status": {ra_c.ALL: field_p.Permissions.RO},
+                # UPDATE only - CREATE must still accept it, since a fresh
+                # agent's registration payload always includes its own
+                # (client-chosen) initial status.
+                "status": {ra_c.UPDATE: field_p.Permissions.RO},
             },
         ),
     )
