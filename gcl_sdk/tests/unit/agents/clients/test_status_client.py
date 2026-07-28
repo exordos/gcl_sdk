@@ -19,44 +19,8 @@ from unittest import mock
 import uuid as sys_uuid
 
 from gcl_sdk.agents.universal.clients.http import status as status_client
-from gcl_sdk.agents.universal.dm import models
-from gcl_sdk.clients.http import base
 
 NODE_UUID = sys_uuid.UUID("55c6968c-d26e-58a3-cfe2-11afde248319")
-
-
-class TestUniversalAgentsClientCreate:
-    """Tests for UniversalAgentsClient.create.
-
-    `status` is server-controlled, even the initial one (see
-    UniversalAgentsController.create()) - the client must not send it, or
-    the server rejects the whole request (the field is read-only over the
-    API).
-    """
-
-    def setup_method(self):
-        self.client = status_client.UniversalAgentsClient(
-            "http://localhost:8080",
-            http_client=mock.MagicMock(),
-        )
-
-    def test_create_does_not_send_status(self):
-        agent = models.UniversalAgent.from_system_uuid(
-            capabilities=["pool"],
-            facts=[],
-            agent_uuid=sys_uuid.uuid4(),
-            system_uuid=sys_uuid.uuid4(),
-        )
-
-        with mock.patch.object(
-            base.CollectionBaseClient,
-            "create",
-            return_value=agent.dump_to_simple_view(),
-        ) as mock_create:
-            self.client.create(agent)
-
-        sent_data = mock_create.call_args[0][2]
-        assert "status" not in sent_data
 
 
 class TestNodeVerifiersClient:

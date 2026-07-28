@@ -34,17 +34,22 @@ def _req_for_method(method):
 
 
 class TestUniversalAgentsControllerFieldPermissions:
-    def test_status_is_read_only_for_create_and_update(self):
+    def test_status_is_read_only_for_update_only(self):
+        # CREATE stays RW: older clients that still send their own initial
+        # status (e.g. exordos_seed) must not get their request rejected -
+        # the controller overrides the value instead (see
+        # TestUniversalAgentsControllerCreate).
         perms = controllers.UniversalAgentsController.__resource__._fields_permissions
 
-        assert perms.is_readonly("status", _req_for_method(ra_c.CREATE)) is True
+        assert perms.is_readonly("status", _req_for_method(ra_c.CREATE)) is False
         assert perms.is_readonly("status", _req_for_method(ra_c.UPDATE)) is True
 
 
 class TestUniversalAgentsControllerCreate:
     def test_create_always_starts_the_agent_active(self):
-        # A client can never set the agent's initial status either - the
-        # server decides it, same as on update.
+        # A client-supplied status (e.g. from an older client that still
+        # sends one) must not be rejected - it's simply overridden, same
+        # end result as on update.
         controller = controllers.UniversalAgentsController(mock.MagicMock())
 
         with mock.patch.object(status_models.UniversalAgent, "insert"):

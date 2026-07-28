@@ -28,18 +28,6 @@ class UniversalAgentsClient(base.StaticCollectionBaseModelClient):
     __collection_path__ = "/v1/agents/"
     __model__ = models.UniversalAgent
 
-    def create(self, object: models.UniversalAgent) -> models.UniversalAgent:
-        """Create the agent without sending its self-reported status.
-
-        `status` is server-controlled, even the initial one (see
-        UniversalAgentsController.create()) - the server would reject a
-        present `status` field outright since it's read-only over the API.
-        """
-        data = object.dump_to_simple_view(skip=("status",))
-        return self.__model__.restore_from_simple_view(
-            **base.CollectionBaseClient.create(self, self.get_collection(), data)
-        )
-
 
 class NodeVerifiersClient(base.StaticCollectionBaseModelClient):
     __collection_path__ = "/v1/node_verifiers/"
