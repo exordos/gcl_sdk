@@ -13,9 +13,14 @@
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
 #    under the License.
+import uuid as sys_uuid
+
 from restalchemy.api import actions
+from restalchemy.api import constants as ra_c
+from restalchemy.api import field_permissions as field_p
 from restalchemy.api import resources
 
+from gcl_sdk.agents.universal import constants as c
 from gcl_sdk.agents.universal.api import controllers as sdk_controllers
 from gcl_sdk.agents.universal.dm import models
 
@@ -27,7 +32,37 @@ class UniversalAgentsController(sdk_controllers.BaseSdkResourceController):
         model_class=models.UniversalAgent,
         process_filters=True,
         convert_underscore=False,
+        fields_permissions=field_p.FieldsPermissions(
+            default=field_p.Permissions.RW,
+            fields={
+                "status": {ra_c.ALL: field_p.Permissions.RO},
+            },
+        ),
     )
+
+    def create(self, **kwargs):
+        """Create the agent, always starting it ACTIVE.
+
+        `status` is read-only over the API - the server decides it, even
+        the initial one, instead of trusting the registering agent's own
+        (client-side default) value. The client itself must not send it
+        either (see UniversalAgentsClient.create()), since this field is
+        read-only for CREATE too and a present-but-ignored value would
+        still be rejected by the RA request unpacker.
+        """
+        kwargs["status"] = c.AgentStatus.ACTIVE.value
+        return super().create(**kwargs)
+
+    def update(self, uuid: sys_uuid.UUID, **kwargs):
+        """Update the agent, always (re)activating it.
+
+        `status` is read-only over the API - an agent successfully calling
+        this endpoint (e.g. on re-registration) is what proves it's alive,
+        so the server activates it here rather than trusting a client-
+        supplied `status` value.
+        """
+        kwargs["status"] = c.AgentStatus.ACTIVE.value
+        return super().update(uuid, **kwargs)
 
     @actions.get
     def get_payload(
