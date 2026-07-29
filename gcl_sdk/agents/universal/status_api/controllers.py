@@ -16,9 +16,12 @@
 import uuid as sys_uuid
 
 from restalchemy.api import actions
+from restalchemy.api import constants as ra_c
+from restalchemy.api import field_permissions as field_p
 from restalchemy.api import resources
 from restalchemy.dm import filters as dm_filters
 
+from gcl_sdk.agents.universal import constants as c
 from gcl_sdk.agents.universal.api import controllers as sdk_controllers
 from gcl_sdk.agents.universal.api import crypto
 from gcl_sdk.agents.universal.status_api.dm import models
@@ -67,7 +70,38 @@ class UniversalAgentsController(sdk_controllers.BaseSdkResourceController):
         model_class=models.UniversalAgent,
         process_filters=True,
         convert_underscore=False,
+        fields_permissions=field_p.FieldsPermissions(
+            default=field_p.Permissions.RW,
+            fields={
+                # UPDATE only - CREATE stays RW so older clients that still
+                # send their own initial status keep working: the value is
+                # simply overridden below, not rejected.
+                "status": {ra_c.UPDATE: field_p.Permissions.RO},
+            },
+        ),
     )
+
+    def create(self, **kwargs):
+        """Create the agent, always starting it ACTIVE.
+
+        The server decides the initial status, not the registering agent's
+        own (client-side default) value. A client-supplied `status` is
+        simply overridden here rather than rejected, so older clients that
+        still send one don't break.
+        """
+        kwargs["status"] = c.AgentStatus.ACTIVE.value
+        return super().create(**kwargs)
+
+    def update(self, uuid: sys_uuid.UUID, **kwargs):
+        """Update the agent, always (re)activating it.
+
+        `status` is read-only over the API - an agent successfully calling
+        this endpoint (e.g. on re-registration) is what proves it's alive,
+        so the server activates it here rather than trusting a client-
+        supplied `status` value.
+        """
+        kwargs["status"] = c.AgentStatus.ACTIVE.value
+        return super().update(uuid, **kwargs)
 
 
 class NodeVerifierController(sdk_controllers.BaseSdkResourceController):
