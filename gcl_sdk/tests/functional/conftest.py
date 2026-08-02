@@ -174,7 +174,6 @@ def get_openapi_engine():
             description="OpenAPI - Test API",
         ),
         paths=openapi_structures.OpenApiPaths(),
-        components=openapi_structures.OpenApiComponents(),
     )
     return openapi_engine
 
