@@ -14,6 +14,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import logging
 import json
 import os
 import uuid as sys_uuid
@@ -321,3 +322,26 @@ class TestMetaDriver:
         drv.delete(res)
 
         assert str(uuid) not in drv._storage["dummy"]["resources"]
+
+
+def test_a_field_this_agent_does_not_have_is_skipped_not_fatal(caplog):
+    """An agent older than the core it talks to is an ordinary state during
+    an upgrade, and it used to take the whole capability down: the model is
+    built from the resource's keys, so one name it did not have failed every
+    resource of that kind -- with a traceback naming
+    `get_custom_property_type` rather than the field."""
+    uuid = sys_uuid.uuid4()
+    res = _make_resource(
+        "dummy", uuid, {"uuid": str(uuid), "foo": 7, "routes": [{"to": "10.0.0.0/8"}]}
+    )
+
+    with caplog.at_level(logging.WARNING):
+        obj = DummyModel.from_ua_resource(res)
+
+    assert obj.foo == 7, "what the agent does understand is applied"
+    assert not hasattr(obj, "routes")
+    # ... and the field it could not read is named, because it is in the
+    # target hash the control plane computed and nothing here can put it
+    # back: the resource will be applied for ever without ever matching.
+    assert "routes" in caplog.text
+    assert "routes" not in obj.get_resource_target_fields()
