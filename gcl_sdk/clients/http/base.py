@@ -128,6 +128,17 @@ class CoreIamAuthenticator(AbstractAuthenticator):
         return f"project:{project_id}"
 
 
+class NodeIdentityAuth:
+    """Identify a node on the isolated, unencrypted boot API."""
+
+    def __init__(self, node: sys_uuid.UUID):
+        self._node = str(node)
+
+    def __call__(self, request):
+        request.headers["X-Genesis-Node-UUID"] = self._node
+        return request
+
+
 class Encryptor:
     def __init__(self, key: bytes, node: sys_uuid.UUID) -> None:
         self._key = key

@@ -161,6 +161,7 @@ BorderAgentCapabilityDriver = "gcl_sdk.agents.universal.drivers.border:BorderAge
 BorderCapabilityDriver = "gcl_sdk.agents.universal.drivers.border:BorderCapabilityDriver"
 PoolAgentDriver = "gcl_sdk.agents.universal.drivers.pool:PoolAgentDriver"
 LocalPoolAgentDriver = "gcl_sdk.agents.universal.drivers.pool:LocalPoolAgentDriver"
+EvpnAgentCapabilityDriver = "gcl_sdk.agents.universal.drivers.evpn:EvpnAgentCapabilityDriver"
 
 [project.entry-points."gcl_sdk_machine_pool_driver"]
 dummy = "gcl_sdk.agents.universal.drivers.pool:DummyPoolDriver"

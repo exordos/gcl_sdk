@@ -19,11 +19,13 @@ from restalchemy.api import actions
 from restalchemy.api import constants as ra_c
 from restalchemy.api import field_permissions as field_p
 from restalchemy.api import resources
+from restalchemy.common import exceptions as ra_exc
 from restalchemy.dm import filters as dm_filters
 
 from gcl_sdk.agents.universal import constants as c
 from gcl_sdk.agents.universal.api import controllers as sdk_controllers
 from gcl_sdk.agents.universal.api import crypto
+from gcl_sdk.agents.universal.dm import models as ua_models
 from gcl_sdk.agents.universal.status_api.dm import models
 
 
@@ -40,27 +42,66 @@ class KindController(sdk_controllers.BaseSdkResourceController):
 class ResourcesController(sdk_controllers.BaseSdkNestedResourceController):
     """Controller for /v1/kind/<name>/resources/ endpoint"""
 
+    __pr_name__ = "kind"
+
     __resource__ = resources.ResourceByRAModel(
         model_class=models.Resource,
         process_filters=True,
         convert_underscore=False,
     )
 
+    @property
+    def _caller_node(self):
+        return self._req.context.encryption_information.node_uuid
+
+    def create(self, parent_resource, **kwargs):
+        node = self._caller_node
+        target = ua_models.TargetResource.objects.get_one_or_none(
+            filters={
+                "kind": dm_filters.EQ(parent_resource.kind),
+                "uuid": dm_filters.EQ(kwargs.get("uuid")),
+            }
+        )
+        if target is not None:
+            ua_models.UniversalAgent.objects.get_one(
+                filters={
+                    "uuid": dm_filters.EQ(target.agent),
+                    "node": dm_filters.EQ(node),
+                }
+            )
+        # Facts can exist without a target, but cannot shadow another host's.
+        for existing in models.Resource.objects.get_all(
+            filters={
+                "kind": dm_filters.EQ(parent_resource.kind),
+                "uuid": dm_filters.EQ(kwargs.get("uuid")),
+            }
+        ):
+            if existing.node != node:
+                raise ra_exc.NotFoundError(path=self._req.path)
+        kwargs["node"] = node
+        return super().create(parent_resource=parent_resource, **kwargs)
+
     def filter(self, parent_resource: models.KindModel, filters, order_by=None):
         return models.Resource.objects.get_all(
             filters={
                 "kind": dm_filters.EQ(parent_resource.kind),
+                "node": dm_filters.EQ(self._caller_node),
             }
         )
 
     def get(self, uuid: sys_uuid.UUID, parent_resource: models.KindModel, **kwargs):
-        resource = models.Resource.objects.get_one(
+        return models.Resource.objects.get_one(
             filters={
                 "kind": dm_filters.EQ(parent_resource.kind),
                 "uuid": dm_filters.EQ(str(uuid)),
+                "node": dm_filters.EQ(self._caller_node),
             }
         )
-        return resource
+
+    def update(self, parent_resource, uuid, **kwargs):
+        kwargs["node"] = self._caller_node
+        kwargs["kind"] = parent_resource
+        return super().update(parent_resource=parent_resource, uuid=uuid, **kwargs)
 
 
 class UniversalAgentsController(sdk_controllers.BaseSdkResourceController):
@@ -80,6 +121,14 @@ class UniversalAgentsController(sdk_controllers.BaseSdkResourceController):
             },
         ),
     )
+
+    def get_autofilters(self):
+        return {
+            "node": dm_filters.EQ(self._req.context.encryption_information.node_uuid)
+        }
+
+    def get_autovalues(self):
+        return {"node": self._req.context.encryption_information.node_uuid}
 
     def create(self, **kwargs):
         """Create the agent, always starting it ACTIVE.

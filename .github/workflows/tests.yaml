@@ -8,7 +8,11 @@ on:
       - '.markdownlint.yaml'
       - '*.md'
   pull_request:
-    types: [opened]
+    # The default set (opened, synchronize, reopened). Narrowing it to
+    # `opened` means a PR is tested once, at the moment it is created, and
+    # every push that follows — including the one that fixes the review —
+    # goes untested while the checks still read green from the first run.
+    types: [opened, synchronize, reopened]
     paths-ignore:
       - 'docs/**'
       - 'mkdocs.yml'
@@ -99,6 +103,87 @@ jobs:
       - name: Libvirt driver tests
         run: |
           tox -e ${{ matrix.python-version }}-libvirt
+
+  # The SDN dataplane tiers exercise the real agent code against a real
+  # Open vSwitch and real network namespaces. They caught defects the unit
+  # tests could not see (an allowed flow that matched but never delivered),
+  # so they run on every push rather than by hand.
+  SDN-dataplane:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: true
+      matrix:
+        python-version: ["3.12"]
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install --yes libev-dev openvswitch-switch conntrack \
+            isc-dhcp-client dnsutils iproute2
+          sudo systemctl start openvswitch-switch
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+      - name: Install tox-uv
+        run: uv tool install tox --with tox-uv
+      - name: Build the environment
+        run: tox -e sdn-integration --notest
+      - name: Dataplane integration tests (netns + OVS, needs root)
+        # SDN_REQUIRE_ENV turns "prerequisite missing" into a failure: the
+        # suite skips itself off-CI, and a silent skip here would retire the
+        # whole tier without anyone noticing.
+        run: |
+          sudo -E SDN_REQUIRE_ENV=1 .tox/sdn-integration/bin/pytest \
+            gcl_sdk/tests/integration/sdn -o addopts="" -q --timer-top-n=10
+
+  # The full-fabric tier builds its venv from the evpn_connector source,
+  # which is a public repository — so it needs no token, no settings-page
+  # variable and no gate: it checks the connector out and runs, like every
+  # other job here.
+  #
+  # The ref names the connector this installation deploys, which is the one
+  # carrying what this tier exercises: fail-static, the GBP carrier, and the
+  # dependency band that installs on a current interpreter. `vars` overrides
+  # both the address and the ref.
+  SDN-fabric:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check out evpn_connector
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ vars.EVPN_CONNECTOR_REPO || 'vktechdev/evpn_connector' }}
+          ref: ${{ vars.EVPN_CONNECTOR_REF || 'sdn-min' }}
+          path: .evpn_connector
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install --yes libev-dev openvswitch-switch conntrack \
+            isc-dhcp-client dnsutils iproute2
+          sudo systemctl start openvswitch-switch
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+      - name: Install tox-uv
+        run: uv tool install tox --with tox-uv
+      - name: Prepare the fabric cache (gobgp + evpn_connector venv)
+        env:
+          EVPN_CONNECTOR_PATH: ${{ github.workspace }}/.evpn_connector
+        run: ./gcl_sdk/tests/integration/sdn_fabric/prepare.sh
+      - name: Build the environment
+        run: tox -e sdn-fabric --notest
+      - name: Full-fabric integration tests (gobgp + evpn_connector, needs root)
+        run: |
+          sudo -E SDN_REQUIRE_ENV=1 .tox/sdn-fabric/bin/pytest \
+            gcl_sdk/tests/integration/sdn_fabric -o addopts="" -q --timer-top-n=10
+
   Coverage:
     runs-on: ubuntu-24.04
     strategy:

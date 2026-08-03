@@ -283,3 +283,33 @@ def test_full_nat_forward_masquerades_the_dnated_flow():
     # The reply path: the forwarded flow is masqueraded so the target
     # answers through this border, not directly to the client.
     assert "ip daddr 10.20.0.2 tcp dport 22 masquerade" in nft
+
+
+def test_the_border_still_knows_the_field_the_control_plane_may_send():
+    """`routes` is read by nothing here. It stays a property because the
+    agent hashes the fields it was sent *and knows*: a name it does not know
+    is left out of that hash, so an installation whose control plane still
+    sends `routes` would disagree with this agent for ever and re-apply every
+    border on every iteration. It goes when a core that omits it is the
+    oldest one still supported."""
+    from gcl_sdk.agents.universal.dm import models as ua_models
+
+    uuid = sys_uuid.uuid4()
+    sent = {
+        "uuid": str(uuid),
+        "status": "ACTIVE",
+        "snat_rules": [],
+        "forwards": [],
+        "routes": [{"to": "10.0.0.0/8", "via": "10.20.0.1"}],
+    }
+    resource = ua_models.Resource(
+        uuid=uuid, kind="border", res_uuid=sys_uuid.uuid4(), value=sent
+    )
+
+    restored = border.Border.from_ua_resource(resource)
+
+    assert "routes" in restored.get_resource_target_fields(), (
+        "a field the agent does not know is left out of the hash it computes, "
+        "so the two sides never settle"
+    )
+    assert restored.dump_to_simple_view()["routes"] == sent["routes"]

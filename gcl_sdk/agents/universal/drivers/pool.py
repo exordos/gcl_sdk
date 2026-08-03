@@ -414,6 +414,20 @@ class AbstractPoolDriverSpec(
 ):
     """Base class for all pool driver specs."""
 
+    #: Fields added after release, with their "not asked for" value. At that
+    #: value they are left out of the simple view so older peers (which
+    #: refuse unknown kind fields) and newer ones hash the same view.
+    OMITTED_AT_DEFAULT = {}
+
+    def omit_defaults(self, view: dict[str, tp.Any]) -> dict[str, tp.Any]:
+        for name, default in self.OMITTED_AT_DEFAULT.items():
+            if name in view and view[name] == default:
+                del view[name]
+        return view
+
+    def dump_to_simple_view(self, *args, **kwargs):
+        return self.omit_defaults(super().dump_to_simple_view(*args, **kwargs))
+
 
 class LibvirtPoolDriverSpec(AbstractPoolDriverSpec):
     KIND = "libvirt"
@@ -450,6 +464,14 @@ class LibvirtPoolDriverSpec(AbstractPoolDriverSpec):
         types.AllowNone(types.String(max_length=255)),
         default=None,
     )
+    # Plug overlay ports into the OVS br-int (iface-id = port uuid);
+    # flat/boot ports keep the classic libvirt network path.
+    ovs = properties.property(
+        types.Boolean(),
+        default=False,
+    )
+
+    OMITTED_AT_DEFAULT = {"ovs": False}
 
 
 class StoragePoolEntry(common_types.SchematicType):
@@ -487,6 +509,16 @@ class DummyPoolDriverSpec(AbstractPoolDriverSpec):
     KIND = "dummy"
 
 
+class PoolDriverSpecType(types_dynamic.KindModelType):
+    """Kind type that serialises through the spec's `omit_defaults`.
+
+    The stock kind type walks the properties itself and never reaches it.
+    """
+
+    def to_simple_type(self, value):
+        return value.omit_defaults(super().to_simple_type(value))
+
+
 class MachinePool(
     models.ModelWithUUID,
     models.ModelWithNameDesc,
@@ -496,8 +528,8 @@ class MachinePool(
 
     driver_spec = properties.property(
         types_dynamic.KindModelSelectorType(
-            types_dynamic.KindModelType(LibvirtPoolDriverSpec),
-            types_dynamic.KindModelType(ExordosLocalHyperDriverSpec),
+            PoolDriverSpecType(LibvirtPoolDriverSpec),
+            PoolDriverSpecType(ExordosLocalHyperDriverSpec),
             types_dynamic.KindModelType(DummyPoolDriverSpec),
         ),
         required=True,
@@ -778,8 +810,8 @@ class MetaPool(meta.MetaCoordinatorDataPlaneModel):
 
     driver_spec = properties.property(
         types_dynamic.KindModelSelectorType(
-            types_dynamic.KindModelType(LibvirtPoolDriverSpec),
-            types_dynamic.KindModelType(ExordosLocalHyperDriverSpec),
+            PoolDriverSpecType(LibvirtPoolDriverSpec),
+            PoolDriverSpecType(ExordosLocalHyperDriverSpec),
             types_dynamic.KindModelType(DummyPoolDriverSpec),
         ),
         required=True,
@@ -875,6 +907,13 @@ class MetaPool(meta.MetaCoordinatorDataPlaneModel):
         # Actually we do nothing to configure or dump to pool at the moment
         # but we need to synchronize the pool state since it will be used by
         # machines and volumes as their dependencies.
+        self.restore_from_dp(**kwargs)
+
+    def update_on_dp(self, **kwargs) -> None:
+        """Update the pool."""
+        # Nothing to configure, but an update is built from the target alone:
+        # without this the pool reports zero cores and every machine and
+        # volume resolving through it is reported missing.
         self.restore_from_dp(**kwargs)
 
 
@@ -1241,6 +1280,9 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
 class MetaMachine(meta.MetaCoordinatorDataPlaneModel):
     """Machine meta model."""
 
+    #: `port_info` keys the data plane cannot observe; kept as-is on refresh.
+    DP_OPAQUE_PORT_INFO = ("ipv4", "mask", "uuid", "overlay")
+
     name = properties.property(types.String(max_length=255), default="")
     cores = properties.property(types.Integer(min_value=0, max_value=4096), default=0)
     ram = properties.property(types.Integer(min_value=0), default=0)
@@ -1287,7 +1329,13 @@ class MetaMachine(meta.MetaCoordinatorDataPlaneModel):
             else None
         )
 
-        return Port(
+        port = Port(
+            # The real uuid is the OVS iface-id the SDN agent resolves by.
+            uuid=(
+                sys_uuid.UUID(self.port_info["uuid"])
+                if self.port_info.get("uuid")
+                else sys_uuid.uuid4()
+            ),
             subnet=sys_uuid.uuid4(),
             ipv4=ipv4,
             mask=mask,
@@ -1296,6 +1344,10 @@ class MetaMachine(meta.MetaCoordinatorDataPlaneModel):
             project_id=self.project_id,
             source=self.port_info.get("source"),
         )
+        # `subnet` is a placeholder, so overlay-ness travels as an answer.
+        if "overlay" in self.port_info:
+            port.overlay = bool(self.port_info["overlay"])
+        return port
 
     def _create_machine(
         self,
@@ -1319,12 +1371,23 @@ class MetaMachine(meta.MetaCoordinatorDataPlaneModel):
         self.boot = dp_machine.boot
 
         for port in ports:
-            # Only MAC and source are available in the data plane
+            # Only MAC and source are observable in the data plane; any other
+            # key dropped here leaves target != actual forever and the machine
+            # loops on update_on_dp without converging.
+            preserved = {
+                key: self.port_info[key]
+                for key in self.DP_OPAQUE_PORT_INFO
+                if key in self.port_info
+            }
+            # On an overlay port libvirt always reports `br-int` as source,
+            # never what the control plane sent (the subnet); taking it
+            # would loop the same way.
+            if self.port_info.get("overlay") and "source" in self.port_info:
+                preserved["source"] = self.port_info["source"]
             self.port_info = {
-                "ipv4": self.port_info.get("ipv4"),
-                "mask": self.port_info.get("mask"),
                 "mac": port.mac,
                 "source": port.source,
+                **preserved,
             }
 
             # TODO(akremenetsky): Support multiple interfaces

@@ -500,6 +500,12 @@ class NodeSet(
         default=pc.NodeType.VM.value,
     )
     default_network = properties.property(ra_types.Dict(), default=dict)
+    # Interfaces the nodes ask for, carried opaque. None (leave placement to
+    # the default rule) differs from [] (ask for nothing).
+    interfaces = properties.property(
+        ra_types.AllowNone(ra_types.TypedList(ra_types.Dict())),
+        default=None,
+    )
     disk_spec = properties.property(
         types_dynamic.KindModelSelectorType(
             types_dynamic.KindModelType(SetRootDiskSpec),
@@ -524,7 +530,7 @@ class NodeSet(
 
         Refer to the Resource model for more details about target fields.
         """
-        return frozenset(
+        fields = frozenset(
             (
                 "uuid",
                 "name",
@@ -535,8 +541,16 @@ class NodeSet(
                 "set_type",
                 "project_id",
                 "disk_spec",
+                # Otherwise a set pinned to a network arrives unpinned.
+                "default_network",
             )
         )
+        # Sent only when declared: an installation predating `interfaces`
+        # fails to restore an unknown field, and omitting it keeps the hash
+        # every installation already agrees on.
+        if self.interfaces is None:
+            return fields
+        return fields | frozenset(("interfaces",))
 
 
 class AbstractTarget(types_dynamic.AbstractKindModel, ra_models.SimpleViewMixin):
