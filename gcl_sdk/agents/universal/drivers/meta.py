@@ -42,9 +42,46 @@ class MetaDataPlaneModel(ra_models.ModelWithRequiredUUID, models.ResourceMixin):
 
     @classmethod
     def from_ua_resource(cls, resource: models.Resource) -> MetaDataPlaneModel:
-        target_fields = list(resource.value.keys())
+        """Build the model from what the control plane sent.
+
+        A name this model does not have is skipped rather than fatal. It
+        means an agent older than the core it talks to, which is an
+        ordinary state during an upgrade and not a reason for every
+        resource of the capability to fail to deserialize -- as it did:
+        one field the control plane still sent and the data plane had
+        dropped took the whole capability down, and the traceback named
+        `get_custom_property_type` rather than the field.
+
+        Loud, though, and for a reason this cannot fix: that field is part
+        of the *target* hash the control plane computed, and nothing here
+        can put it back. So the resource is applied as far as it is
+        understood and then keeps being applied, never settling, until the
+        two sides agree on the fields again. A warning naming the field is
+        the difference between diagnosing that in a minute and in a day.
+        """
+        # One pass: the names have to be split anyway, because an unknown one
+        # must stay out of `target_fields` as well as out of the model. The
+        # warning is the rare half of the same split, so it costs nothing to
+        # collect and is only sorted when there is something to say.
+        known = set(cls.properties.properties)
+        target_fields = []
+        unknown = []
+        for name in resource.value:
+            if name in known:
+                target_fields.append(name)
+            else:
+                unknown.append(name)
+        if unknown:
+            LOG.warning(
+                "%s resource %s carries %s, which this agent does not know. "
+                "Applying the rest; the resource will not settle until the "
+                "control plane and this agent agree on its fields.",
+                resource.kind,
+                resource.uuid,
+                ", ".join(sorted(unknown)),
+            )
         return cls.restore_from_simple_view(
-            target_fields=target_fields, **resource.value
+            skip_unknown_fields=True, target_fields=target_fields, **resource.value
         )
 
     def get_resource_target_fields(self) -> list[str]:
