@@ -165,7 +165,7 @@ LocalPoolAgentDriver = "gcl_sdk.agents.universal.drivers.pool:LocalPoolAgentDriv
 [project.entry-points."gcl_sdk_machine_pool_driver"]
 dummy = "gcl_sdk.agents.universal.drivers.pool:DummyPoolDriver"
 libvirt = "gcl_sdk.agents.universal.drivers.libvirt:LibvirtPoolDriver"
-exordos_local_hyper = "gcl_sdk.agents.universal.drivers.libvirt:LibvirtPoolDriver"
+exordos_local_hyper = "gcl_sdk.agents.universal.drivers.exordos_hyper:ExordosLocalHyperDriver"
 
 [tool.uv]
 package = true
