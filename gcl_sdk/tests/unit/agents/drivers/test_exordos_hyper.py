@@ -27,10 +27,13 @@ pytest.importorskip("libvirt")
 pytest.importorskip("rawstor")
 
 from gcl_sdk.agents.universal.drivers import exordos_hyper  # noqa: E402
+from gcl_sdk.agents.universal.drivers import libvirt as libvirt_driver  # noqa: E402
 from gcl_sdk.agents.universal.drivers import pool as pool_base  # noqa: E402
 
 
-def _driver(tmp_path, node=None) -> exordos_hyper.ExordosLocalHyperDriver:
+def _driver(
+    tmp_path, node=None, storage_pool=None
+) -> exordos_hyper.ExordosLocalHyperDriver:
     # libvirt's built-in "test" driver simulates a hypervisor in-memory -
     # no real virtualization or daemon needed. rawstor's "file://" location
     # is a real, local, daemon-less backend (see pyrawstor/tests).
@@ -38,6 +41,7 @@ def _driver(tmp_path, node=None) -> exordos_hyper.ExordosLocalHyperDriver:
         connection_uri="test:///default",
         node=node or sys_uuid.uuid4(),
         rawstor_location=f"file://{tmp_path}",
+        storage_pool=storage_pool,
     )
     pool = pool_base.MachinePool(
         uuid=sys_uuid.uuid4(), name="rawstor-pool", driver_spec=spec
@@ -183,6 +187,104 @@ class TestVolumeLifecycle:
         assert calls == [
             ["systemctl", "disable", "--now", f"rawstor-vhost@{volume.uuid}"]
         ]
+
+
+class TestForeignVolumes:
+    """A machine can be adopted into this pool with disks that were never
+    created by this driver - e.g. the core bootstrap VM, whose qcow2
+    disks are created directly by the CLI before this pool exists. The
+    driver must recognize them as already satisfied rather than trying to
+    create a rawstor volume and vhost-attach it on top of them.
+    """
+
+    def _foreign_machine_and_volume(self, storage_pool_name):
+        # Built through the plain LibvirtPoolDriver - matches how the CLI's
+        # LibvirtInfraDriver.create_stand provisions the bootstrap VM,
+        # entirely independent of this pool/driver.
+        #
+        # The returned driver must be kept alive by the caller: libvirt's
+        # "test:///default" backend only keeps its in-memory state around
+        # while at least one connection to it is open - if `base_driver`
+        # (and its connection) gets garbage collected, the domain/volume
+        # created below disappear before a second driver can find them.
+        base_spec = pool_base.LibvirtPoolDriverSpec(
+            connection_uri="test:///default", storage_pool=storage_pool_name
+        )
+        base_pool = pool_base.MachinePool(
+            uuid=sys_uuid.uuid4(), name="plain-pool", driver_spec=base_spec
+        )
+        base_driver = libvirt_driver.LibvirtPoolDriver(base_pool)
+
+        machine = pool_base.Machine(
+            uuid=sys_uuid.uuid4(),
+            project_id=sys_uuid.uuid4(),
+            name="vm-exordos-core-bootstrap",
+            cores=1,
+            ram=512,
+        )
+        volume_uuid = sys_uuid.uuid4()
+        volume = pool_base.MachineVolume(
+            uuid=volume_uuid,
+            project_id=sys_uuid.uuid4(),
+            size=1,
+            index=0,
+            machine=machine.uuid,
+            name=str(volume_uuid),
+        )
+        volume = base_driver.create_volume(volume)
+        port = pool_base.Port(
+            uuid=sys_uuid.uuid4(),
+            project_id=sys_uuid.uuid4(),
+            mac="52:54:00:11:22:33",
+            source="default",
+            status="ACTIVE",
+        )
+        base_driver.create_machine(machine, [volume], [port])
+
+        return base_driver, machine, volume
+
+    def test_get_volume_recognizes_a_foreign_qcow2_disk(self, tmp_path):
+        base_driver, machine, volume = self._foreign_machine_and_volume(
+            "default-pool"
+        )
+        driver = _driver(tmp_path, storage_pool="default-pool")
+
+        found = driver.get_volume(volume.uuid)
+
+        assert found.machine == machine.uuid
+        assert found.size == volume.size
+        assert base_driver is not None  # keep the connection alive until here
+
+    def test_list_volumes_includes_a_foreign_qcow2_disk(self, tmp_path):
+        base_driver, _, volume = self._foreign_machine_and_volume("default-pool")
+        driver = _driver(tmp_path, storage_pool="default-pool")
+
+        assert volume.uuid in {v.uuid for v in driver.list_volumes()}
+        assert base_driver is not None  # keep the connection alive until here
+
+    def test_attach_volume_is_a_noop_for_an_already_present_foreign_disk(
+        self, tmp_path
+    ):
+        # Regression: attaching would build a vhostuser disk and hotplug
+        # it onto a domain that already has a plain qcow2 disk in that
+        # slot and no shared-memory backing - libvirt then refuses with
+        # "'vhostuser' requires shared memory".
+        base_driver, _, volume = self._foreign_machine_and_volume("default-pool")
+        driver = _driver(tmp_path, storage_pool="default-pool")
+
+        with pytest.raises(pool_base.VolumeAlreadyAttachedError):
+            driver.attach_volume(volume)
+        assert base_driver is not None  # keep the connection alive until here
+
+    def test_without_a_storage_pool_configured_no_foreign_volumes_are_found(
+        self, tmp_path
+    ):
+        # exordos_local_hyper deployments without --with-rawstor's core
+        # bootstrap VM (e.g. `hypervisors init`) never configure
+        # storage_pool - must not crash trying to look one up.
+        driver = _driver(tmp_path)
+
+        assert driver.list_volumes() == []
 
 
 class TestCreateMachine:
