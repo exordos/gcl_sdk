@@ -16,6 +16,7 @@
 
 import subprocess
 import uuid as sys_uuid
+from xml.etree import ElementTree as ET
 
 import pytest
 
@@ -182,6 +183,40 @@ class TestVolumeLifecycle:
         assert calls == [
             ["systemctl", "disable", "--now", f"rawstor-vhost@{volume.uuid}"]
         ]
+
+
+class TestCreateMachine:
+    def test_domain_is_defined_with_shared_memory(self, tmp_path, monkeypatch):
+        # Regression: libvirt refuses to attach a vhostuser disk to a
+        # domain that wasn't defined with shared memory backing, and it
+        # can't be added after the fact - so every machine of this pool
+        # (all of them vhost-user-backed) must get it at create time.
+        _no_op_systemctl(monkeypatch)
+        driver = _driver(tmp_path)
+        monkeypatch.setattr(driver, "_wait_for_socket", lambda socket_path: None)
+
+        machine = pool_base.Machine(
+            uuid=sys_uuid.uuid4(),
+            project_id=sys_uuid.uuid4(),
+            name="vm1",
+            cores=1,
+            ram=512,
+        )
+        root_vol = pool_base.MachineVolume(
+            uuid=sys_uuid.uuid4(),
+            project_id=sys_uuid.uuid4(),
+            size=1,
+            index=0,
+            machine=machine.uuid,
+        )
+        driver.create_volume(root_vol)
+
+        driver.create_machine(machine, [root_vol], [])
+
+        domain = driver._client.lookupByUUIDString(str(machine.uuid))
+        memory_backing = ET.fromstring(domain.XMLDesc()).find("memoryBacking")
+        assert memory_backing is not None
+        assert memory_backing.find("access").get("mode") == "shared"
 
 
 class TestDeleteMachine:
