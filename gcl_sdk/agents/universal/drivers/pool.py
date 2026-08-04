@@ -516,14 +516,8 @@ class ExordosLocalHyperDriverSpec(LibvirtPoolDriverSpec):
         default=list,
     )
 
-    # rawstor has no capacity/stats query API, so the pool's usable
-    # capacity is supplied by exordos rather than computed dynamically.
     rawstor_location = properties.property(
         types.String(max_length=2048),
-        required=True,
-    )
-    rawstor_capacity_gb = properties.property(
-        types.Integer(min_value=1),
         required=True,
     )
 
