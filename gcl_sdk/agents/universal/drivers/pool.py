@@ -153,6 +153,11 @@ class VolumeNotAttachedError(exceptions.UniversalAgentException):
     machine: sys_uuid.UUID
 
 
+class VolumeResizeNotSupportedError(exceptions.UniversalAgentException):
+    __template__ = "Resizing volume {volume} is not supported by this pool driver."
+    volume: sys_uuid.UUID
+
+
 class PortAlreadyAttachedError(exceptions.UniversalAgentException):
     __template__ = "The port {port} is already attached to machine {machine}."
     port: sys_uuid.UUID
@@ -509,6 +514,17 @@ class ExordosLocalHyperDriverSpec(LibvirtPoolDriverSpec):
     storage_pool = properties.property(
         StoragePoolListOrLegacyName(StoragePoolEntry()),
         default=list,
+    )
+
+    # rawstor has no capacity/stats query API, so the pool's usable
+    # capacity is supplied by exordos rather than computed dynamically.
+    rawstor_location = properties.property(
+        types.String(max_length=2048),
+        required=True,
+    )
+    rawstor_capacity_gb = properties.property(
+        types.Integer(min_value=1),
+        required=True,
     )
 
 
