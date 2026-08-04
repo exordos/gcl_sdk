@@ -365,6 +365,23 @@ class XMLLibvirtInstance(XMLLibvirtMixin):
         )
 
     @classmethod
+    def domain_set_shared_memory(cls, domain: minidom.Document) -> None:
+        """Back the domain's RAM with shared memory.
+
+        vhost-user devices exchange virtqueues with the guest over shared
+        memory - libvirt refuses to attach one ("'vhostuser' requires
+        shared memory") unless the domain itself was defined with
+        <memoryBacking><access mode="shared"/></memoryBacking>.
+        """
+        root = domain.firstChild
+        cls._remove_direct_children(root, "memoryBacking")
+        memory_backing = domain.createElement("memoryBacking")
+        access = domain.createElement("access")
+        access.setAttribute("mode", "shared")
+        memory_backing.appendChild(access)
+        root.appendChild(memory_backing)
+
+    @classmethod
     def domain_set_image(cls, domain: minidom.Document, image: str) -> None:
         cls.document_meta_set_tag(
             domain,
@@ -527,6 +544,9 @@ class XMLLibvirtInstance(XMLLibvirtMixin):
 
     def set_memory(self, memory: int) -> None:
         return self.domain_set_memory(self._domain, memory)
+
+    def set_shared_memory(self) -> None:
+        return self.domain_set_shared_memory(self._domain)
 
     def set_image(self, image: tp.Optional[str]) -> None:
         if image is None:

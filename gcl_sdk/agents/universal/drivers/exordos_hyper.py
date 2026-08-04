@@ -224,6 +224,11 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
         volumes: tp.Iterable[pool_base.MachineVolume],
         legacy_machine: bool = False,
     ) -> None:
+        # Every volume of this pool is a vhost-user disk (attached now or
+        # later via attach_volume), so the domain always needs shared
+        # memory - it can't be added after the domain is defined.
+        domain.set_shared_memory()
+
         for i, volume in enumerate(volumes):
             self._start_vhost(volume.uuid)
             domain.add_vhostuser_disk(

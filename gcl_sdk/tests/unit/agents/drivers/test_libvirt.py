@@ -336,6 +336,27 @@ class TestVhostuserDisk:
         assert disks[0].get("type") == "vhostuser"
         assert disks[0].find("target").get("dev") == "vdc"
 
+    def test_set_shared_memory_adds_memory_backing(self):
+        # Regression: libvirt refuses to attach a vhostuser disk
+        # ("'vhostuser' requires shared memory") unless the domain was
+        # defined with this element - it can't be added after the fact.
+        domain = libvirt_driver.XMLLibvirtInstance(libvirt_driver.domain_template)
+
+        domain.set_shared_memory()
+
+        memory_backing = ET.fromstring(domain.xml).find("memoryBacking")
+        assert memory_backing is not None
+        assert memory_backing.find("access").get("mode") == "shared"
+
+    def test_set_shared_memory_is_idempotent(self):
+        domain = libvirt_driver.XMLLibvirtInstance(libvirt_driver.domain_template)
+
+        domain.set_shared_memory()
+        domain.set_shared_memory()
+
+        memory_backings = ET.fromstring(domain.xml).findall("memoryBacking")
+        assert len(memory_backings) == 1
+
 
 def test_domain_console_logs_to_file():
     log_path = "/var/log/libvirt/qemu/test-vm.console.log"
