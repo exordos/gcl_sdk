@@ -321,6 +321,48 @@ def test_disk_device_xml(image_path, disk_type, source_attribute, driver_attribu
     assert disk.get("type") == disk_type
     assert disk.find("source").get(source_attribute) == image_path
     assert disk.find("driver").attrib == driver_attributes
+class TestVhostuserDisk:
+    def test_disk_xml_shape(self):
+        # Shape validated against libvirt's RelaxNG schema
+        # (diskSourceVhostUser in domaincommon.rng): type='unix' source
+        # with no `mode` attribute (that only applies to network
+        # interfaces, not disk sources) plus an optional <reconnect>.
+        xml = libvirt_driver.XMLLibvirtInstance.vhostuser_disk_xml(
+            "/run/rawstor/00000000-0000-0000-0000-000000000001.sock",
+            device="vdb",
+        )
+        disk = ET.fromstring(xml)
+
+        assert disk.get("type") == "vhostuser"
+        assert disk.get("device") == "disk"
+        assert disk.find("driver").get("name") == "qemu"
+
+        source = disk.find("source")
+        assert source.get("type") == "unix"
+        assert (
+            source.get("path")
+            == "/run/rawstor/00000000-0000-0000-0000-000000000001.sock"
+        )
+        assert source.get("mode") is None
+
+        reconnect = source.find("reconnect")
+        assert reconnect.get("enabled") == "yes"
+
+        target = disk.find("target")
+        assert target.get("dev") == "vdb"
+        assert target.get("bus") == "virtio"
+
+    def test_domain_add_vhostuser_disk_appends_to_devices(self):
+        domain = libvirt_driver.XMLLibvirtInstance(libvirt_driver.domain_template)
+
+        domain.add_vhostuser_disk(
+            "/run/rawstor/00000000-0000-0000-0000-000000000002.sock", device="vdc"
+        )
+
+        disks = ET.fromstring(domain.xml).findall(".//devices/disk")
+        assert len(disks) == 1
+        assert disks[0].get("type") == "vhostuser"
+        assert disks[0].find("target").get("dev") == "vdc"
 
 
 def test_domain_console_logs_to_file():
