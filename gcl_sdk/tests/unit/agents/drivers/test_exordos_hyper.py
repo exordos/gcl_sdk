@@ -15,6 +15,7 @@
 #    under the License.
 
 import subprocess
+import types
 import uuid as sys_uuid
 from xml.etree import ElementTree as ET
 
@@ -81,20 +82,32 @@ class TestVolumeUuidFromSocketPath:
         assert driver._uuid_from_socket_path("/run/rawstor/not-a-uuid.sock") is None
 
 
+def _fake_location_info(monkeypatch, driver, *, used_gb, total_gb):
+    monkeypatch.setattr(
+        driver._location,
+        "info",
+        lambda: types.SimpleNamespace(used=used_gb << 30, total=total_gb << 30),
+    )
+
+
 class TestBuildStoragePool:
-    def test_capacity_is_a_hardcoded_driver_constant(self, tmp_path):
-        # rawstor has no capacity/stats API yet - the pool's usable
-        # capacity is a fixed placeholder internal to the driver, not a
-        # per-pool driver_spec field the CLI/API would have to configure.
+    def test_capacity_comes_from_location_info(self, tmp_path, monkeypatch):
+        # rawstor 0.2.4 added Location.info() (used/total bytes for the
+        # backend) - the pool's usable capacity reflects that instead of a
+        # hardcoded placeholder.
         driver = _driver(tmp_path)
+        _fake_location_info(monkeypatch, driver, used_gb=20, total_gb=100)
+
         storage_pool = driver._build_storage_pool([])
 
-        assert storage_pool.capacity_usable == exordos_hyper.RAWSTOR_CAPACITY_GB
+        assert storage_pool.capacity_usable == 100
         assert storage_pool.pool_type == "rawstor"
-        assert storage_pool.available == exordos_hyper.RAWSTOR_CAPACITY_GB
+        assert storage_pool.available == 100
+        assert storage_pool.available_actual == 80
 
-    def test_existing_volumes_reduce_available_capacity(self, tmp_path):
+    def test_existing_volumes_reduce_available_capacity(self, tmp_path, monkeypatch):
         driver = _driver(tmp_path)
+        _fake_location_info(monkeypatch, driver, used_gb=0, total_gb=100)
         volumes = [
             pool_base.MachineVolume(
                 uuid=sys_uuid.uuid4(),
@@ -110,7 +123,7 @@ class TestBuildStoragePool:
 
         storage_pool = driver._build_storage_pool(volumes)
 
-        assert storage_pool.available == exordos_hyper.RAWSTOR_CAPACITY_GB - 10 - 15
+        assert storage_pool.available == 100 - 10 - 15
 
 
 class TestVolumeLifecycle:
