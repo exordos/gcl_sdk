@@ -40,12 +40,6 @@ VHOST_UNIT_TEMPLATE = "rawstor-vhost@{}"
 SOCKET_WAIT_TIMEOUT = 5.0
 SOCKET_WAIT_INTERVAL = 0.1
 
-# rawstor has no capacity/stats API yet, so the pool's usable capacity is
-# a fixed placeholder for now (mirrors StoragePoolType.oversubscription_ratio
-# in libvirt.py: a driver-internal constant, not a per-pool driver_spec
-# field the CLI/API would have to configure).
-RAWSTOR_CAPACITY_GB = 100
-
 
 class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
     """Pool driver for a local hypervisor backed by rawstor volumes.
@@ -204,10 +198,12 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
     def _build_storage_pool(
         self, volumes: tp.Collection[pool_base.MachineVolume]
     ) -> pool_base.ThinStoragePool:
+        info = self._location.info()
         storage_pool = pool_base.ThinStoragePool(
             uuid=self._pool.uuid,
             name=f"rawstor-{self._spec.node}",
-            capacity_usable=RAWSTOR_CAPACITY_GB,
+            capacity_usable=info.total >> 30,  # GB
+            available_actual=(info.total - info.used) >> 30,  # GB
             pool_type="rawstor",
             oversubscription_ratio=1.0,
         )
