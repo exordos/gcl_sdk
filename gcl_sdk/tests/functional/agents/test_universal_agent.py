@@ -16,7 +16,6 @@
 
 import os
 import tempfile
-import typing as tp
 from unittest import mock
 import uuid as sys_uuid
 
@@ -37,7 +36,7 @@ class FooCapDriver(base.AbstractCapabilityDriver):
     list_called = False
     get_called = False
 
-    def get_capabilities(self) -> tp.List[str]:
+    def get_capabilities(self) -> list[str]:
         return ["foo"]
 
     def get(self, resource: models.Resource) -> models.Resource:
@@ -52,27 +51,26 @@ class FooCapDriver(base.AbstractCapabilityDriver):
         self.__class__.update_called = True
         return resource
 
-    def list(self, capability: str) -> tp.List[models.Resource]:
+    def list(self, capability: str) -> list[models.Resource]:
         self.__class__.list_called = True
         return []
 
     def delete(self, resource: models.Resource) -> None:
         self.__class__.delete_called = True
-        pass
 
 
 class FooFactDriver(base.AbstractFactDriver):
     get_called = False
     list_called = False
 
-    def get_facts(self) -> tp.List[str]:
+    def get_facts(self) -> list[str]:
         return ["foo"]
 
     def get(self, resource: models.Resource) -> models.Resource:
         self.__class__.get_called = True
         return resource
 
-    def list(self, fact: str) -> tp.List[models.Resource]:
+    def list(self, fact: str) -> list[models.Resource]:
         self.__class__.list_called = True
         return []
 

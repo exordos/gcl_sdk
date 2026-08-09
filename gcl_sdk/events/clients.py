@@ -126,13 +126,7 @@ class HttpEventClient(AbstractEventClient, bzk_common.RESTClientMixIn):
         body = {
             "uuid": str(event.uuid),
             "exchange": exchange,
-            "event_type": (
-                "/%s/event_types/%s"
-                % (
-                    self._version,
-                    event.event_type.uuid,
-                )
-            ),
+            "event_type": (f"/{self._version}/event_types/{event.event_type.uuid}"),
             "event_params": event.event_data.to_simple_dict(),
             "project_id": self._project_id,
         }

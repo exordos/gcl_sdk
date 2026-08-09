@@ -32,7 +32,7 @@ class SdkContextMiddleware(mw_contexts.ContextMiddleware):
         application,
         context_class=contexts.SdkEncryptionInformationContext,
         context_kwargs=None,
-        skip_sdk_endpoints: list = None,
+        skip_sdk_endpoints: list | None = None,
     ):
         """
         Initialize the middleware with a context class.
@@ -85,13 +85,12 @@ class SdkContextMiddleware(mw_contexts.ContextMiddleware):
         if (
             not self._should_skip_sdk(req)
             and ctx.encryption_information.is_requires_encryption()
-        ):
-            if req.content_type != packers.ENCRYPTED_JSON_CONTENT_TYPE:
-                return req.ResponseClass(
-                    status=http_client.BAD_REQUEST,
-                    json=mw_errors.exception2dict(
-                        ValueError("Response content type should be encrypted")
-                    ),
-                )
+        ) and req.content_type != packers.ENCRYPTED_JSON_CONTENT_TYPE:
+            return req.ResponseClass(
+                status=http_client.BAD_REQUEST,
+                json=mw_errors.exception2dict(
+                    ValueError("Response content type should be encrypted")
+                ),
+            )
 
         return super()._get_response(ctx, req)

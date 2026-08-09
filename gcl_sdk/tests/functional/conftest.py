@@ -90,19 +90,17 @@ class DummyInstance(
         return False
 
     @classmethod
-    def get_new_instances(cls, limit: int = c.DEF_SQL_LIMIT) -> list["DummyInstance"]:
+    def get_new_instances(cls, limit: int = c.DEF_SQL_LIMIT) -> list[DummyInstance]:
         return cls.__dummy_storage__["new"]
 
     @classmethod
-    def get_updated_instances(
-        cls, limit: int = c.DEF_SQL_LIMIT
-    ) -> list["DummyInstance"]:
+    def get_updated_instances(cls, limit: int = c.DEF_SQL_LIMIT) -> list[DummyInstance]:
         return cls.__dummy_storage__["updated"]
 
     @classmethod
     def get_deleted_instances(
         cls, limit: int = c.DEF_SQL_LIMIT
-    ) -> list["models.TargetResource"]:
+    ) -> list[models.TargetResource]:
         return cls.__dummy_storage__["deleted"]
 
 
@@ -195,11 +193,7 @@ def orch_api_wsgi_app():
 
         agents = routes.route(orch_routes.UniversalAgentsRoute)
 
-    setattr(
-        OrchApiApp,
-        "v1",
-        routes.route(ApiEndpointRoute),
-    )
+    OrchApiApp.v1 = routes.route(ApiEndpointRoute)
 
     return middlewares.attach_middlewares(
         applications.OpenApiApplication(
@@ -235,11 +229,7 @@ def status_api_wsgi_app():
         node_verifiers = routes.route(status_routes.NodeVerifiersRoute)
         kind = routes.route(status_routes.KindRoute)
 
-    setattr(
-        StatusApiApp,
-        "v1",
-        routes.route(ApiEndpointRoute),
-    )
+    StatusApiApp.v1 = routes.route(ApiEndpointRoute)
 
     return middlewares.attach_middlewares(
         applications.OpenApiApplication(
@@ -273,11 +263,7 @@ def audit_api_wsgi_app():
 
         audit = routes.route(audit_routes.AuditRoute)
 
-    setattr(
-        AuditApiApp,
-        "v1",
-        routes.route(ApiEndpointRoute),
-    )
+    AuditApiApp.v1 = routes.route(ApiEndpointRoute)
 
     return middlewares.attach_middlewares(
         applications.OpenApiApplication(

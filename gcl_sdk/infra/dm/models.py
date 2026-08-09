@@ -96,11 +96,10 @@ class AbstractDiskSpec(
     ) -> tp.Collection[Volume]:
         """Lists all volumes that should be created or modified on the node."""
         self.validate()
-        return tuple()
+        return ()
 
     def validate(self) -> None:
         """Validate the disk spec."""
-        pass
 
 
 class RootDiskSpec(AbstractDiskSpec):
@@ -128,7 +127,7 @@ class RootDiskSpec(AbstractDiskSpec):
         self.validate()
 
         if node.node_type == pc.NodeType.HW:
-            return tuple()
+            return ()
 
         # Use `root-volume` name for backward compatibility
         volume_uuid = sys_uuid.uuid5(node.uuid, "root-volume")
@@ -239,11 +238,11 @@ class DisksSpec(AbstractDiskSpec):
         self.validate()
 
         if node.node_type == pc.NodeType.HW:
-            return tuple()
+            return ()
 
         # FIXME(akremenetsky): It's fine for diskless systems
         if len(self.disks) == 0:
-            return tuple()
+            return ()
 
         # Prepare the root disk
         root = self.disks[0]
@@ -370,11 +369,10 @@ class AbstractSetDiskSpec(
     ) -> tp.Collection[Volume]:
         """Lists all volumes that should be created or modified on the node."""
         self.validate()
-        return tuple()
+        return ()
 
     def validate(self) -> None:
         """Validate the disk spec."""
-        pass
 
     def node_spec(self, node_set: NodeSet, node: sys_uuid.UUID) -> AbstractDiskSpec:
         """Lists all volumes that should be created or modified on the node."""
@@ -392,7 +390,7 @@ class SetRootDiskSpec(RootDiskSpec, AbstractSetDiskSpec):
     ) -> tp.Collection[Volume]:
         """Lists all volumes that should be created or modified on the node."""
         self.validate()
-        return tuple()
+        return ()
 
     def node_spec(self, node_set: NodeSet, node: sys_uuid.UUID) -> AbstractDiskSpec:
         """Return the disk specification for the node."""
@@ -436,7 +434,7 @@ class SetDisksSpec(DisksSpec, AbstractSetDiskSpec):
     ) -> tp.Collection[Volume]:
         """Lists all volumes that should be created or modified on the node."""
         self.validate()
-        return tuple()
+        return ()
 
     def node_spec(self, node_set: NodeSet, node: sys_uuid.UUID) -> AbstractDiskSpec:
         """Return the disk specification for the node."""
@@ -516,11 +514,11 @@ class NodeSet(
 
 
 class AbstractTarget(types_dynamic.AbstractKindModel, ra_models.SimpleViewMixin):
-    def target_nodes(self) -> tp.List[sys_uuid.UUID]:
+    def target_nodes(self) -> list[sys_uuid.UUID]:
         """Returns list of target nodes where config should be deployed."""
         return []
 
-    def owners(self) -> tp.List[sys_uuid.UUID]:
+    def owners(self) -> list[sys_uuid.UUID]:
         """Return list of owners objects where config bind to.
 
         For instance, the simplest case if an ordinary node config.
@@ -546,13 +544,13 @@ class NodeTarget(AbstractTarget):
     node = properties.property(ra_types.UUID(), required=True)
 
     @classmethod
-    def from_node(cls, node: sys_uuid.UUID) -> "NodeTarget":
+    def from_node(cls, node: sys_uuid.UUID) -> NodeTarget:
         return cls(node=node)
 
-    def target_nodes(self) -> tp.List[sys_uuid.UUID]:
+    def target_nodes(self) -> list[sys_uuid.UUID]:
         return [self.node]
 
-    def owners(self) -> tp.List[sys_uuid.UUID]:
+    def owners(self) -> list[sys_uuid.UUID]:
         """It's the simplest case with an ordinary node config.
 
         In that case, the owner and target is the node itself.
@@ -567,7 +565,7 @@ class TextBodyConfig(AbstractContentor):
     content = properties.property(ra_types.String(), required=True, default="")
 
     @classmethod
-    def from_text(cls, text: str) -> "TextBodyConfig":
+    def from_text(cls, text: str) -> TextBodyConfig:
         return cls(content=text)
 
     def render(self) -> str:
@@ -597,7 +595,7 @@ class OnChangeShell(types_dynamic.AbstractKindModel, ra_models.SimpleViewMixin):
     )
 
     @classmethod
-    def from_command(cls, command: str) -> "OnChangeShell":
+    def from_command(cls, command: str) -> OnChangeShell:
         return cls(command=command)
 
 
@@ -819,7 +817,7 @@ class AbstractVariableSetter(
 ):
     """The abstract model for variable setter."""
 
-    def set_value(self, variable: "Variable") -> None:
+    def set_value(self, variable: Variable) -> None:
         """Determine a value for the variable and set it.
 
         If the value cannot be determined, the method raises an exception.

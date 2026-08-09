@@ -75,10 +75,10 @@ class Border(border_models.Border, meta.MetaDataPlaneModel):
                 continue
             if rule.get("mode") == "snat" and rule.get("snat_to"):
                 snat_lines.append(
-                    "        ip saddr %s snat to %s" % (src, rule["snat_to"])
+                    "        ip saddr {} snat to {}".format(src, rule["snat_to"])
                 )
             else:
-                snat_lines.append("        ip saddr %s masquerade" % src)
+                snat_lines.append(f"        ip saddr {src} masquerade")
 
         dnat_lines = []
         for fwd in self.forwards or []:
@@ -90,43 +90,42 @@ class Border(border_models.Border, meta.MetaDataPlaneModel):
                 continue
             match = ""
             if fwd.get("public_ip"):
-                match += "ip daddr %s " % fwd["public_ip"]
+                match += "ip daddr {} ".format(fwd["public_ip"])
             else:
                 # Only intercept traffic addressed to this box. A bare dport
                 # match also catches *transit* traffic routed through the
                 # border (e.g. a guest behind it talking to an external
                 # host on the same port) and hairpins it back to to_host.
                 match += "fib daddr type local "
-            match += "%s dport %s" % (proto, listen_port)
-            dnat_lines.append("        %s dnat to %s:%s" % (match, to_host, to_port))
+            match += f"{proto} dport {listen_port}"
+            dnat_lines.append(f"        {match} dnat to {to_host}:{to_port}")
             # Out-of-path DNAT (the target does not route its replies back
             # through this border, e.g. a dedicated VM gateway forwarding
             # to a host on the same L2): full-NAT the flow so replies
             # return here instead of racing to the client directly.
             if fwd.get("full_nat"):
                 snat_lines.append(
-                    "        ip daddr %s %s dport %s masquerade"
-                    % (to_host, proto, to_port)
+                    f"        ip daddr {to_host} {proto} dport {to_port} masquerade"
                 )
 
         return (
-            "add table ip %(t)s\n"
-            "delete table ip %(t)s\n"
-            "table ip %(t)s {\n"
-            "    chain prerouting {\n"
+            "add table ip {t}\n"
+            "delete table ip {t}\n"
+            "table ip {t} {{\n"
+            "    chain prerouting {{\n"
             "        type nat hook prerouting priority dstnat; policy accept;\n"
-            "%(dnat)s\n"
-            "    }\n"
-            "    chain postrouting {\n"
+            "{dnat}\n"
+            "    }}\n"
+            "    chain postrouting {{\n"
             "        type nat hook postrouting priority srcnat; policy accept;\n"
-            "%(snat)s\n"
-            "    }\n"
-            "}\n"
-        ) % {
-            "t": NFT_TABLE,
-            "dnat": "\n".join(dnat_lines),
-            "snat": "\n".join(snat_lines),
-        }
+            "{snat}\n"
+            "    }}\n"
+            "}}\n"
+        ).format(
+            t=NFT_TABLE,
+            dnat="\n".join(dnat_lines),
+            snat="\n".join(snat_lines),
+        )
 
     def _forward_accept_specs(self) -> list[list[str]]:
         """iptables rule bodies accepting the inbound forwarded connections.

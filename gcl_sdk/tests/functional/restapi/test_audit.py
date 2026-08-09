@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+from unittest import mock
 from urllib.parse import urljoin
 import uuid as sys_uuid
 
@@ -23,7 +24,6 @@ from bazooka import exceptions as bzk_exceptions
 from gcl_iam import exceptions as iam_exceptions
 from gcl_iam.drivers import DummyDriver
 from gcl_iam.enforcers import Enforcer
-from mock import mock
 from oslo_config import cfg
 import pytest
 import requests
@@ -119,7 +119,7 @@ class TestAuditApi:
             "uuid": str(audit.uuid),
         }
         assert response.status_code == 200
-        for key in expected.keys():
+        for key in expected:
             assert output[key] == expected[key]
         assert output["snapshot"]["uuid"] == str(agent_a.uuid)
 
@@ -212,7 +212,7 @@ class TestAuditApi:
     def test_audit_list_without_permission_forbidden(
         self, audit_api: test_utils.RestServiceTestCase
     ):
-        self._set_context(permissions=tuple(), project_id=PROJECT_ID)
+        self._set_context(permissions=(), project_id=PROJECT_ID)
         controller = audit_controllers.AuditController(request=mock.Mock())
 
         with pytest.raises(iam_exceptions.PolicyNotAuthorized):

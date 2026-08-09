@@ -328,8 +328,8 @@ class CollectionBaseClient:
 
 
 class CollectionBaseModelClient(CollectionBaseClient):
-    __model__: tp.Type[models.SimpleViewMixin] = None
-    __resource_client__: tp.Type["ResourceBaseModelClient"] = None
+    __model__: type[models.SimpleViewMixin] = None
+    __resource_client__: type[ResourceBaseModelClient] = None
     __parent__: str | None = None
 
     def __init__(
@@ -346,7 +346,7 @@ class CollectionBaseModelClient(CollectionBaseClient):
     def get_collection(self) -> str:
         return self._collection_path
 
-    def __call__(self, resource_uuid: sys_uuid.UUID) -> "ResourceBaseModelClient":
+    def __call__(self, resource_uuid: sys_uuid.UUID) -> ResourceBaseModelClient:
         if self.__resource_client__ is None:
             raise ValueError("Resource client is not defined")
         return self.__resource_client__(self, resource_uuid, self._http_client)
@@ -363,7 +363,7 @@ class CollectionBaseModelClient(CollectionBaseClient):
         ]
 
     def create(self, object: models.SimpleViewMixin) -> models.SimpleViewMixin:
-        skip = tuple() if self.__parent__ is None else (self.__parent__,)
+        skip = () if self.__parent__ is None else (self.__parent__,)
         data = object.dump_to_simple_view(skip=skip)
         return self.__model__.restore_from_simple_view(
             **super().create(self.get_collection(), data)
@@ -404,7 +404,7 @@ class ResourceBaseModelClient:
     ACTIONS_KEY = "actions"
     INVOKE_KEY = "invoke"
 
-    __model__: tp.Type[models.SimpleViewMixin] = None
+    __model__: type[models.SimpleViewMixin] = None
 
     def __init__(
         self,

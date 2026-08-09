@@ -14,7 +14,6 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import typing as tp
 import uuid as sys_uuid
 
 from restalchemy.dm import properties
@@ -26,7 +25,7 @@ from gcl_sdk.agents.universal.drivers import meta
 
 
 def _make_resource(
-    kind: str, uuid: tp.Optional[sys_uuid.UUID] = None, value: tp.Optional[dict] = None
+    kind: str, uuid: sys_uuid.UUID | None = None, value: dict | None = None
 ) -> models.Resource:
     uuid = uuid or sys_uuid.uuid4()
     value = value or {"uuid": str(uuid), "foo": 1}
@@ -38,12 +37,12 @@ def _make_resource(
 class DummyCoordinatorModel(meta.MetaCoordinatorDataPlaneModel):
     """A lightweight DP model for testing coordinator driver flows."""
 
-    call_log: tp.Dict[str, tp.List[str]] = {}
+    call_log: dict[str, list[str]] = {}
 
     foo = properties.property(types.Integer(), default=0)
     invalid_dp = properties.property(types.Boolean(), default=False)
 
-    def get_meta_model_fields(self) -> tp.Optional[tp.Set[str]]:
+    def get_meta_model_fields(self) -> set[str] | None:
         return None
 
     def _log(self, action: str) -> None:

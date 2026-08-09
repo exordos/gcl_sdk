@@ -44,7 +44,6 @@ class UniversalAgentSchedulerService(looper_basic.BasicService):
         capabilities_in = []
         filters_in = []
         filters_like = []
-        filters = []
 
         # Prepare like and in filters based on capabilities
         for cap in self._capabilities:
@@ -59,7 +58,7 @@ class UniversalAgentSchedulerService(looper_basic.BasicService):
 
         if not filters_like and not filters_in:
             LOG.debug("No filters for target resources")
-            return
+            return []
 
         filters = dm_filters.AND(
             {"agent": dm_filters.Is(None)},

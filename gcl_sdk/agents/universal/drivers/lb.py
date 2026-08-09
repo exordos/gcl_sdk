@@ -583,9 +583,9 @@ map $http_upgrade $connection_upgrade {
             else:
                 self._download_dirs_futures[p] = TPOOL.submit(self._download_url, p, u)
         # Clean orphan dirs
-        actual_ondisk_dirs = set(
+        actual_ondisk_dirs = {
             entry.name for entry in os.scandir(DOWNLOAD_DIR) if entry.is_dir()
-        )
+        }
         for d in actual_ondisk_dirs - target_paths_set:
             self._download_dirs_futures[d] = TPOOL.submit(self._clean_path, d)
 

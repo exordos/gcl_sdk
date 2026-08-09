@@ -16,7 +16,6 @@
 
 import json
 import os
-import typing as tp
 import uuid as sys_uuid
 
 import pytest
@@ -29,7 +28,7 @@ from gcl_sdk.agents.universal.drivers import meta
 
 
 def _make_resource(
-    kind: str, uuid: tp.Optional[sys_uuid.UUID] = None, value: tp.Optional[dict] = None
+    kind: str, uuid: sys_uuid.UUID | None = None, value: dict | None = None
 ) -> models.Resource:
     uuid = uuid or sys_uuid.uuid4()
     value = value or {"uuid": str(uuid), "foo": 1}
@@ -44,14 +43,14 @@ class DummyModel(meta.MetaDataPlaneModel):
     It records calls to DP-like methods in a class-level log.
     """
 
-    call_log: tp.Dict[str, tp.List[str]] = {}
+    call_log: dict[str, list[str]] = {}
 
     # Custom fields that may appear in resource.value
     foo = properties.property(types.Integer(), default=0)
     raise_on_restore = properties.property(types.Boolean(), default=False)
     invalid_dp = properties.property(types.Boolean(), default=False)
 
-    def get_meta_model_fields(self) -> tp.Optional[tp.Set[str]]:
+    def get_meta_model_fields(self) -> set[str] | None:
         # Save all fields into meta file (including any service flags)
         return None
 

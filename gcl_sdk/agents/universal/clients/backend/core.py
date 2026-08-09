@@ -66,7 +66,7 @@ class GCRestApiBackendClient(rest.RestApiBackendClient):
         if kind not in target_fields or not target_fields[kind]:
             return {}
 
-        return {"uuid": tuple(str(u) for u in target_fields[kind].keys())}
+        return {"uuid": tuple(str(u) for u in target_fields[kind])}
 
     def create(self, resource: models.Resource) -> dict[str, tp.Any]:
         """Creates the resource. Returns the created resource."""
@@ -138,7 +138,7 @@ class GCUsersRestApiBackendClient(rest.RestApiBackendClient):
         if kind not in target_fields or not target_fields[kind]:
             return {}
 
-        return {"uuid": tuple(str(u) for u in target_fields[kind].keys())}
+        return {"uuid": tuple(str(u) for u in target_fields[kind])}
 
     def _enrich_users(self, users: list[dict[str, tp.Any]]) -> list[dict[str, tp.Any]]:
         """Enrich users with additional fields."""

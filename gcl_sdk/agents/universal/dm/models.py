@@ -142,13 +142,13 @@ class Payload(models.Model, models.SimpleViewMixin):
         return self._resources(self.capabilities, capability)
 
     def add_caps_resource(
-        self, resource: Resource, skip_fields: tuple[str, ...] = tuple()
+        self, resource: Resource, skip_fields: tuple[str, ...] = ()
     ) -> None:
         """Add a resource to the capabilities basket."""
         self._add_resource(self.capabilities, resource, skip_fields)
 
     def add_caps_resources(
-        self, resources: list[Resource], skip_fields: tuple[str, ...] = tuple()
+        self, resources: list[Resource], skip_fields: tuple[str, ...] = ()
     ) -> None:
         """Add resources to the capabilities basket."""
         self._add_resources(self.capabilities, resources, skip_fields)
@@ -160,13 +160,13 @@ class Payload(models.Model, models.SimpleViewMixin):
         return self._resources(self.facts, fact)
 
     def add_facts_resource(
-        self, resource: Resource, skip_fields: tuple[str, ...] = tuple()
+        self, resource: Resource, skip_fields: tuple[str, ...] = ()
     ) -> None:
         """Add a resource to the facts basket."""
         self._add_resource(self.facts, resource, skip_fields)
 
     def add_facts_resources(
-        self, resources: list[Resource], skip_fields: tuple[str, ...] = tuple()
+        self, resources: list[Resource], skip_fields: tuple[str, ...] = ()
     ) -> None:
         """Add resources to the facts basket."""
         self._add_resources(self.facts, resources, skip_fields)
@@ -213,7 +213,7 @@ class Payload(models.Model, models.SimpleViewMixin):
         cls,
         dest: dict,
         resource: Resource,
-        skip_fields: tuple[str, ...] = tuple(),
+        skip_fields: tuple[str, ...] = (),
     ) -> None:
         try:
             dest[resource.kind]["resources"].append(
@@ -229,7 +229,7 @@ class Payload(models.Model, models.SimpleViewMixin):
         cls,
         dest: dict,
         resources: list[Resource],
-        skip_fields: tuple[str, ...] = tuple(),
+        skip_fields: tuple[str, ...] = (),
     ) -> None:
         for resource in resources:
             cls._add_resource(dest, resource, skip_fields)
@@ -372,7 +372,7 @@ class UniversalAgent(
     @classmethod
     def have_capabilities(
         cls, capabilities: tp.Collection[str]
-    ) -> dict[str, list["UniversalAgent"]]:
+    ) -> dict[str, list[UniversalAgent]]:
         if not capabilities:
             return {}
 
@@ -380,14 +380,14 @@ class UniversalAgent(
 
         expression = (
             "SELECT * FROM ua_agents ua  "
-            "WHERE ua.status = '{status}' AND "
+            f"WHERE ua.status = '{c.AgentStatus.ACTIVE.value}' AND "
             "      ua.capabilities->'capabilities' ?| "
-            "  ARRAY[{caps}]; "
-        ).format(status=c.AgentStatus.ACTIVE.value, caps=caps_str)
+            f"  ARRAY[{caps_str}]; "
+        )
 
         engine = engines.engine_factory.get_engine()
         with engine.session_manager() as session:
-            curs = session.execute(expression, tuple())
+            curs = session.execute(expression, ())
             response = curs.fetchall()
 
         if not response:
@@ -434,7 +434,7 @@ class NodeEncryptionKey(
         node: sys_uuid.UUID,
         private_key: str | None = None,
         session=None,
-    ) -> "NodeEncryptionKey":
+    ) -> NodeEncryptionKey:
         """Return the node's encryption key, provisioning one if missing.
 
         Two callers racing to provision the same node uuid will not
@@ -654,7 +654,7 @@ class Resource(
     def fetch_by_uuids(
         cls,
         uuids: tp.Collection[sys_uuid.UUID],
-        kinds: tp.Collection[str] = tuple(),
+        kinds: tp.Collection[str] = (),
     ) -> dict[RI, Resource]:
         filters = {"uuid": dm_filters.In(u for u in uuids)}
 
@@ -750,7 +750,7 @@ class ResourceMixin(models.SimpleViewMixin):
         )
 
     @classmethod
-    def from_ua_resource(cls, resource: Resource) -> "ResourceMixin":
+    def from_ua_resource(cls, resource: Resource) -> ResourceMixin:
         return cls.restore_from_simple_view(**resource.value)
 
 
@@ -838,7 +838,7 @@ class TargetResourceSQLStorableMixin:
         clause: dict[str, dm_filters.AbstractClause] | None = None,
         limit: int = 100,
         session=None,
-    ) -> list["TargetResourceSQLStorableMixin"]:
+    ) -> list[TargetResourceSQLStorableMixin]:
         if not clause:
             raw_clause = ""
         else:
@@ -848,18 +848,18 @@ class TargetResourceSQLStorableMixin:
 
         expression = (
             "SELECT "
-            "  {table}.uuid as uuid "
-            "FROM {table} LEFT JOIN "
+            f"  {table}.uuid as uuid "
+            f"FROM {table} LEFT JOIN "
             "( "
             "  SELECT "
             "    uuid "
             "  FROM ua_target_resources "
             "  WHERE kind = %s "
             ") AS ua_target_resources_by_kind "
-            "ON {table}.uuid = ua_target_resources_by_kind.uuid "
-            "WHERE ua_target_resources_by_kind.uuid is NULL {clause}"
+            f"ON {table}.uuid = ua_target_resources_by_kind.uuid "
+            f"WHERE ua_target_resources_by_kind.uuid is NULL {raw_clause}"
             "LIMIT %s;"
-        ).format(table=table, clause=raw_clause)
+        )
         params = (kind, clause_value, limit) if raw_clause else (kind, limit)
 
         response = cls._execute_expression(expression, params, session)
@@ -878,7 +878,7 @@ class TargetResourceSQLStorableMixin:
         clause: dict[str, dm_filters.AbstractClause] | None = None,
         limit: int = 100,
         session=None,
-    ) -> list["TargetResourceSQLStorableMixin"]:
+    ) -> list[TargetResourceSQLStorableMixin]:
         if not clause:
             raw_clause = ""
         else:
@@ -888,13 +888,13 @@ class TargetResourceSQLStorableMixin:
 
         expression = (
             "SELECT "
-            "  {table}.uuid as uuid "
-            "FROM {table} INNER JOIN ua_target_resources ON  "
-            "  {table}.uuid = ua_target_resources.uuid "
-            "WHERE {table}.updated_at != ua_target_resources.tracked_at "
-            "AND ua_target_resources.kind = %s {clause}"
+            f"  {table}.uuid as uuid "
+            f"FROM {table} INNER JOIN ua_target_resources ON  "
+            f"  {table}.uuid = ua_target_resources.uuid "
+            f"WHERE {table}.updated_at != ua_target_resources.tracked_at "
+            f"AND ua_target_resources.kind = %s {raw_clause}"
             "LIMIT %s;"
-        ).format(table=table, clause=raw_clause)
+        )
         params = (kind, clause_value, limit) if raw_clause else (kind, limit)
 
         response = cls._execute_expression(expression, params, session)
@@ -912,12 +912,12 @@ class TargetResourceSQLStorableMixin:
         expression = (
             "SELECT "
             "  ua_target_resources.uuid as uuid "
-            "FROM ua_target_resources LEFT JOIN {table} ON  "
-            "  ua_target_resources.uuid = {table}.uuid  "
+            f"FROM ua_target_resources LEFT JOIN {table} ON  "
+            f"  ua_target_resources.uuid = {table}.uuid  "
             "WHERE ua_target_resources.kind = %s "
-            "AND {table}.uuid is NULL "
+            f"AND {table}.uuid is NULL "
             "LIMIT %s;"
-        ).format(table=table)
+        )
         params = (kind, limit)
 
         response = cls._execute_expression(expression, params, session)
@@ -939,7 +939,7 @@ class TargetResourceSQLStorableMixin:
         clause: dict[str, dm_filters.AbstractClause],
         limit: int = 100,
         session=None,
-    ) -> list["ResourcePair"]:
+    ) -> list[ResourcePair]:
         clause_value = next(iter(clause.values())).value
         sql_clause = cls._to_sql_clause(clause)
         clause = f"AND {table}.{sql_clause.construct_expression()} "
@@ -947,11 +947,11 @@ class TargetResourceSQLStorableMixin:
         expression = (
             "SELECT "
             "  * "
-            "FROM ua_outdated_resources_view INNER JOIN {table} ON  "
-            "  ua_outdated_resources_view.uuid = {table}.uuid "
-            "WHERE ua_outdated_resources_view.kind = %s {clause} "
+            f"FROM ua_outdated_resources_view INNER JOIN {table} ON  "
+            f"  ua_outdated_resources_view.uuid = {table}.uuid "
+            f"WHERE ua_outdated_resources_view.kind = %s {clause} "
             "LIMIT %s;"
-        ).format(table=table, clause=clause)
+        )
         params = (kind, clause_value, limit)
 
         response = cls._execute_expression(expression, params, session)
@@ -980,7 +980,7 @@ class ResourcePairView(models.ModelWithID, orm.SQLStorableMixin):
         prefetch=True,
     )
 
-    def to_pair(self) -> "ResourcePair":
+    def to_pair(self) -> ResourcePair:
         return ResourcePair(
             target_resource=self.target_resource,
             actual_resource=self.actual_resource,
@@ -990,8 +990,8 @@ class ResourcePairView(models.ModelWithID, orm.SQLStorableMixin):
     def fetch_by_uuids(
         cls,
         uuids: tp.Collection[sys_uuid.UUID],
-        kinds: tp.Collection[str] = tuple(),
-    ) -> list["ResourcePairView"]:
+        kinds: tp.Collection[str] = (),
+    ) -> list[ResourcePairView]:
         filters = {"uuid": dm_filters.In(u for u in uuids)}
 
         if len(kinds) == 1:
@@ -1005,7 +1005,7 @@ class ResourcePairView(models.ModelWithID, orm.SQLStorableMixin):
     def fetch_pairs_by_uuids(
         cls,
         uuids: tp.Collection[sys_uuid.UUID],
-        kinds: tp.Collection[str] = tuple(),
+        kinds: tp.Collection[str] = (),
     ) -> list[ResourcePair]:
         views = cls.fetch_by_uuids(uuids, kinds)
         return [view.to_pair() for view in views]
@@ -1026,7 +1026,7 @@ class OutdatedResource(models.ModelWithUUID, orm.SQLStorableMixin):
         required=True,
     )
 
-    def to_pair(self) -> "ResourcePair":
+    def to_pair(self) -> ResourcePair:
         return ResourcePair(
             target_resource=self.target_resource,
             actual_resource=self.actual_resource,
@@ -1083,7 +1083,7 @@ class PlainTrackedResource(
     def fetch_by_watcher_kind(
         cls,
         watcher_kind: str,
-        uuids: tp.Collection[sys_uuid.UUID] = tuple(),
+        uuids: tp.Collection[sys_uuid.UUID] = (),
     ) -> dict[RI, list[TrackedResource]]:
         """Fetch tracked resources by watcher kind.
 
@@ -1325,14 +1325,14 @@ class DependenciesExistReadinessMixin(ReadinessMixin):
 
     def get_readiness_dependencies(
         self,
-    ) -> tp.Collection["ResourceKindAwareMixin" | ResourceIdentifier]:
+    ) -> tp.Collection[ResourceKindAwareMixin | ResourceIdentifier]:
         """Get the dependencies to check readiness.
 
         Returns:
             tp.Collection["ResourceKindAwareMixin" | ResourceIdentifier]:
                 The dependencies to check readiness.
         """
-        return tuple()
+        return ()
 
     def is_ready_to_actualize(self) -> bool:
         """Check if the resource is ready to actualize.
@@ -1343,10 +1343,7 @@ class DependenciesExistReadinessMixin(ReadinessMixin):
         dependencies, dep_resources = self._fetch_dependencies()
 
         # Ensure all dependencies exist
-        if dependencies - dep_resources.keys():
-            return False
-
-        return True
+        return not dependencies - dep_resources.keys()
 
 
 class DependenciesActiveReadinessMixin(DependenciesExistReadinessMixin):
@@ -1428,7 +1425,7 @@ class TargetResourceKindAwareMixin(KindAwareMixin, TargetResourceMixin):
     @classmethod
     def get_one_from_resource_storage(
         cls, uuid: sys_uuid.UUID
-    ) -> "TargetResourceKindAwareMixin":
+    ) -> TargetResourceKindAwareMixin:
         resource = TargetResource.objects.get_one(
             filters={
                 "kind": dm_filters.EQ(cls.get_resource_kind()),
@@ -1439,8 +1436,8 @@ class TargetResourceKindAwareMixin(KindAwareMixin, TargetResourceMixin):
 
     @classmethod
     def get_all_from_resource_storage(
-        cls, filters: tp.Dict[str, tp.Any] | None = None
-    ) -> tuple["TargetResourceKindAwareMixin"]:
+        cls, filters: dict[str, tp.Any] | None = None
+    ) -> tuple[TargetResourceKindAwareMixin]:
         filters = filters.copy() if filters else {}
         filters["kind"] = dm_filters.EQ(cls.get_resource_kind())
 
@@ -1481,7 +1478,7 @@ class InstanceMixin(
         return cls.__tracked_instances_model_map__ is not None
 
     @classmethod
-    def tracked_instance_model(cls, kind: str) -> tp.Type["InstanceMixin"]:
+    def tracked_instance_model(cls, kind: str) -> type[InstanceMixin]:
         """Return the tracked instance model by kind."""
         if not cls._has_model_tracked_instances():
             raise ValueError("The tracked instance model map is not initialized.")
@@ -1510,7 +1507,7 @@ class InstanceMixin(
         cls,
         clause: dict[str, dm_filters.AbstractClause] | None = None,
         limit: int = c.DEF_SQL_LIMIT,
-    ) -> list["InstanceMixin"]:
+    ) -> list[InstanceMixin]:
         kind = cls.get_resource_kind()
         return cls.get_new_entities(cls.__tablename__, kind, clause, limit)
 
@@ -1519,7 +1516,7 @@ class InstanceMixin(
         cls,
         clause: dict[str, dm_filters.AbstractClause] | None = None,
         limit: int = c.DEF_SQL_LIMIT,
-    ) -> list["InstanceMixin"]:
+    ) -> list[InstanceMixin]:
         kind = cls.get_resource_kind()
         return cls.get_updated_entities(cls.__tablename__, kind, clause, limit)
 
@@ -1528,7 +1525,7 @@ class InstanceMixin(
         cls,
         clause: dict[str, dm_filters.AbstractClause],
         limit: int = c.DEF_SQL_LIMIT,
-    ) -> list["ResourcePair"]:
+    ) -> list[ResourcePair]:
         kind = cls.get_resource_kind()
         return cls.get_outdated_entities(cls.__tablename__, kind, clause, limit)
 
@@ -1584,14 +1581,14 @@ class InstanceMixin(
 
     def get_tracked_resources(
         self,
-    ) -> tp.Collection["ResourceKindAwareMixin" | ResourceIdentifier]:
+    ) -> tp.Collection[ResourceKindAwareMixin | ResourceIdentifier]:
         """Return the tracked resources.
 
         Method returns either collection of ResourceKindAwareMixin or
         ResourceIdentifier. If any of resources are changed, a special hooks
         in the UB will be called to actualize the instance.
         """
-        return tuple()
+        return ()
 
 
 class InstanceWithDerivativesMixin(InstanceMixin):
@@ -1642,13 +1639,10 @@ class InstanceWithDerivativesMixin(InstanceMixin):
         Different classes can have different logic to actualize the instance.
         The default implementation is to fetch all derivatives.
         """
-        if cls._has_model_derivatives():
-            return True
-
-        return False
+        return bool(cls._has_model_derivatives())
 
     @classmethod
-    def derivative_model(cls, kind: str) -> tp.Type[TargetResourceKindAwareMixin]:
+    def derivative_model(cls, kind: str) -> type[TargetResourceKindAwareMixin]:
         """Return the derivative model by kind."""
         if cls.__derivative_model_map__ is None:
             raise ValueError("The derivative model map is not initialized.")
