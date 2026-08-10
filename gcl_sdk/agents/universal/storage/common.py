@@ -64,7 +64,7 @@ class JsonFileStorageSingleton(dict):
         os.replace(tmp_file, self._storage_path)
 
     @classmethod
-    def get_instance(cls, storage_path: str) -> "JsonFileStorageSingleton":
+    def get_instance(cls, storage_path: str) -> JsonFileStorageSingleton:
         """Get or create a singleton instance for the given storage path."""
         if storage_path in cls._instances:
             return cls._instances[storage_path]

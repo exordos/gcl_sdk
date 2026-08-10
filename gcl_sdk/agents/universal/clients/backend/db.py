@@ -32,7 +32,7 @@ LOG = logging.getLogger(__name__)
 
 
 class ModelSpec(tp.NamedTuple):
-    model: tp.Type[ra_storage.AbstractStorableMixin]
+    model: type[ra_storage.AbstractStorableMixin]
     kind: str
 
     # Special case if the filters are `None` it means the target fields
@@ -58,7 +58,7 @@ class ModelSpec(tp.NamedTuple):
     @classmethod
     def from_collection(
         cls,
-        collection: tp.Collection[tuple[tp.Type, str]],
+        collection: tp.Collection[tuple[type, str]],
         filters: dict[str, dm_filters.AbstractClause],
     ) -> tuple[ModelSpec, ...]:
         return tuple(
@@ -199,7 +199,7 @@ class DatabaseBackendClient(base.AbstractBackendClient):
         updated_obj = model_spec.model.from_ua_resource(resource)
 
         # Update the object
-        for field_name in resource.value.keys():
+        for field_name in resource.value:
             prop = obj.properties.get(field_name)
             if not prop or prop.is_read_only():
                 continue

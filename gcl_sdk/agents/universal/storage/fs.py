@@ -84,7 +84,6 @@ class TargetFieldsFileStorage(base.AbstractTargetFieldsStorage):
     def load(self) -> None:
         """Load the storage."""
         # Nothing to do. It is loaded on init.
-        pass
 
     def persist(self) -> None:
         """Persist the storage."""

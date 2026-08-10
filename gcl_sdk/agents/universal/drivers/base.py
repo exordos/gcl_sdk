@@ -69,7 +69,6 @@ class AbstractCapabilityDriver(abc.ABC):
             start -> [start_capability -> list -> [create | update | delete]* -> \
                 finalize_capability]* -> finalize
         """
-        pass
 
     def finalize_capability(self, capability: str) -> None:
         """Perform `capability` finalization.
@@ -82,7 +81,6 @@ class AbstractCapabilityDriver(abc.ABC):
             start -> [start_capability -> list -> [create | update | delete]* -> \
                 finalize_capability]* -> finalize
         """
-        pass
 
     def start(self) -> None:
         """Perform some initialization before starting any operations.
@@ -93,7 +91,6 @@ class AbstractCapabilityDriver(abc.ABC):
             start -> [start_capability -> list -> [create | update | delete]* -> \
                 finalize_capability]* -> finalize
         """
-        pass
 
     def finalize(self) -> None:
         """Perform some finalization after finishing all operations.
@@ -104,7 +101,6 @@ class AbstractCapabilityDriver(abc.ABC):
             start -> [start_capability -> list -> [create | update | delete]* -> \
                 finalize_capability]* -> finalize
         """
-        pass
 
 
 class AbstractFactDriver(abc.ABC):

@@ -101,7 +101,6 @@ class GuestMachineMetaModel(meta.MetaDataPlaneModel):
     def delete_from_dp(self) -> None:
         """It's not applicable for the guest machine."""
         # Just do nothing.
-        pass
 
     def _save_network_settings(self) -> None:
         """Save and convert netplan settings to JSON files.

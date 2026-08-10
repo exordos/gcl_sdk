@@ -16,8 +16,6 @@
 
 from __future__ import annotations
 
-import typing as tp
-
 from restalchemy.common import contexts as ra_contexts
 
 from gcl_sdk.agents.universal.api import packers
@@ -28,7 +26,7 @@ class SdkEncryptionInformationContext(ra_contexts.Context):
         self,
         request,
         engine_name: str | None = None,
-        encryption_information_class: tp.Type[
+        encryption_information_class: type[
             packers.EncryptionInformation
         ] = packers.EncryptionInformation,
     ):

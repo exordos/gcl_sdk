@@ -245,7 +245,7 @@ class PaaSBuilder(builder.UniversalBuilderService):
         self,
         instance: (ua_models.InstanceMixin | ua_models.InstanceWithDerivativesMixin),
         resource: ua_models.TargetResource,
-        derivatives: tp.Collection[ua_models.TargetResource] = tuple(),
+        derivatives: tp.Collection[ua_models.TargetResource] = (),
     ) -> None:
         """The hook is performed after saving instance resource.
 
@@ -280,7 +280,7 @@ class PaaSBuilder(builder.UniversalBuilderService):
         self,
         instance: ua_models.InstanceMixin,
         resource: ua_models.TargetResource,
-        derivatives: tp.Collection[ua_models.TargetResource] = tuple(),
+        derivatives: tp.Collection[ua_models.TargetResource] = (),
     ) -> None:
         """The hook is performed after updating instance resource."""
         super().post_update_instance_resource(instance, resource, derivatives)

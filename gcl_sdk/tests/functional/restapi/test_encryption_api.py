@@ -77,11 +77,7 @@ def orch_api_encrypted_wsgi_app():
 
         agents = routes.route(orch_routes.UniversalAgentsRoute)
 
-    setattr(
-        OrchApiApp,
-        "v1",
-        routes.route(ApiEndpointRoute),
-    )
+    OrchApiApp.v1 = routes.route(ApiEndpointRoute)
 
     return middlewares.attach_middlewares(
         applications.OpenApiApplication(
@@ -111,11 +107,7 @@ def status_api_encrypted_wsgi_app():
         agents = routes.route(status_routes.UniversalAgentsRoute)
         kind = routes.route(status_routes.KindRoute)
 
-    setattr(
-        StatusApiApp,
-        "v1",
-        routes.route(ApiEndpointRoute),
-    )
+    StatusApiApp.v1 = routes.route(ApiEndpointRoute)
 
     return middlewares.attach_middlewares(
         applications.OpenApiApplication(

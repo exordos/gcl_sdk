@@ -42,7 +42,7 @@ class KindCollection(base_storage.AbstractObjectCollection):
 
         engine = engines.engine_factory.get_engine()
         with engine.session_manager() as session:
-            curs = session.execute(expression, tuple())
+            curs = session.execute(expression, ())
             response = curs.fetchall()
 
         return [k["kind"] for k in response]

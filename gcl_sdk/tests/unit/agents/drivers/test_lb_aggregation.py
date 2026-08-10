@@ -162,7 +162,7 @@ def test_catch_all_vhost_is_the_explicit_default_server(shared_meta):
 def test_only_one_default_server_per_port(shared_meta):
     # Two aggregated catch-alls on one port must not render two
     # default_server flags (nginx would refuse the whole config).
-    lb_a, lb_b = shared_meta
+    lb_a, _lb_b = shared_meta
     lb_a.vhosts[0]["domains"] = ["_"]
     view_b = lb_a._common_storage["paas_lb_agent"]["resources"][str(UUID_B)]
     view_b["vhosts"][0]["domains"] = ["_"]

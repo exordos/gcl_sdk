@@ -101,7 +101,7 @@ class ResourcesClient(base.CollectionBaseModelClient):
         self._drop_kind_ref(resource)
         return resource
 
-    def filter(self, **filters: tp.Dict[str, tp.Any]) -> list[models.Resource]:
+    def filter(self, **filters: dict[str, tp.Any]) -> list[models.Resource]:
         resources = super().filter(**filters)
         for r in resources:
             self._drop_kind_ref(r)
@@ -114,7 +114,7 @@ class ResourcesClient(base.CollectionBaseModelClient):
         return resource
 
     def update(
-        self, uuid: sys_uuid.UUID, **params: tp.Dict[str, tp.Any]
+        self, uuid: sys_uuid.UUID, **params: dict[str, tp.Any]
     ) -> models.Resource:
         self._set_kind_ref(params)
         resource = super().update(uuid, **params)

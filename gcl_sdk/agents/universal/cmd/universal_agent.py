@@ -17,7 +17,6 @@
 import configparser
 import logging
 import sys
-import typing as tp
 import uuid as sys_uuid
 
 import bazooka
@@ -98,9 +97,7 @@ CONF.register_cli_opts(core_agent_opts, DOMAIN)
 
 
 def load_driver(
-    class_: tp.Type[
-        driver_base.AbstractCapabilityDriver | driver_base.AbstractFactDriver
-    ],
+    class_: type[driver_base.AbstractCapabilityDriver | driver_base.AbstractFactDriver],
 ) -> driver_base.AbstractCapabilityDriver | driver_base.AbstractFactDriver:
     parser = configparser.ConfigParser()
     parser.read(cfg.CONF.config_file)
@@ -182,7 +179,7 @@ def main():
         engines.engine_factory.configure_postgresql_factory(CONF)
 
     # Load capability drivers
-    for driver_name in CONF[DOMAIN].caps_drivers or tuple():
+    for driver_name in CONF[DOMAIN].caps_drivers or ():
         driver_class = utils.load_from_entry_point(c.EP_UNIVERSAL_AGENT, driver_name)
         driver = load_driver(driver_class)
 
@@ -196,7 +193,7 @@ def main():
         log.info("Loaded driver: %s", driver_name)
 
     # Load fact drivers
-    for driver_name in CONF[DOMAIN].facts_drivers or tuple():
+    for driver_name in CONF[DOMAIN].facts_drivers or ():
         driver_class = utils.load_from_entry_point(c.EP_UNIVERSAL_AGENT, driver_name)
         driver = load_driver(driver_class)
 

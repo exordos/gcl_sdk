@@ -40,7 +40,7 @@ class DummyBuilder(builder_svc.UniversalBuilderService):
     def pre_create_instance_resource(self, instance):
         self.pre_create_called = True
 
-    def post_create_instance_resource(self, instance, resource, derivatives=tuple()):
+    def post_create_instance_resource(self, instance, resource, derivatives=()):
         self.post_create_called = True
         instance.status = ua_c.InstanceStatus.IN_PROGRESS.value
 
@@ -48,7 +48,7 @@ class DummyBuilder(builder_svc.UniversalBuilderService):
         self.pre_update_called = True
         instance.status = ua_c.InstanceStatus.IN_PROGRESS.value
 
-    def post_update_instance_resource(self, instance, resource, derivatives=tuple()):
+    def post_update_instance_resource(self, instance, resource, derivatives=()):
         self.post_update_called = True
 
     def pre_delete_instance_resource(self, resource):
@@ -58,7 +58,7 @@ class DummyBuilder(builder_svc.UniversalBuilderService):
         self, instance: ua_models.InstanceMixin
     ) -> tp.Collection[ua_models.TargetResourceKindAwareMixin]:
         self.create_instance_derivatives_called = True
-        return tuple()
+        return ()
 
 
 class DummyBuilderWithDerivatives(DummyBuilder):
@@ -91,11 +91,9 @@ class DummyBuilderWithMasterTracking(DummyBuilderWithDerivatives):
         instance: ua_models.InstanceMixin,
         master_instance: ua_models.InstanceMixin,
         derivatives: tp.Collection[
-            tp.Tuple[
+            tuple[
                 ua_models.TargetResourceKindAwareMixin,  # The target resource
-                tp.Optional[
-                    ua_models.TargetResourceKindAwareMixin
-                ],  # The actual resource
+                ua_models.TargetResourceKindAwareMixin | None,  # The actual resource
             ]
         ],
     ) -> tp.Collection[ua_models.TargetResourceKindAwareMixin]:
@@ -599,7 +597,7 @@ class TestUniversalBuilderService:
         instance = dummy_instance_with_derivatives_factory({"updated": 1})[0]
 
         resources = ua_models.TargetResource.objects.get_all()
-        derivative = [r for r in resources if r.master == instance.uuid][0]
+        derivative = next(r for r in resources if r.master == instance.uuid)
 
         assert len(resources) == 2
         assert derivative.master == instance.uuid
@@ -682,7 +680,7 @@ class TestUniversalBuilderService:
         assert len(t_resources) == 2
         assert len(a_resources) == 1
 
-        target = [r for r in t_resources if r.kind == "foo-derivative"][0]
+        target = next(r for r in t_resources if r.kind == "foo-derivative")
         actual = a_resources[0]
 
         assert target.uuid == actual.uuid
@@ -742,7 +740,7 @@ class TestUniversalBuilderService:
         assert len(t_resources) == 2
         assert len(a_resources) == 1
 
-        target = [r for r in t_resources if r.kind == "foo-derivative"][0]
+        target = next(r for r in t_resources if r.kind == "foo-derivative")
         actual = a_resources[0]
 
         assert target.uuid == actual.uuid
@@ -756,7 +754,7 @@ class TestUniversalBuilderService:
 
         t_resources = ua_models.TargetResource.objects.get_all()
         a_resources = ua_models.Resource.objects.get_all()
-        target = [r for r in t_resources if r.kind == "foo-derivative"][0]
+        target = next(r for r in t_resources if r.kind == "foo-derivative")
         actual = a_resources[0]
 
         assert target.full_hash != actual.full_hash
@@ -800,7 +798,7 @@ class TestUniversalBuilderService:
         resources = ua_models.TargetResource.objects.get_all()
         assert len(resources) == 3
 
-        instance_resource = [r for r in resources if r.kind == "sub-foo"][0]
+        instance_resource = next(r for r in resources if r.kind == "sub-foo")
         instance_resource.master_hash = "1111"
         instance_resource.save()
 
@@ -809,8 +807,8 @@ class TestUniversalBuilderService:
         assert DummyBuilderWithMasterTracking._actualized
 
         resources = ua_models.TargetResource.objects.get_all()
-        master = [r for r in resources if r.kind == "foo"][0]
-        instance = [r for r in resources if r.kind == "sub-foo"][0]
+        master = next(r for r in resources if r.kind == "foo")
+        instance = next(r for r in resources if r.kind == "sub-foo")
 
         assert master.hash == instance.master_hash
         assert instance.full_hash != "1111"
@@ -851,7 +849,7 @@ class TestUniversalBuilderService:
         resources = ua_models.TargetResource.objects.get_all()
         assert len(resources) == 3
 
-        instance_resource = [r for r in resources if r.kind == "sub-foo"][0]
+        instance_resource = next(r for r in resources if r.kind == "sub-foo")
         instance_resource.master_full_hash = "1111"
         instance_resource.save()
 
@@ -860,8 +858,8 @@ class TestUniversalBuilderService:
         assert DummyBuilderWithMasterTracking._actualized
 
         resources = ua_models.TargetResource.objects.get_all()
-        master = [r for r in resources if r.kind == "foo"][0]
-        instance = [r for r in resources if r.kind == "sub-foo"][0]
+        master = next(r for r in resources if r.kind == "foo")
+        instance = next(r for r in resources if r.kind == "sub-foo")
 
         assert master.full_hash == instance.master_full_hash
         assert instance.full_hash != "1111"
@@ -942,8 +940,8 @@ class TestUniversalBuilderService:
 
         resources = ua_models.TargetResource.objects.get_all()
         assert len(resources) == 2
-        inst_res = [r for r in resources if r.master is None][0]
-        der_res = [r for r in resources if r.master == inst_res.uuid][0]
+        inst_res = next(r for r in resources if r.master is None)
+        der_res = next(r for r in resources if r.master == inst_res.uuid)
         assert inst_res.agent == inst.uuid
         assert der_res.agent == sys_uuid.uuid5(inst.uuid, inst.name)
 
@@ -1004,9 +1002,9 @@ class TestUniversalBuilderService:
         svc._iteration()
 
         resources = ua_models.TargetResource.objects.get_all()
-        inst_res = [r for r in resources if r.uuid == inst.uuid][0]
+        inst_res = next(r for r in resources if r.uuid == inst.uuid)
         new_der_uuid = sys_uuid.uuid5(inst.uuid, inst.name)
-        der_res = [
+        der_res = next(
             r for r in resources if r.master == inst_res.uuid and r.uuid == new_der_uuid
-        ][0]
+        )
         assert der_res.agent == new_der_uuid

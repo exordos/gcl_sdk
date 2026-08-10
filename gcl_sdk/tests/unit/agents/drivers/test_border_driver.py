@@ -210,14 +210,7 @@ def test_apply_forward_accepts_clears_then_inserts(monkeypatch):
 
 
 def test_clear_forward_accepts_removes_only_our_tagged_rules(monkeypatch):
-    listing = "\n".join(
-        [
-            "-P FORWARD ACCEPT",
-            "-A FORWARD -d 192.168.100.2/32 -p tcp -m tcp --dport 443 "
-            '-m comment --comment "exordos_border" -j ACCEPT',
-            "-A FORWARD -o virbr1 -j REJECT",  # libvirt's, untagged
-        ]
-    )
+    listing = '-P FORWARD ACCEPT\n-A FORWARD -d 192.168.100.2/32 -p tcp -m tcp --dport 443 -m comment --comment "exordos_border" -j ACCEPT\n-A FORWARD -o virbr1 -j REJECT'
     fake = _FakeRun(listing=listing)
     monkeypatch.setattr(border, "_run", fake)
 

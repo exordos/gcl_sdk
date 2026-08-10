@@ -60,7 +60,7 @@ def calculate_hash(
     return m.hexdigest()
 
 
-def cfg_load_class(model_path: str) -> tp.Type:
+def cfg_load_class(model_path: str) -> type:
     """Load class from config file.
 
     Model path format: <module>:<class>

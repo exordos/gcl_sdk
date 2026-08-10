@@ -31,8 +31,8 @@ class UAServiceSpec(tp.NamedTuple):
 
     uuid: sys_uuid.UUID
     orch_client: orch_base.AbstractOrchClient
-    capabilities: tp.Collection[str] = tuple()
-    facts: tp.Collection[str] = tuple()
+    capabilities: tp.Collection[str] = ()
+    facts: tp.Collection[str] = ()
     name: str | None = None
 
 

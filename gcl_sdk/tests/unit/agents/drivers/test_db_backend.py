@@ -14,7 +14,6 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import typing as tp
 from unittest.mock import MagicMock
 import uuid as sys_uuid
 
@@ -29,7 +28,7 @@ from gcl_sdk.agents.universal.dm import models
 
 
 def _make_resource(
-    kind: str, uuid: tp.Optional[sys_uuid.UUID] = None, value: tp.Optional[dict] = None
+    kind: str, uuid: sys_uuid.UUID | None = None, value: dict | None = None
 ) -> models.Resource:
     uuid = uuid or sys_uuid.uuid4()
     value = value or {"uuid": str(uuid), "a": 1, "b": 2}
@@ -63,7 +62,7 @@ class TestDatabaseBackendClient:
         # Assert
         assert actual is obj
         # ensure filters include uuid and extra filter
-        args, kwargs = manager.get_one.call_args
+        _args, kwargs = manager.get_one.call_args
         assert "filters" in kwargs
         flt = kwargs["filters"]
         assert set(flt.keys()) == {"uuid", "project"}
@@ -134,7 +133,7 @@ class TestDatabaseBackendClient:
         res = client.list(kind)
 
         assert res == expected_list
-        args, kwargs = manager.get_all.call_args
+        _args, kwargs = manager.get_all.call_args
         assert "filters" in kwargs and "uuid" in kwargs["filters"]
         uuid_filter = kwargs["filters"]["uuid"]
         assert isinstance(uuid_filter, dm_filters.In)

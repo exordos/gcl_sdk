@@ -41,7 +41,7 @@ class MetaDataPlaneModel(ra_models.ModelWithRequiredUUID, models.ResourceMixin):
     target_fields = properties.property(types.TypedList(types.String()), default=list)
 
     @classmethod
-    def from_ua_resource(cls, resource: models.Resource) -> "MetaDataPlaneModel":
+    def from_ua_resource(cls, resource: models.Resource) -> MetaDataPlaneModel:
         target_fields = list(resource.value.keys())
         return cls.restore_from_simple_view(
             target_fields=target_fields, **resource.value
@@ -98,7 +98,6 @@ class MetaDataPlaneModel(ra_models.ModelWithRequiredUUID, models.ResourceMixin):
 
         It's called before the iteration starts.
         """
-        pass
 
     @classmethod
     def finalize(cls) -> None:
@@ -106,7 +105,6 @@ class MetaDataPlaneModel(ra_models.ModelWithRequiredUUID, models.ResourceMixin):
 
         It's called after the iteration ends.
         """
-        pass
 
 
 class MetaCoordinatorDataPlaneModel(MetaDataPlaneModel):
@@ -286,7 +284,9 @@ class MetaFileStorageAgentDriver(base.AbstractCapabilityDriver):
 
         meta_obj.dump_to_dp()
         self._add_to_meta(resource.kind, meta_obj)
-        return meta_obj.to_ua_resource(resource.kind)
+        new_resource = meta_obj.to_ua_resource(resource.kind)
+        LOG.debug("Created %s resource: %s", new_resource.kind, new_resource.uuid)
+        return new_resource
 
     def update(self, resource: models.Resource) -> models.Resource:
         """Update the resource.
@@ -310,7 +310,7 @@ class MetaFileStorageAgentDriver(base.AbstractCapabilityDriver):
         self._add_to_meta(resource.kind, meta_obj)
 
         new_resource = meta_obj.to_ua_resource(resource.kind)
-        LOG.debug("Updated resource: %s", new_resource.uuid)
+        LOG.debug("Updated %s resource: %s", new_resource.kind, new_resource.uuid)
         return new_resource
 
     def delete(self, resource: models.Resource) -> None:
@@ -343,7 +343,7 @@ class MetaFileStorageAgentDriver(base.AbstractCapabilityDriver):
 
         meta_obj.delete_from_dp()
         self._delete_from_meta(resource.kind, resource.uuid)
-        LOG.debug("Deleted resource: %s", resource.uuid)
+        LOG.debug("Deleted %s resource: %s", resource.kind, resource.uuid)
 
     def finalize(self) -> None:
         """Perform some finalization after finishing all operations.
@@ -632,7 +632,7 @@ class MetaCoordinatorAgentDriver(MetaFileStorageAgentDriver):
             LOG.debug("Deleted resource: %s(%s)", resource.uuid, resource.kind)
 
     def start(self) -> None:
-        self._coordinator_storage = {kind: {} for kind in self.__model_map__.keys()}
+        self._coordinator_storage = {kind: {} for kind in self.__model_map__}
 
     def finalize(self) -> None:
         """Perform some finalization after finishing all operations.

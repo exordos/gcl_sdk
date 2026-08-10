@@ -14,8 +14,8 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import uuid as sys_uuid
 from unittest import mock
+import uuid as sys_uuid
 
 from restalchemy.api import constants as ra_c
 from restalchemy.api import contexts
