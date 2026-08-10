@@ -954,12 +954,21 @@ class Variable(
         """Return the collection of target fields.
 
         Refer to the Resource model for more details about target fields.
+
+        `setter` is a nested, kind-based object (`ProfileVariableSetter` or
+        `SelectorVariableSetter`). It's addressed field by field instead of
+        as a whole so that fields left at their default value (e.g.
+        `element`) don't leak into the hash and cause the resource to be
+        considered changed on every iteration.
         """
         return frozenset(
             (
                 "uuid",
                 "name",
-                "setter",
+                "setter.kind",
+                "setter.fallback_strategy",
+                "setter.profiles",
+                "setter.selector_strategy",
                 "project_id",
             )
         )

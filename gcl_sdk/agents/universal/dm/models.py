@@ -599,7 +599,9 @@ class Resource(
         if target_fields is None:
             hash = self.hash
         else:
-            hash = utils.calculate_hash({k: value[k] for k in target_fields})
+            hash = utils.calculate_hash(
+                utils.extract_target_value(value, target_fields)
+            )
 
         if extract_status:
             status = value.get("status", self.status)
@@ -638,7 +640,9 @@ class Resource(
         if target_fields is None:
             hash = ""
         else:
-            hash = utils.calculate_hash({k: value[k] for k in target_fields})
+            hash = utils.calculate_hash(
+                utils.extract_target_value(value, target_fields)
+            )
 
         return cls(
             uuid=uuid,
@@ -726,7 +730,7 @@ class ResourceMixin(models.SimpleViewMixin):
         target_fields = self.get_resource_target_fields()
 
         if target_fields:
-            target_data = {k: v for k, v in value.items() if k in target_fields}
+            target_data = utils.extract_target_value(value, target_fields, strict=False)
         else:
             target_data = value
         return value, target_data

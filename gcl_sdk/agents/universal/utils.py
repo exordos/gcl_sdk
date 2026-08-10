@@ -60,6 +60,49 @@ def calculate_hash(
     return m.hexdigest()
 
 
+def extract_target_value(
+    value: dict[str, tp.Any],
+    target_fields: tp.Collection[str],
+    strict: bool = True,
+) -> dict[str, tp.Any]:
+    """Extract a nested subset of ``value`` selected by ``target_fields``.
+
+    Each item in ``target_fields`` is either a plain top-level key
+    (``"setter"``), which selects the whole value under that key, or a
+    dot-separated path (``"setter.kind"``), which selects only that
+    nested key inside the top-level dict. If both a plain key and dotted
+    paths are given for the same top-level key, the plain key wins and
+    the whole nested value is included.
+
+    If ``strict`` is True (default), a missing plain top-level key raises
+    ``KeyError``, matching a plain dict-comprehension lookup. Nested keys
+    (dotted paths, at any depth) are always skipped when missing, since a
+    nested object legitimately may not have every possible sub-field set.
+    """
+    plain_fields = [f for f in target_fields if "." not in f]
+    nested_fields = [f for f in target_fields if "." in f]
+
+    if strict:
+        result = {f: value[f] for f in plain_fields}
+    else:
+        result = {f: value[f] for f in plain_fields if f in value}
+
+    nested_paths: dict[str, list[str]] = {}
+    for field in nested_fields:
+        top, _, rest = field.partition(".")
+        nested_paths.setdefault(top, []).append(rest)
+
+    for top, sub_paths in nested_paths.items():
+        if top in result:
+            # The whole value is already selected via a plain field.
+            continue
+        nested_value = value.get(top)
+        if isinstance(nested_value, dict):
+            result[top] = extract_target_value(nested_value, sub_paths, strict=False)
+
+    return result
+
+
 def cfg_load_class(model_path: str) -> type:
     """Load class from config file.
 
