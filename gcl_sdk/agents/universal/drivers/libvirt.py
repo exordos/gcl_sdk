@@ -255,42 +255,42 @@ class XMLLibvirtMixin:
     @classmethod
     def document_set_tag(
         cls,
-        docement: minidom.Document,
+        document: minidom.Document,
         tag_name: str,
         text: tp.Optional[str] = None,
         meta_tag: tp.Optional[str] = None,
         parent: tp.Optional[minidom.Element] = None,
         **kwargs,
     ) -> None:
-        root = parent or docement.firstChild
+        root = parent or document.firstChild
         # Firstly we need to remove the old value
         cls._remove_direct_children(root, tag_name)
 
         # Also we need to remove the old value from the meta
         if meta_tag is not None:
-            meta_node = docement.getElementsByTagName(META_TAG)[0]
+            meta_node = document.getElementsByTagName(META_TAG)[0]
             cls._remove_direct_children(meta_node, meta_tag)
 
             # Add the new value
-            cls.add_element(docement, meta_tag, parent=meta_node, text=text)
+            cls.add_element(document, meta_tag, parent=meta_node, text=text)
 
         # Set the new value
-        cls.add_element(docement, tag_name, parent=root, text=text, **kwargs)
+        cls.add_element(document, tag_name, parent=root, text=text, **kwargs)
 
     @classmethod
     def document_meta_set_tag(
         cls,
-        docement: minidom.Document,
+        document: minidom.Document,
         tag: str,
         text: tp.Optional[str] = None,
         **kwargs,
     ) -> None:
         # Remove the old value from the meta
-        meta_node = docement.getElementsByTagName(META_TAG)[0]
+        meta_node = document.getElementsByTagName(META_TAG)[0]
         cls._remove_direct_children(meta_node, tag)
 
         # Add the new value
-        cls.add_element(docement, tag, parent=meta_node, text=text, **kwargs)
+        cls.add_element(document, tag, parent=meta_node, text=text, **kwargs)
 
 
 class XMLLibvirtVolume(XMLLibvirtMixin):
@@ -993,7 +993,7 @@ class LibvirtPoolDriver(pool_base.AbstractPoolDriver):
             v.wipe()
         except libvirt.libvirtError as e:
             # Some backends don't need wiping, for ex. ZFS
-            if e.get_error_code() != 3:  # VIR_ERR_NO_SUPPORT
+            if e.get_error_code() != libvirt.VIR_ERR_NO_SUPPORT:
                 raise
         max_iters = 20
         for i in range(max_iters + 1):
