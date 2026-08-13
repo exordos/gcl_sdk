@@ -110,7 +110,7 @@ def load_driver(
         if option in parser.defaults():
             continue
 
-        params[option] = parser.get(class_.__name__, option)
+        params[option] = parser.get(class_.__name__, option, raw=True)
 
     return class_(**params)
 
