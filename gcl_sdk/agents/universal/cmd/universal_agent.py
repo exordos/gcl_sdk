@@ -99,7 +99,7 @@ CONF.register_cli_opts(core_agent_opts, DOMAIN)
 def load_driver(
     class_: type[driver_base.AbstractCapabilityDriver | driver_base.AbstractFactDriver],
 ) -> driver_base.AbstractCapabilityDriver | driver_base.AbstractFactDriver:
-    parser = configparser.ConfigParser()
+    parser = configparser.ConfigParser(interpolation=None)
     parser.read(cfg.CONF.config_file)
 
     if not parser.has_section(class_.__name__):
