@@ -819,14 +819,14 @@ first and how to match them to the current object:</p>
 <ul>
 <li>The top-level keys are capability kinds handled by the driver (must match <code>__model_map__</code>).</li>
 <li>Each value is a dict of dependency name -&gt; spec. The dependency name becomes a keyword
-  argument passed to the model's <code>dump_to_dp</code>/<code>restore_from_dp</code>/<code>update_on_dp</code>/<code>delete_from_dp</code>.</li>
+    argument passed to the model's <code>dump_to_dp</code>/<code>restore_from_dp</code>/<code>update_on_dp</code>/<code>delete_from_dp</code>.</li>
 <li><code>kind</code> is the dependency's capability kind — its already-loaded objects are looked up
-  from the driver's internal coordinator storage.</li>
+    from the driver's internal coordinator storage.</li>
 <li><code>relation</code> is <code>"&lt;kind_with_the_pointer_field&gt;:&lt;field_name&gt;"</code>. If <code>relation_kind</code> matches
-  the <em>current</em> object's own kind (as for <code>pool_volume</code>'s <code>pool</code> dependency), the field is
-  read off the current object itself and a single matching object is returned. Otherwise
-  (as for <code>pool_machine</code>'s <code>volumes</code> dependency) every object of <code>kind</code> whose <code>field_name</code>
-  points back at the current object's UUID is collected into a tuple.</li>
+    the <em>current</em> object's own kind (as for <code>pool_volume</code>'s <code>pool</code> dependency), the field is
+    read off the current object itself and a single matching object is returned. Otherwise
+    (as for <code>pool_machine</code>'s <code>volumes</code> dependency) every object of <code>kind</code> whose <code>field_name</code>
+    points back at the current object's UUID is collected into a tuple.</li>
 <li>Omitting <code>relation</code> copies every object of <code>kind</code> as-is (rarely needed).</li>
 <li>A kind with <code>{}</code> (like <code>pool</code>) has no dependencies — its data plane methods are called
   with no extra keyword arguments.</li>
