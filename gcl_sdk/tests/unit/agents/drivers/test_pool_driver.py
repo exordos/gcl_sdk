@@ -15,6 +15,7 @@
 #    under the License.
 
 import uuid as sys_uuid
+from unittest import mock
 
 import pytest
 
@@ -142,3 +143,92 @@ class TestDummyPoolDriver:
         assert machine.uuid == machine_uuid
         assert machine.status in {s.value for s in pool_driver.MachineStatus}
         assert ports == ()
+
+
+class _ResizingPoolDriver(pool_driver.DummyPoolDriver):
+    """DummyPoolDriver that can answer `get_volume` after a resize."""
+
+    def __init__(self, pool, dp_volume):
+        super().__init__(pool)
+        self._dp_volume = dp_volume
+        self.resized_to = None
+
+    def resize_volume(self, volume):
+        self.resized_to = volume.size
+
+    def get_volume(self, volume):
+        return self._dp_volume
+
+
+class TestVolumeResizeCapacity:
+    def _pool_with_volume(self, dp_size):
+        storage_pool = pool_driver.ThinStoragePool(
+            name="storage",
+            pool_type="dir",
+            capacity_usable=100,
+            capacity_provisioned=dp_size,
+            oversubscription_ratio=1.0,
+        )
+        meta_pool = pool_driver.MetaPool(
+            uuid=sys_uuid.uuid4(),
+            driver_spec=pool_driver.DummyPoolDriverSpec(),
+        )
+        meta_pool.storage_pools = [storage_pool]
+
+        volume_uuid = sys_uuid.uuid4()
+        dp_volume = pool_driver.MachineVolume(
+            uuid=volume_uuid,
+            name=str(volume_uuid),
+            size=dp_size,
+            project_id=pool_driver.SYSTEM_PROJECT_ID,
+            # What a real driver reports for a volume that exists: both
+            # LibvirtPoolDriver.create_volume and its `get_volume` stamp
+            # ACTIVE. `update_on_dp` mirrors this back onto the meta model.
+            status=pool_driver.VolumeStatus.ACTIVE.value,
+        )
+        meta_pool.dp_volume_map = {volume_uuid: dp_volume}
+
+        meta_volume = pool_driver.MetaVolume(
+            uuid=volume_uuid,
+            pool=meta_pool.uuid,
+            name=str(volume_uuid),
+            size=dp_size,
+            project_id=sys_uuid.uuid4(),
+        )
+        return meta_pool, meta_volume, dp_volume, storage_pool
+
+    def test_growth_is_charged_to_the_storage_pool(self):
+        """The delta used to be computed after `dp_volume.size` had already
+        been overwritten, so it was always 0: the pool was never charged for
+        the growth and `capacity_provisioned` drifted below reality.
+        """
+        meta_pool, meta_volume, dp_volume, storage_pool = self._pool_with_volume(10)
+        meta_volume.size = 30
+        # As a previous iteration that refused the resize would have left
+        # it: a successful one has to clear that, or the volume stays
+        # errored forever once the pool has room again.
+        meta_volume.status = pool_driver.VolumeStatus.ERROR.value
+        driver = _ResizingPoolDriver(meta_pool, dp_volume)
+
+        with mock.patch.object(
+            pool_driver.MetaPool, "load_driver", return_value=driver
+        ):
+            meta_volume.update_on_dp(meta_pool)
+
+        assert driver.resized_to == 30
+        assert storage_pool.capacity_provisioned == 30
+        assert meta_volume.status == pool_driver.VolumeStatus.ACTIVE.value
+
+    def test_a_growth_the_pool_cannot_fit_is_refused(self):
+        meta_pool, meta_volume, dp_volume, storage_pool = self._pool_with_volume(10)
+        meta_volume.size = 500
+        driver = _ResizingPoolDriver(meta_pool, dp_volume)
+
+        with mock.patch.object(
+            pool_driver.MetaPool, "load_driver", return_value=driver
+        ):
+            meta_volume.update_on_dp(meta_pool)
+
+        assert meta_volume.status == pool_driver.VolumeStatus.ERROR.value
+        assert driver.resized_to is None
+        assert storage_pool.capacity_provisioned == 10
