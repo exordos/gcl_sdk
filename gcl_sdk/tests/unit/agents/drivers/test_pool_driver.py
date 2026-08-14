@@ -122,3 +122,23 @@ class TestPoolAgentDriver:
 
         listed = local_drv.list("pool")
         assert [r.uuid for r in listed] == [pool_uuid]
+
+
+class TestDummyPoolDriver:
+    def test_get_machine_returns_a_machine(self):
+        """`status` used to be "running", which is not a MachineStatus, so
+        every call raised instead of returning the dummy machine.
+        """
+        drv = pool_driver.DummyPoolDriver(
+            pool_driver.MachinePool(
+                name="dummy-pool",
+                driver_spec=pool_driver.DummyPoolDriverSpec(),
+            )
+        )
+        machine_uuid = sys_uuid.uuid4()
+
+        machine, ports = drv.get_machine(machine_uuid)
+
+        assert machine.uuid == machine_uuid
+        assert machine.status in {s.value for s in pool_driver.MachineStatus}
+        assert ports == ()
