@@ -772,22 +772,33 @@ class LibvirtPoolDriver(pool_base.AbstractPoolDriver):
 
         return result
 
+    def _is_genesis_domain(self, element: ET.Element) -> bool:
+        """Determine whether a domain was created by this driver.
+
+        A hypervisor can also run domains this driver never created
+        (exordos_local_hyper pools in particular share a node with
+        whatever else is running on it). Such foreign domains have no
+        genesis:genesis metadata block at all, so _domain2machine's
+        genesis-namespaced lookups (vcpu/mem/...) would blow up on
+        them - they must be filtered out before that point.
+        """
+        return element.find(f".//{{{GENESIS_NS}}}genesis") is not None
+
     def _list_machines(
         self,
         domains: tp.Collection[tp.Tuple[libvirt.virDomain, tp.Optional[ET.Element]]],
     ) -> tp.List[tp.Tuple[pool_base.Machine, tp.Tuple[pool_base.Port, ...]]]:
         """Return machine list from data plane."""
-        # If the filter prefix is not set, return all domains
-        if not self._spec.machine_prefix:
-            machines = [self._domain2machine(d, e) for d, e in domains]
-            LOG.debug("Machines: %s", machines)
-            return machines
-
-        # Otherwise, filter domains by the prefix
         machines = []
         for d, e in domains:
-            if d.name().startswith(self._spec.machine_prefix):
-                machines.append(self._domain2machine(d, e))
+            element = e if e is not None else ET.fromstring(d.XMLDesc())
+            if not self._is_genesis_domain(element):
+                continue
+            if self._spec.machine_prefix and not d.name().startswith(
+                self._spec.machine_prefix
+            ):
+                continue
+            machines.append(self._domain2machine(d, element))
 
         LOG.debug("Machines: %s", machines)
         return machines

@@ -116,6 +116,51 @@ class TestDeleteMachine:
         assert list(storage_pool.listAllVolumes()) == []
 
 
+class TestListMachines:
+    def test_a_foreign_domain_without_genesis_metadata_is_skipped(self):
+        # Regression: a hypervisor this driver manages can also run domains
+        # it never created (exordos_local_hyper pools share a node with
+        # whatever else is running on it). Such domains have no
+        # genesis:genesis metadata block at all, so parsing them the same
+        # way as our own must not raise - they must be filtered out instead.
+        spec = pool_base.LibvirtPoolDriverSpec(
+            connection_uri="test:///default", storage_pool="default-pool"
+        )
+        pool = pool_base.MachinePool(
+            uuid=sys_uuid.uuid4(), name="test-pool", driver_spec=spec
+        )
+        driver = libvirt_driver.LibvirtPoolDriver(pool)
+        machine = pool_base.Machine(
+            uuid=sys_uuid.uuid4(),
+            project_id=sys_uuid.uuid4(),
+            name="vm1",
+            cores=1,
+            ram=512,
+        )
+        driver.create_machine(machine, [], [])
+
+        foreign_uuid = sys_uuid.uuid4()
+        driver._client.defineXML(
+            f"""
+            <domain type="kvm">
+              <name>foreign-vm</name>
+              <uuid>{foreign_uuid}</uuid>
+              <memory unit="MiB">512</memory>
+              <currentMemory unit="MiB">512</currentMemory>
+              <vcpu>1</vcpu>
+              <os>
+                <type arch="x86_64" machine="q35">hvm</type>
+              </os>
+            </domain>
+            """
+        )
+
+        machines = driver.list_machines()
+
+        machine_uuids = {m.uuid for m, _ in machines}
+        assert machine_uuids == {machine.uuid}
+
+
 class TestRemoveDirectChildren:
     def test_removes_only_direct_children_leaving_nested_matches_alone(self):
         # getElementsByTagName searches the whole subtree recursively -
