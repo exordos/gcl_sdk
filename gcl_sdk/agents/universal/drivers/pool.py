@@ -599,8 +599,10 @@ class DummyPoolDriver(AbstractPoolDriver):
                 name="dummy-machine",
                 cores=1,
                 ram=1024,
-                status="running",
-                project_id=sys_uuid.uuid4(),
+                # "running" is not a MachineStatus, so building this model
+                # raised instead of returning a machine.
+                status=MachineStatus.ACTIVE.value,
+                project_id=SYSTEM_PROJECT_ID,
             ),
             tuple(),
         )
