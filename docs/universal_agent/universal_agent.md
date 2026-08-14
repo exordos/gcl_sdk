@@ -139,6 +139,20 @@ See [Metadata driver quick start](metadata_driver_quick_start.md) for details, e
 
 The driver handles SSH keys on the host. The `SSHKeyCapabilityDriver` is derived from `MetaFileStorageAgentDriver`. The main data plane model is `SSHKey`, it's derived from `MetaDataPlaneModel`. The meta file is located at `/var/lib/exordos/universal_agent/ssh_key_meta.json`.
 
+### Coordinator driver
+
+Coordinator driver is a `MetaFileStorageAgentDriver`/metadata driver variant for capability kinds that describe related objects (for example a pool, its volumes, and its machines) and need each other's already-loaded objects to reconcile correctly.
+
+See [Coordinator driver quick start](coordinator_driver_quick_start.md) for details, examples, and implementation guidance.
+
+#### PoolAgentDriver
+
+The driver manages VM pools: it creates, resizes, and deletes VM disks and domains. `PoolAgentDriver` is derived from `MetaCoordinatorAgentDriver` and handles the `pool`, `pool_volume`, and `pool_machine` capability kinds. The concrete hypervisor backend (for example `LibvirtPoolDriver`, registered under the `libvirt` and `exordos_local_hyper` driver_spec kinds) is loaded dynamically based on the pool's `driver_spec`.
+
+#### LocalPoolAgentDriver
+
+`LocalPoolAgentDriver` is `PoolAgentDriver` plus a `local_pool` marker capability: an empty, non-actualizable capability whose only purpose is to tell the scheduler this agent can host a pool pinned to its own node (matched by `driver_spec.node`), as opposed to a remote/shared pool any agent could serve. Use it for pool kinds that only make sense running where the agent itself lives — the hypervisor an `exordos_local_hyper` pool describes, for example.
+
 ### Direct driver
 
 Direct driver gets resources directly from backend systems without a meta file. It keeps target fields in dedicated storage to preserve stable hash calculation.

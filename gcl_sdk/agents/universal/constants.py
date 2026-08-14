@@ -23,6 +23,7 @@ PRIVATE_KEY_PATH = os.path.join(WORK_DIR, "private_key")
 NODE_UUID_PATH = os.path.join(EXORDOS_WORK_DIR, "node-id")
 DEFAULT_DATETIME_FORMAT = "%Y-%m-%d %H:%M:%S.%1f"
 EP_UNIVERSAL_AGENT = "gcl_sdk_universal_agent"
+EP_MACHINE_POOL_DRIVERS = "gcl_sdk_machine_pool_driver"
 
 DEF_SQL_LIMIT = 100
 
