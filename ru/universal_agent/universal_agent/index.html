@@ -22,7 +22,7 @@
       
       
       <link rel="icon" href="../../../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -30,7 +30,7 @@
       
     
     
-      <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.ec1eaa64.min.css">
       
         
         <link rel="stylesheet" href="../../../assets/stylesheets/palette.ab4e12ef.min.css">
@@ -574,6 +574,45 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#coordinator-driver" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Coordinator driver
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Coordinator driver">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#poolagentdriver" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PoolAgentDriver
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#localpoolagentdriver" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        LocalPoolAgentDriver
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#direct-driver" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1046,6 +1085,13 @@
 <p>See <a href="../metadata_driver_quick_start/">Metadata driver quick start</a> for details, examples, and implementation guidance.</p>
 <h4 id="sshkeycapabilitydriver">SSHKeyCapabilityDriver<a class="headerlink" href="#sshkeycapabilitydriver" title="Permanent link">#</a></h4>
 <p>The driver handles SSH keys on the host. The <code>SSHKeyCapabilityDriver</code> is derived from <code>MetaFileStorageAgentDriver</code>. The main data plane model is <code>SSHKey</code>, it's derived from <code>MetaDataPlaneModel</code>. The meta file is located at <code>/var/lib/exordos/universal_agent/ssh_key_meta.json</code>.</p>
+<h3 id="coordinator-driver">Coordinator driver<a class="headerlink" href="#coordinator-driver" title="Permanent link">#</a></h3>
+<p>Coordinator driver is a <code>MetaFileStorageAgentDriver</code>/metadata driver variant for capability kinds that describe related objects (for example a pool, its volumes, and its machines) and need each other's already-loaded objects to reconcile correctly.</p>
+<p>See <a href="../coordinator_driver_quick_start/">Coordinator driver quick start</a> for details, examples, and implementation guidance.</p>
+<h4 id="poolagentdriver">PoolAgentDriver<a class="headerlink" href="#poolagentdriver" title="Permanent link">#</a></h4>
+<p>The driver manages VM pools: it creates, resizes, and deletes VM disks and domains. <code>PoolAgentDriver</code> is derived from <code>MetaCoordinatorAgentDriver</code> and handles the <code>pool</code>, <code>pool_volume</code>, and <code>pool_machine</code> capability kinds. The concrete hypervisor backend (for example <code>LibvirtPoolDriver</code>, registered under the <code>libvirt</code> and <code>exordos_local_hyper</code> driver_spec kinds) is loaded dynamically based on the pool's <code>driver_spec</code>.</p>
+<h4 id="localpoolagentdriver">LocalPoolAgentDriver<a class="headerlink" href="#localpoolagentdriver" title="Permanent link">#</a></h4>
+<p><code>LocalPoolAgentDriver</code> is <code>PoolAgentDriver</code> plus a <code>local_pool</code> marker capability: an empty, non-actualizable capability whose only purpose is to tell the scheduler this agent can host a pool pinned to its own node (matched by <code>driver_spec.node</code>), as opposed to a remote/shared pool any agent could serve. Use it for pool kinds that only make sense running where the agent itself lives — the hypervisor an <code>exordos_local_hyper</code> pool describes, for example.</p>
 <h3 id="direct-driver">Direct driver<a class="headerlink" href="#direct-driver" title="Permanent link">#</a></h3>
 <p>Direct driver gets resources directly from backend systems without a meta file. It keeps target fields in dedicated storage to preserve stable hash calculation.</p>
 <p>See <a href="../direct_driver_quick_start/">Direct driver quick start</a> for details, examples, and implementation guidance.</p>
@@ -1102,7 +1148,7 @@
       <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["search.suggest", "search.highlight", "toc.integrate", "content.code.copy"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "\u0421\u043a\u043e\u043f\u0438\u0440\u043e\u0432\u0430\u043d\u043e \u0432 \u0431\u0443\u0444\u0435\u0440", "clipboard.copy": "\u041a\u043e\u043f\u0438\u0440\u043e\u0432\u0430\u0442\u044c \u0432 \u0431\u0443\u0444\u0435\u0440", "search.result.more.one": "\u0415\u0449\u0451 1 \u043d\u0430 \u044d\u0442\u043e\u0439 \u0441\u0442\u0440\u0430\u043d\u0438\u0446\u0435", "search.result.more.other": "\u0415\u0449\u0451 # \u043d\u0430 \u044d\u0442\u043e\u0439 \u0441\u0442\u0440\u0430\u043d\u0438\u0446\u0435", "search.result.none": "\u0421\u043e\u0432\u043f\u0430\u0434\u0435\u043d\u0438\u0439 \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d\u043e", "search.result.one": "\u041d\u0430\u0439\u0434\u0435\u043d\u043e 1 \u0441\u043e\u0432\u043f\u0430\u0434\u0435\u043d\u0438\u0435", "search.result.other": "\u041d\u0430\u0439\u0434\u0435\u043d\u043e \u0441\u043e\u0432\u043f\u0430\u0434\u0435\u043d\u0438\u0439: #", "search.result.placeholder": "\u041d\u0430\u0447\u043d\u0438\u0442\u0435 \u043f\u0435\u0447\u0430\u0442\u0430\u0442\u044c \u0434\u043b\u044f \u043f\u043e\u0438\u0441\u043a\u0430", "search.result.term.missing": "\u041e\u0442\u0441\u0443\u0442\u0441\u0442\u0432\u0443\u0435\u0442", "select.version": "\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u0432\u0435\u0440\u0441\u0438\u044e"}, "version": null}</script>
     
     
-      <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   

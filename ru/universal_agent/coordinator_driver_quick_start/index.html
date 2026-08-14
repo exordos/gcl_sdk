@@ -5,17 +5,13 @@
       
       
       
-        <link rel="canonical" href="https://github.com/exordos/gcl_sdk/ru/universal_agent/metadata_driver_quick_start/">
+        <link rel="canonical" href="https://github.com/exordos/gcl_sdk/ru/universal_agent/coordinator_driver_quick_start/">
       
       
-        <link rel="prev" href="../capability_driver_quick_start/">
-      
-      
-        <link rel="next" href="../direct_driver_quick_start/">
       
       
         
-          <link rel="alternate" href="../../../universal_agent/metadata_driver_quick_start/" hreflang="en">
+          <link rel="alternate" href="../../../universal_agent/coordinator_driver_quick_start/" hreflang="en">
         
           <link rel="alternate" href="./" hreflang="ru">
         
@@ -26,7 +22,7 @@
     
     
       
-        <title>Metadata driver Quick start - gcl_sdk</title>
+        <title>Coordinator driver quick start - gcl_sdk</title>
       
     
     
@@ -87,7 +83,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#metadata-driver-quick-start" class="md-skip">
+        <a href="#coordinator-driver-quick-start" class="md-skip">
           Перейти к содержанию
         </a>
       
@@ -123,7 +119,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Metadata driver Quick start
+              Coordinator driver quick start
             
           </span>
         </div>
@@ -170,7 +166,7 @@
       <ul class="md-select__list">
         
           <li class="md-select__item">
-            <a href="../../../universal_agent/metadata_driver_quick_start/" hreflang="en" class="md-select__link">
+            <a href="../../../universal_agent/coordinator_driver_quick_start/" hreflang="en" class="md-select__link">
               English
             </a>
           </li>
@@ -350,20 +346,18 @@
       
   
   
-    
   
   
-  
     
     
     
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked="">
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3">
         
           
           <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
@@ -384,7 +378,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_3">
             <span class="md-nav__icon md-icon"></span>
             
@@ -483,37 +477,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Metadata driver Quick start
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../metadata_driver_quick_start/" class="md-nav__link">
         
   
   
@@ -529,109 +496,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Содержание">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Содержание
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix="">
-      
-        <li class="md-nav__item">
-  <a href="#driver-interface" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Driver interface
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#quick-start" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Quick start
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Quick start">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#step-1-define-a-data-plane-model" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Step 1. Define a data plane model
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#step-2-define-the-metadata-driver" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Step 2. Define the metadata driver
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#step-3-example-target-resource" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Step 3. Example target resource
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#register-the-driver" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Register the driver
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#usage" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Usage
-      
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -899,126 +763,176 @@ distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
---><h1 id="metadata-driver-quick-start">Metadata driver Quick start<a class="headerlink" href="#metadata-driver-quick-start" title="Permanent link">#</a></h1>
-<p>This page provides a quick start guide for metadata drivers based on <code>MetaFileStorageAgentDriver</code>.
-Please refer to <a href="../universal_agent/">Universal Agent</a> main terms for context.</p>
+--><h1 id="coordinator-driver-quick-start">Coordinator driver Quick start<a class="headerlink" href="#coordinator-driver-quick-start" title="Permanent link">#</a></h1>
+<p>This page provides a quick start guide for coordinator drivers based on <code>MetaCoordinatorAgentDriver</code>.
+Please refer to <a href="../metadata_driver_quick_start/">Metadata driver quick start</a> first — a
+coordinator driver is a <code>MetaFileStorageAgentDriver</code> variant, so the meta-file storage
+model still applies.</p>
+<h2 id="when-to-use-a-coordinator-driver">When to use a coordinator driver<a class="headerlink" href="#when-to-use-a-coordinator-driver" title="Permanent link">#</a></h2>
+<p>A plain metadata driver (<code>MetaFileStorageAgentDriver</code>) treats every resource kind as
+independent. Use a coordinator driver instead when several capability kinds describe
+related objects that must be reconciled together, and one kind needs the already-loaded
+objects of another kind to do its job. For example, a VM pool driver manages three
+related kinds:</p>
+<ul>
+<li><code>pool</code> — the hypervisor/pool itself (connection details, capacity)</li>
+<li><code>pool_volume</code> — a disk that belongs to a <code>pool</code> and, optionally, to a machine</li>
+<li><code>pool_machine</code> — a VM that belongs to a <code>pool</code> and owns a set of <code>pool_volume</code>s</li>
+</ul>
+<p>Creating a <code>pool_volume</code> requires the <code>pool</code> object (to check storage capacity);
+creating a <code>pool_machine</code> requires both the <code>pool</code> (to check available cores/RAM) and
+its <code>pool_volume</code>s (to build the disk list). <code>MetaCoordinatorAgentDriver</code> resolves and
+injects these dependencies automatically.</p>
 <h2 id="driver-interface">Driver interface<a class="headerlink" href="#driver-interface" title="Permanent link">#</a></h2>
-<p>Metadata drivers are built on top of:</p>
+<p>Coordinator drivers are built on top of:</p>
 <ul>
-<li><a href="https://github.com/exordos/gcl_sdk/blob/master/gcl_sdk/agents/universal/drivers/meta.py"><code>MetaFileStorageAgentDriver</code></a></li>
-<li><a href="https://github.com/exordos/gcl_sdk/blob/master/gcl_sdk/agents/universal/drivers/meta.py"><code>MetaDataPlaneModel</code></a></li>
+<li><a href="https://github.com/exordos/gcl_sdk/blob/master/gcl_sdk/agents/universal/drivers/meta.py"><code>MetaCoordinatorAgentDriver</code></a></li>
+<li><a href="https://github.com/exordos/gcl_sdk/blob/master/gcl_sdk/agents/universal/drivers/meta.py"><code>MetaCoordinatorDataPlaneModel</code></a></li>
 </ul>
-<p>A metadata driver stores resource metadata (for example UUID and file path) in a meta file and keeps the actual object in the data plane.</p>
-<h2 id="quick-start">Quick start<a class="headerlink" href="#quick-start" title="Permanent link">#</a></h2>
-<p>Let's implement a simple metadata driver that manages files in a directory.</p>
-<ul>
-<li><strong>Data plane</strong>: files in <code>self.work_dir</code></li>
-<li><strong>Meta file</strong>: JSON file with resource UUIDs and metadata</li>
-<li><strong>Capability kind</strong>: <code>file_target</code></li>
-</ul>
-<p>The implementation idea is:</p>
-<ol>
-<li>Keep the file on disk.</li>
-<li>Keep resource UUIDs and metadata in the meta file.</li>
-<li>Restore full resource state using metadata + data plane.</li>
-</ol>
-<h3 id="step-1-define-a-data-plane-model">Step 1. Define a data plane model<a class="headerlink" href="#step-1-define-a-data-plane-model" title="Permanent link">#</a></h3>
-<p><code>MetaDataPlaneModel</code> is responsible for operations in the data plane.</p>
-<div class="highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
-
-<span class="kn">from</span><span class="w"> </span><span class="nn">restalchemy.dm</span><span class="w"> </span><span class="kn">import</span> <span class="n">properties</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">restalchemy.dm</span><span class="w"> </span><span class="kn">import</span> <span class="n">types</span>
-
-<span class="kn">from</span><span class="w"> </span><span class="nn">gcl_sdk.agents.universal.drivers</span><span class="w"> </span><span class="kn">import</span> <span class="n">exceptions</span> <span class="k">as</span> <span class="n">driver_exc</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">gcl_sdk.agents.universal.drivers</span><span class="w"> </span><span class="kn">import</span> <span class="n">meta</span>
-
-
-<span class="n">FILE_TARGET_KIND</span> <span class="o">=</span> <span class="s2">"file_target"</span>
-
-
-<span class="k">class</span><span class="w"> </span><span class="nc">FileMetaModel</span><span class="p">(</span><span class="n">meta</span><span class="o">.</span><span class="n">MetaDataPlaneModel</span><span class="p">):</span>
-    <span class="n">name</span> <span class="o">=</span> <span class="n">properties</span><span class="o">.</span><span class="n">property</span><span class="p">(</span><span class="n">types</span><span class="o">.</span><span class="n">String</span><span class="p">(</span><span class="n">min_length</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">max_length</span><span class="o">=</span><span class="mi">255</span><span class="p">))</span>
-    <span class="n">path</span> <span class="o">=</span> <span class="n">properties</span><span class="o">.</span><span class="n">property</span><span class="p">(</span><span class="n">types</span><span class="o">.</span><span class="n">String</span><span class="p">(</span><span class="n">min_length</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">max_length</span><span class="o">=</span><span class="mi">4096</span><span class="p">))</span>
-
-    <span class="k">def</span><span class="w"> </span><span class="nf">get_meta_model_fields</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">set</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="c1"># Save only fields required to locate and identify the file.</span>
-        <span class="k">return</span> <span class="p">{</span><span class="s2">"uuid"</span><span class="p">,</span> <span class="s2">"name"</span><span class="p">,</span> <span class="s2">"path"</span><span class="p">}</span>
-
-    <span class="k">def</span><span class="w"> </span><span class="nf">dump_to_dp</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="n">os</span><span class="o">.</span><span class="n">makedirs</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">dirname</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">path</span><span class="p">),</span> <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-        <span class="k">if</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">path</span><span class="p">):</span>
-            <span class="n">resource</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">to_ua_resource</span><span class="p">(</span><span class="n">FILE_TARGET_KIND</span><span class="p">)</span>
-            <span class="k">raise</span> <span class="n">driver_exc</span><span class="o">.</span><span class="n">ResourceAlreadyExists</span><span class="p">(</span><span class="n">resource</span><span class="o">=</span><span class="n">resource</span><span class="p">)</span>
-
-        <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">path</span><span class="p">,</span> <span class="s2">"w"</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
-            <span class="n">f</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="s2">""</span><span class="p">)</span>
-
-    <span class="k">def</span><span class="w"> </span><span class="nf">restore_from_dp</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="k">if</span> <span class="ow">not</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">path</span><span class="p">):</span>
-            <span class="n">resource</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">to_ua_resource</span><span class="p">(</span><span class="n">FILE_TARGET_KIND</span><span class="p">)</span>
-            <span class="k">raise</span> <span class="n">driver_exc</span><span class="o">.</span><span class="n">ResourceNotFound</span><span class="p">(</span><span class="n">resource</span><span class="o">=</span><span class="n">resource</span><span class="p">)</span>
-
-    <span class="k">def</span><span class="w"> </span><span class="nf">delete_from_dp</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="k">if</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">path</span><span class="p">):</span>
-            <span class="n">os</span><span class="o">.</span><span class="n">remove</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">path</span><span class="p">)</span>
-
-    <span class="k">def</span><span class="w"> </span><span class="nf">update_on_dp</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="c1"># Simplest strategy for this example.</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">delete_from_dp</span><span class="p">()</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">dump_to_dp</span><span class="p">()</span>
-</code></pre></div>
-<h3 id="step-2-define-the-metadata-driver">Step 2. Define the metadata driver<a class="headerlink" href="#step-2-define-the-metadata-driver" title="Permanent link">#</a></h3>
-<p>The driver maps capability kinds to metadata models and points to a meta file.</p>
-<div class="highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
-
-<span class="kn">from</span><span class="w"> </span><span class="nn">gcl_sdk.agents.universal.drivers</span><span class="w"> </span><span class="kn">import</span> <span class="n">meta</span>
-
-
-<span class="k">class</span><span class="w"> </span><span class="nc">FilesMetaCapabilityDriver</span><span class="p">(</span><span class="n">meta</span><span class="o">.</span><span class="n">MetaFileStorageAgentDriver</span><span class="p">):</span>
-    <span class="n">FILE_META_PATH</span> <span class="o">=</span> <span class="s2">"/var/lib/exordos/universal_agent/file_meta.json"</span>
-
-    <span class="n">__model_map__</span> <span class="o">=</span> <span class="p">{</span>
-        <span class="s2">"file_target"</span><span class="p">:</span> <span class="n">FileMetaModel</span><span class="p">,</span>
-    <span class="p">}</span>
-
-    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="n">meta_file</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">FILE_META_PATH</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
-</code></pre></div>
-<p><code>MetaFileStorageAgentDriver</code> already implements <code>create/get/list/update/delete</code> workflow.
-It uses:</p>
-<ul>
-<li>model methods (<code>dump_to_dp</code>, <code>restore_from_dp</code>, <code>delete_from_dp</code>, <code>update_on_dp</code>)</li>
-<li>meta file storage to persist model metadata</li>
-</ul>
-<h3 id="step-3-example-target-resource">Step 3. Example target resource<a class="headerlink" href="#step-3-example-target-resource" title="Permanent link">#</a></h3>
-<p>Example resource sent to the agent:</p>
-<div class="highlight"><pre><span></span><code><span class="p">{</span>
-<span class="w">  </span><span class="nt">"kind"</span><span class="p">:</span><span class="w"> </span><span class="s2">"file_target"</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">"value"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="nt">"uuid"</span><span class="p">:</span><span class="w"> </span><span class="s2">"a1b2c3d4-e5f6-7890-a1b2-c3d4e5f67890"</span><span class="p">,</span>
-<span class="w">    </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"config.yaml"</span><span class="p">,</span>
-<span class="w">    </span><span class="nt">"path"</span><span class="p">:</span><span class="w"> </span><span class="s2">"/opt/example/config.yaml"</span>
-<span class="w">  </span><span class="p">}</span>
+<p>Both subclass the plain <code>MetaFileStorageAgentDriver</code>/<code>MetaDataPlaneModel</code> pair described in
+the <a href="../metadata_driver_quick_start/">metadata driver quick start</a>, so <code>create</code>/<code>get</code>/<code>list</code>/
+<code>update</code>/<code>delete</code> still follow the same meta-file-backed workflow. The only addition is
+<code>__coordinator_map__</code>.</p>
+<h2 id="the-coordinator-map">The coordinator map<a class="headerlink" href="#the-coordinator-map" title="Permanent link">#</a></h2>
+<p><code>__coordinator_map__</code> describes, per capability kind, which other kinds must be loaded
+first and how to match them to the current object:</p>
+<div class="highlight"><pre><span></span><code><span class="n">__coordinator_map__</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="s2">"pool"</span><span class="p">:</span> <span class="p">{},</span>
+    <span class="s2">"pool_volume"</span><span class="p">:</span> <span class="p">{</span>
+        <span class="s2">"pool"</span><span class="p">:</span> <span class="p">{</span>
+            <span class="s2">"kind"</span><span class="p">:</span> <span class="s2">"pool"</span><span class="p">,</span>
+            <span class="s2">"relation"</span><span class="p">:</span> <span class="s2">"pool_volume:pool"</span><span class="p">,</span>
+        <span class="p">},</span>
+    <span class="p">},</span>
+    <span class="s2">"pool_machine"</span><span class="p">:</span> <span class="p">{</span>
+        <span class="s2">"pool"</span><span class="p">:</span> <span class="p">{</span>
+            <span class="s2">"kind"</span><span class="p">:</span> <span class="s2">"pool"</span><span class="p">,</span>
+            <span class="s2">"relation"</span><span class="p">:</span> <span class="s2">"pool_machine:pool"</span><span class="p">,</span>
+        <span class="p">},</span>
+        <span class="s2">"volumes"</span><span class="p">:</span> <span class="p">{</span>
+            <span class="s2">"kind"</span><span class="p">:</span> <span class="s2">"pool_volume"</span><span class="p">,</span>
+            <span class="s2">"relation"</span><span class="p">:</span> <span class="s2">"pool_volume:machine"</span><span class="p">,</span>
+        <span class="p">},</span>
+    <span class="p">},</span>
 <span class="p">}</span>
 </code></pre></div>
-<p>After <code>create</code>:</p>
 <ul>
-<li><code>/opt/example/config.yaml</code> exists in the data plane</li>
-<li>meta file contains resource UUID and metadata for future reconciliation</li>
+<li>The top-level keys are capability kinds handled by the driver (must match <code>__model_map__</code>).</li>
+<li>Each value is a dict of dependency name -&gt; spec. The dependency name becomes a keyword
+  argument passed to the model's <code>dump_to_dp</code>/<code>restore_from_dp</code>/<code>update_on_dp</code>/<code>delete_from_dp</code>.</li>
+<li><code>kind</code> is the dependency's capability kind — its already-loaded objects are looked up
+  from the driver's internal coordinator storage.</li>
+<li><code>relation</code> is <code>"&lt;kind_with_the_pointer_field&gt;:&lt;field_name&gt;"</code>. If <code>relation_kind</code> matches
+  the <em>current</em> object's own kind (as for <code>pool_volume</code>'s <code>pool</code> dependency), the field is
+  read off the current object itself and a single matching object is returned. Otherwise
+  (as for <code>pool_machine</code>'s <code>volumes</code> dependency) every object of <code>kind</code> whose <code>field_name</code>
+  points back at the current object's UUID is collected into a tuple.</li>
+<li>Omitting <code>relation</code> copies every object of <code>kind</code> as-is (rarely needed).</li>
+<li>A kind with <code>{}</code> (like <code>pool</code>) has no dependencies — its data plane methods are called
+  with no extra keyword arguments.</li>
 </ul>
+<p><code>__model_map__</code> order matters: kinds are processed in the order they're declared, so a
+kind's dependencies should be declared before it (<code>pool</code> before <code>pool_volume</code> before
+<code>pool_machine</code>).</p>
+<h2 id="data-plane-model-methods-receive-dependencies-as-kwargs">Data plane model methods receive dependencies as kwargs<a class="headerlink" href="#data-plane-model-methods-receive-dependencies-as-kwargs" title="Permanent link">#</a></h2>
+<div class="highlight"><pre><span></span><code><span class="k">class</span><span class="w"> </span><span class="nc">MetaVolume</span><span class="p">(</span><span class="n">meta</span><span class="o">.</span><span class="n">MetaCoordinatorDataPlaneModel</span><span class="p">):</span>
+    <span class="n">pool</span> <span class="o">=</span> <span class="n">properties</span><span class="o">.</span><span class="n">property</span><span class="p">(</span><span class="n">types</span><span class="o">.</span><span class="n">UUID</span><span class="p">(),</span> <span class="n">required</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="o">...</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">dump_to_dp</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">pool</span><span class="p">:</span> <span class="n">MetaPool</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">driver</span> <span class="o">=</span> <span class="n">pool</span><span class="o">.</span><span class="n">load_driver</span><span class="p">()</span>
+        <span class="o">...</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">restore_from_dp</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">pool</span><span class="p">:</span> <span class="n">MetaPool</span> <span class="o">|</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="o">...</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">delete_from_dp</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">pool</span><span class="p">:</span> <span class="n">MetaPool</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="o">...</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">update_on_dp</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">pool</span><span class="p">:</span> <span class="n">MetaPool</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="o">...</span>
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><span class="k">class</span><span class="w"> </span><span class="nc">MetaMachine</span><span class="p">(</span><span class="n">meta</span><span class="o">.</span><span class="n">MetaCoordinatorDataPlaneModel</span><span class="p">):</span>
+    <span class="n">pool</span> <span class="o">=</span> <span class="n">properties</span><span class="o">.</span><span class="n">property</span><span class="p">(</span><span class="n">types</span><span class="o">.</span><span class="n">AllowNone</span><span class="p">(</span><span class="n">types</span><span class="o">.</span><span class="n">UUID</span><span class="p">()))</span>
+    <span class="o">...</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">dump_to_dp</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">pool</span><span class="p">:</span> <span class="n">MetaPool</span><span class="p">,</span> <span class="n">volumes</span><span class="p">:</span> <span class="n">tp</span><span class="o">.</span><span class="n">Collection</span><span class="p">[</span><span class="n">MetaVolume</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="o">...</span>
+</code></pre></div>
+<p>The keyword argument names (<code>pool</code>, <code>volumes</code>) must match the dependency names used in
+<code>__coordinator_map__</code>.</p>
+<h2 id="the-driver">The driver<a class="headerlink" href="#the-driver" title="Permanent link">#</a></h2>
+<div class="highlight"><pre><span></span><code><span class="k">class</span><span class="w"> </span><span class="nc">PoolAgentDriver</span><span class="p">(</span><span class="n">meta</span><span class="o">.</span><span class="n">MetaCoordinatorAgentDriver</span><span class="p">):</span>
+    <span class="c1"># Order matters: dependencies must come before dependents.</span>
+    <span class="n">__model_map__</span> <span class="o">=</span> <span class="p">{</span>
+        <span class="s2">"pool"</span><span class="p">:</span> <span class="n">MetaPool</span><span class="p">,</span>
+        <span class="s2">"pool_volume"</span><span class="p">:</span> <span class="n">MetaVolume</span><span class="p">,</span>
+        <span class="s2">"pool_machine"</span><span class="p">:</span> <span class="n">MetaMachine</span><span class="p">,</span>
+    <span class="p">}</span>
+
+    <span class="n">__coordinator_map__</span> <span class="o">=</span> <span class="p">{</span>
+        <span class="s2">"pool"</span><span class="p">:</span> <span class="p">{},</span>
+        <span class="s2">"pool_volume"</span><span class="p">:</span> <span class="p">{</span>
+            <span class="s2">"pool"</span><span class="p">:</span> <span class="p">{</span><span class="s2">"kind"</span><span class="p">:</span> <span class="s2">"pool"</span><span class="p">,</span> <span class="s2">"relation"</span><span class="p">:</span> <span class="s2">"pool_volume:pool"</span><span class="p">},</span>
+        <span class="p">},</span>
+        <span class="s2">"pool_machine"</span><span class="p">:</span> <span class="p">{</span>
+            <span class="s2">"pool"</span><span class="p">:</span> <span class="p">{</span><span class="s2">"kind"</span><span class="p">:</span> <span class="s2">"pool"</span><span class="p">,</span> <span class="s2">"relation"</span><span class="p">:</span> <span class="s2">"pool_machine:pool"</span><span class="p">},</span>
+            <span class="s2">"volumes"</span><span class="p">:</span> <span class="p">{</span><span class="s2">"kind"</span><span class="p">:</span> <span class="s2">"pool_volume"</span><span class="p">,</span> <span class="s2">"relation"</span><span class="p">:</span> <span class="s2">"pool_volume:machine"</span><span class="p">},</span>
+        <span class="p">},</span>
+    <span class="p">}</span>
+</code></pre></div>
+<h2 id="real-world-example-the-vm-poollibvirt-driver">Real-world example: the VM pool/libvirt driver<a class="headerlink" href="#real-world-example-the-vm-poollibvirt-driver" title="Permanent link">#</a></h2>
+<p>The full, real implementation of the pattern described above lives in
+<a href="https://github.com/exordos/gcl_sdk/blob/master/gcl_sdk/agents/universal/drivers/pool.py"><code>gcl_sdk/agents/universal/drivers/pool.py</code></a>
+(<code>MetaPool</code>, <code>MetaVolume</code>, <code>MetaMachine</code>, <code>PoolAgentDriver</code>, <code>LocalPoolAgentDriver</code>) and
+<a href="https://github.com/exordos/gcl_sdk/blob/master/gcl_sdk/agents/universal/drivers/libvirt.py"><code>gcl_sdk/agents/universal/drivers/libvirt.py</code></a>
+(<code>LibvirtPoolDriver</code>, the concrete data plane implementation that talks to libvirt to
+create/resize/attach VM disks and create/update/delete VM domains).</p>
+<p><code>pool.py</code> also defines <code>AbstractPoolDriver</code>, a second, narrower abstraction used only
+<em>inside</em> the coordinator models to talk to the actual hypervisor backend. It is loaded
+dynamically by <code>MetaPool.load_driver()</code> from the <code>gcl_sdk_machine_pool_driver</code> entry-point
+group, keyed by the <code>driver_spec.KIND</code> of the pool (for example <code>"libvirt"</code>, <code>"dummy"</code>, or
+<code>"exordos_local_hyper"</code>). This extra indirection exists specifically for this driver so
+that alternative hypervisor backends can be added without touching
+<code>MetaPool</code>/<code>MetaVolume</code>/<code>MetaMachine</code> — it is not part of the generic coordinator driver
+contract and most coordinator drivers won't need it.</p>
+<p><code>"exordos_local_hyper"</code> registers the very same <code>LibvirtPoolDriver</code> class as <code>"libvirt"</code> —
+it exists as a separate KIND purely at the control-plane level, so <code>KindModelSelectorType</code>
+can validate its driver_spec against <code>ExordosLocalHyperDriverSpec</code> (which adds a required
+<code>node</code> field) instead of the plain <code>LibvirtPoolDriverSpec</code>. <code>node</code> is what lets the
+scheduler pin such a pool to one specific agent — see <code>LocalPoolAgentDriver</code> below.</p>
+<p>The <code>libvirt</code> backend requires the <code>libvirt</code> python bindings, shipped as the optional
+<code>gcl_sdk[libvirt]</code> extra so that hosts not running VMs don't need to install them.</p>
+<h3 id="marker-capabilities-pinning-a-pool-to-its-own-agent">Marker capabilities: pinning a pool to its own agent<a class="headerlink" href="#marker-capabilities-pinning-a-pool-to-its-own-agent" title="Permanent link">#</a></h3>
+<p><code>LocalPoolAgentDriver</code> (a thin <code>PoolAgentDriver</code> subclass) advertises one extra capability,
+<code>local_pool</code>, purely so a scheduler consuming this agent's reported capabilities can tell
+it apart from one that can only serve pools already reachable over the network — matching
+a pool needing <code>local_pool</code> to the one agent whose node uuid equals the pool's
+<code>driver_spec.node</code> is entirely up to that scheduler; gcl_sdk itself only carries the
+capability. <code>local_pool</code> isn't a real, actualizable resource kind: nothing ever targets it,
+so <code>list()</code> must return <code>[]</code> for it explicitly rather than falling through to the
+coordinator's normal meta-file-backed lookup (which would raise, since <code>local_pool</code> was
+never added to <code>__model_map__</code>):</p>
+<div class="highlight"><pre><span></span><code><span class="k">class</span><span class="w"> </span><span class="nc">LocalPoolAgentDriver</span><span class="p">(</span><span class="n">PoolAgentDriver</span><span class="p">):</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">get_capabilities</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]:</span>
+        <span class="k">return</span> <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">get_capabilities</span><span class="p">()</span> <span class="o">+</span> <span class="p">[</span><span class="s2">"local_pool"</span><span class="p">]</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">list</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">capability</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">ua_models</span><span class="o">.</span><span class="n">Resource</span><span class="p">]:</span>
+        <span class="k">if</span> <span class="n">capability</span> <span class="o">==</span> <span class="s2">"local_pool"</span><span class="p">:</span>
+            <span class="k">return</span> <span class="p">[]</span>
+        <span class="k">return</span> <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">list</span><span class="p">(</span><span class="n">capability</span><span class="p">)</span>
+</code></pre></div>
+<p>Use the same pattern for any other scheduling-only marker capability: advertise it in
+<code>get_capabilities()</code>, but short-circuit <code>list()</code> (and <code>create</code>/<code>update</code>/<code>delete</code>, if the
+generic actualization loop could ever call them) before they reach the coordinator
+machinery meant for real resource kinds.</p>
 <h2 id="register-the-driver">Register the driver<a class="headerlink" href="#register-the-driver" title="Permanent link">#</a></h2>
-<p>When implementation is ready, register the driver via entry points:</p>
 <div class="highlight"><pre><span></span><code><span class="k">[project.entry-points.gcl_sdk_universal_agent]</span>
-<span class="n">FilesMetaCapabilityDriver</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"your_package.drivers.files_meta:FilesMetaCapabilityDriver"</span>
+<span class="n">YourCoordinatorDriver</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"your_package.drivers.your_driver:YourCoordinatorDriver"</span>
 </code></pre></div>
 <h2 id="usage">Usage<a class="headerlink" href="#usage" title="Permanent link">#</a></h2>
-<ol>
-<li>Install package with your driver.</li>
-<li>Add the driver class to the Universal Agent config.</li>
-<li>Restart the agent.</li>
-</ol>
 <div class="highlight"><pre><span></span><code><span class="k">[universal_agent]</span>
-<span class="na">caps_drivers</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">...,FilesMetaCapabilityDriver</span>
+<span class="na">caps_drivers</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">...,YourCoordinatorDriver</span>
 </code></pre></div>
 <div class="highlight"><pre><span></span><code>systemctl<span class="w"> </span>restart<span class="w"> </span>exordos-universal-agent
 </code></pre></div>
