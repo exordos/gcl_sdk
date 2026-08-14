@@ -77,18 +77,18 @@ __coordinator_map__ = {
 }
 ```
 
-- The top-level keys are capability kinds handled by the driver (must match `__model_map__`).
-- Each value is a dict of dependency name -> spec. The dependency name becomes a keyword
-  argument passed to the model's `dump_to_dp`/`restore_from_dp`/`update_on_dp`/`delete_from_dp`.
-- `kind` is the dependency's capability kind — its already-loaded objects are looked up
-  from the driver's internal coordinator storage.
-- `relation` is `"<kind_with_the_pointer_field>:<field_name>"`. If `relation_kind` matches
-  the *current* object's own kind (as for `pool_volume`'s `pool` dependency), the field is
-  read off the current object itself and a single matching object is returned. Otherwise
-  (as for `pool_machine`'s `volumes` dependency) every object of `kind` whose `field_name`
-  points back at the current object's UUID is collected into a tuple.
-- Omitting `relation` copies every object of `kind` as-is (rarely needed).
-- A kind with `{}` (like `pool`) has no dependencies — its data plane methods are called
+-   The top-level keys are capability kinds handled by the driver (must match `__model_map__`).
+-   Each value is a dict of dependency name -> spec. The dependency name becomes a keyword
+    argument passed to the model's `dump_to_dp`/`restore_from_dp`/`update_on_dp`/`delete_from_dp`.
+-   `kind` is the dependency's capability kind — its already-loaded objects are looked up
+    from the driver's internal coordinator storage.
+-   `relation` is `"<kind_with_the_pointer_field>:<field_name>"`. If `relation_kind` matches
+    the *current* object's own kind (as for `pool_volume`'s `pool` dependency), the field is
+    read off the current object itself and a single matching object is returned. Otherwise
+    (as for `pool_machine`'s `volumes` dependency) every object of `kind` whose `field_name`
+    points back at the current object's UUID is collected into a tuple.
+-   Omitting `relation` copies every object of `kind` as-is (rarely needed).
+-   A kind with `{}` (like `pool`) has no dependencies — its data plane methods are called
   with no extra keyword arguments.
 
 `__model_map__` order matters: kinds are processed in the order they're declared, so a
