@@ -1043,15 +1043,21 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
 
         # Resize the volume
         if self.size != dp_volume.size:
+            # Take the delta before `dp_volume.size` is overwritten below:
+            # computing it afterwards always yields 0, so the growth was
+            # never charged to the storage pool and `capacity_provisioned`
+            # drifted below what the volumes actually occupy.
+            size_delta = self.size - dp_volume.size
+
             # Check the storage pool has enough capacity
-            if not self._has_storage_capacity(pool, self.size - dp_volume.size):
+            if not self._has_storage_capacity(pool, size_delta):
                 self.status = VolumeStatus.ERROR.value
                 return
 
             unknown_action = False
             dp_volume.size = self.size
             driver.resize_volume(dp_volume)
-            self._allocate_capacity(pool, self.size - dp_volume.size)
+            self._allocate_capacity(pool, size_delta)
             LOG.info("The volume %s resized.", self.uuid)
 
         # Attachments
