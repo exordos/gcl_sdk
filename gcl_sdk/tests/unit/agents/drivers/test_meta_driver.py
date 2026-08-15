@@ -345,3 +345,68 @@ def test_a_field_this_agent_does_not_have_is_skipped_not_fatal(caplog):
     # back: the resource will be applied for ever without ever matching.
     assert "routes" in caplog.text
     assert "routes" not in obj.get_resource_target_fields()
+
+
+class NewerModel(DummyModel):
+    """The same agent one release later: it has learned a field."""
+
+    driver_spec = properties.property(types.String(), default="")
+
+
+def test_an_agent_newer_than_its_core_still_settles(caplog):
+    """The other half of a rolling upgrade, and the half that goes quiet.
+
+    Agents are updated before or after the core, never with it, so for a
+    while an agent knows a field the core does not send yet. Nothing fails
+    then -- the model just takes its default -- which is exactly what makes
+    it dangerous: if the agent counted that default into the hash it
+    reports, it would disagree with a target that never mentioned the field,
+    and the resource would be re-applied for ever while every apply
+    succeeded. That is a live installation burning an iteration per pass on
+    a port nobody touched, and it shows up as load rather than as an error.
+
+    So the hash the agent computes must be over the fields the *core* sent,
+    which is what `target_fields` carries from one side to the other.
+    """
+    uuid = sys_uuid.uuid4()
+    from_the_core = _make_resource("dummy", uuid, {"uuid": str(uuid), "foo": 7})
+
+    with caplog.at_level(logging.WARNING):
+        obj = NewerModel.from_ua_resource(from_the_core)
+    reported = obj.to_ua_resource("dummy")
+
+    assert obj.driver_spec == "", "a field the core never sent took a default"
+    assert reported.hash == from_the_core.hash, (
+        "the agent reports a hash the core cannot match, so this resource is "
+        "re-applied on every pass for as long as the two versions differ"
+    )
+    # And it says nothing: an agent ahead of its core is the ordinary
+    # direction of an upgrade and has nothing to report.
+    assert not caplog.text.strip()
+
+
+def test_a_field_the_agent_lacks_is_named_because_it_will_not_settle(caplog):
+    """The asymmetry, stated as a measurement rather than a comment.
+
+    The opposite skew cannot be repaired here: the missing field is part of
+    the hash the core computed, and an agent that never knew the field
+    cannot reproduce it. The resource is applied as far as it is understood
+    and then applied again for ever. That is why that path warns and this
+    one does not -- and it is worth a case of its own, so that a change
+    which makes it settle silently (by hashing over the agent's own view,
+    say) fails here instead of hiding a divergence.
+    """
+    uuid = sys_uuid.uuid4()
+    from_the_core = _make_resource(
+        "dummy", uuid, {"uuid": str(uuid), "foo": 7, "routes": []}
+    )
+
+    with caplog.at_level(logging.WARNING):
+        reported = DummyModel.from_ua_resource(from_the_core).to_ua_resource("dummy")
+
+    assert reported.hash != from_the_core.hash, (
+        "the agent claims to match a target containing a field it cannot "
+        "read; a resource that is not being applied in full must not look "
+        "settled"
+    )
+    assert "routes" in caplog.text, "the field that blocks convergence is not named"
