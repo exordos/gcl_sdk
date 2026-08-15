@@ -201,6 +201,29 @@ class TestVolumeLifecycle:
             ["systemctl", "disable", "--now", f"rawstor-vhost@{volume.uuid}"]
         ]
 
+    def test_delete_aborts_if_the_vhost_unit_fails_to_stop(self, tmp_path, monkeypatch):
+        # Regression: a swallowed disable failure used to let delete_volume
+        # remove the object anyway, orphaning a still-enabled unit behind
+        # it - a real failure to stop must abort the delete instead.
+        _no_op_systemctl(monkeypatch)
+        driver = _driver(tmp_path)
+        volume = pool_base.MachineVolume(
+            uuid=sys_uuid.uuid4(), project_id=sys_uuid.uuid4(), size=1
+        )
+        driver.create_volume(volume)
+
+        def fake_check_call(cmd, *a, **kw):
+            raise subprocess.CalledProcessError(1, cmd)
+
+        monkeypatch.setattr(subprocess, "check_call", fake_check_call)
+
+        with pytest.raises(subprocess.CalledProcessError):
+            driver.delete_volume(volume)
+
+        # The object must still exist - the delete never got past the
+        # failed vhost stop.
+        assert driver.get_volume(volume.uuid).uuid == volume.uuid
+
 
 class TestForeignVolumes:
     """A machine can be adopted into this pool with disks that were never

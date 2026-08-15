@@ -95,16 +95,14 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
             time.sleep(SOCKET_WAIT_INTERVAL)
 
     def _stop_vhost(self, volume_uuid: sys_uuid.UUID) -> None:
-        try:
-            subprocess.check_call(
-                ["systemctl", "disable", "--now", self._vhost_unit(volume_uuid)]
-            )
-        except subprocess.CalledProcessError:
-            LOG.debug(
-                "Failed to stop rawstor-vhost for volume %s, "
-                "perhaps it wasn't running",
-                volume_uuid,
-            )
+        # `disable --now` on a unit that was never enabled is a no-op
+        # (exit 0), so a nonzero exit here is a real failure to stop the
+        # backend, not "it wasn't running" - letting it propagate is what
+        # keeps delete_volume from removing the object out from under a
+        # backend that's still (or still enabled to be) attached to it.
+        subprocess.check_call(
+            ["systemctl", "disable", "--now", self._vhost_unit(volume_uuid)]
+        )
 
     def _find_rawstor_disk(
         self, domain: ET.Element, volume_uuid: sys_uuid.UUID
@@ -341,8 +339,10 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
     def delete_volume(self, volume: pool_base.MachineVolume) -> None:
         # The vhost-user backend is an attachment of the volume: don't
         # leave it running against an object that's about to disappear.
-        # Idempotent/best-effort since the volume may already have been
-        # detached (or never attached at all).
+        # Idempotent - disabling a unit that was never enabled (the
+        # volume may already have been detached, or never attached at
+        # all) is a no-op - but a real failure to stop it must abort the
+        # delete rather than orphan an enabled unit.
         self._stop_vhost(volume.uuid)
 
         target = rawstor.Target(self._target_uri(volume.uuid))
