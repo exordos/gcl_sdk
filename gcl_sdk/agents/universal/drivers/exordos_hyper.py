@@ -233,6 +233,32 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
                 bus="virtio",
             )
 
+    def _start_domain_vhosts(self, machine: pool_base.Machine) -> None:
+        """Re-arm the vhost-user backends the domain's own XML expects.
+
+        The domain XML (and thus QEMU's expectation of a listening
+        socket) survives a destroy/create cycle, but the rawstor-vhost
+        backend does not: it exits when its vhost-user client
+        disconnects, i.e. exactly when the domain is destroyed. Nothing
+        else restarts it, so a plain domain restart must.
+        """
+        domain = self._client.lookupByUUIDString(str(machine.uuid))
+        element = ET.fromstring(domain.XMLDesc())
+        for volume_uuid in self._rawstor_attachments(((domain, element),)):
+            self._start_vhost(volume_uuid)
+
+    @libvirt_driver.dry_run_decorator()
+    def reset_machine(self, machine: pool_base.Machine) -> None:
+        """Reset the machine."""
+        self._start_domain_vhosts(machine)
+        super().reset_machine(machine)
+
+    @libvirt_driver.dry_run_decorator()
+    def start_machine(self, machine: pool_base.Machine) -> None:
+        """Start the machine."""
+        self._start_domain_vhosts(machine)
+        super().start_machine(machine)
+
     def _list_foreign_volumes(
         self,
         domains: tp.Collection[tp.Tuple[libvirt.virDomain, ET.Element]],
