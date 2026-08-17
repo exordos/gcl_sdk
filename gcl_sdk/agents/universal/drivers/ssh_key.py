@@ -60,6 +60,10 @@ class SSHKey(meta.MetaDataPlaneModel):
         # Keep all fields as meta fields for simplicity
         return {"uuid", "user", "authorized_keys", "target_public_key"}
 
+    def _target_key_line(self) -> str:
+        """Return the public key without serialized line terminators."""
+        return self.target_public_key.rstrip("\r\n")
+
     def dump_to_dp(self) -> None:
         """Save the key to the data plane."""
 
@@ -90,9 +94,10 @@ class SSHKey(meta.MetaDataPlaneModel):
         # Add the key if it doesn't exist
         with open(authorized_keys, "r") as f:
             content = f.read()
-        if self.target_public_key not in content:
+        target_public_key = self._target_key_line()
+        if target_public_key not in content.splitlines():
             with open(authorized_keys, "a") as f:
-                f.write(f"{self.target_public_key}\n")
+                f.write(f"{target_public_key}\n")
 
     def restore_from_dp(self) -> None:
         """Load the key from the file system."""
@@ -103,8 +108,9 @@ class SSHKey(meta.MetaDataPlaneModel):
 
         with open(authorized_keys, "r") as f:
             content = f.read()
-        for key in content.split("\n"):
-            if key == self.target_public_key:
+        target_public_key = self._target_key_line()
+        for key in content.splitlines():
+            if key == target_public_key:
                 return
 
         resource = self.to_ua_resource(SSH_KEY_TARGET_KIND)
@@ -118,11 +124,12 @@ class SSHKey(meta.MetaDataPlaneModel):
 
         with open(authorized_keys, "r") as f:
             content = f.read()
+        target_public_key = self._target_key_line()
         with open(authorized_keys, "w") as f:
-            for key in content.split("\n"):
-                if not key or key == "\n":
+            for key in content.splitlines():
+                if not key:
                     continue
-                if key == self.target_public_key:
+                if key == target_public_key:
                     continue
                 f.write(f"{key}\n")
 
