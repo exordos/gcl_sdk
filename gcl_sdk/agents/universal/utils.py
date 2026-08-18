@@ -60,6 +60,50 @@ def calculate_hash(
     return m.hexdigest()
 
 
+def value_shape(value: tp.Any) -> tp.Any:
+    """Return the key skeleton of `value`, without any of its leaves.
+
+    Target fields are the top-level names the control plane declared, and
+    they are all `replace_value` needs to strip the extra top-level fields
+    the data plane adds. Nested fields it cannot help with: a default the
+    data plane fills in *inside* a declared dict or list -- an endpoint's
+    `weight`, a route condition's `allowed_ips` -- lands in the target
+    hash, never matches, and the resource never settles.
+
+    So the shape is kept alongside the names. Only keys are retained; every
+    leaf becomes None, because this is persisted to the agent's work dir
+    and resource values carry passwords and certificates.
+
+    {"a": 1, "b": {"c": 2}} -> {"a": None, "b": {"c": None}}
+    """
+    if isinstance(value, dict):
+        return {k: value_shape(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [value_shape(v) for v in value]
+    return None
+
+
+def project_onto(value: tp.Any, shape: tp.Any) -> tp.Any:
+    """Reduce `value` to the keys `shape` has, recursively.
+
+    A key the shape does not have is dropped. A key it has but the value
+    does not is simply absent -- the hashes then differ, which is what a
+    data plane that drops a declared field should look like.
+
+    Lists are paired by index: elements past the end of the shape are kept
+    as they are, so a data plane that returns more elements than were
+    declared reads as the drift it is.
+    """
+    if isinstance(shape, dict) and isinstance(value, dict):
+        return {k: project_onto(value[k], shape[k]) for k in shape if k in value}
+    if isinstance(shape, list) and isinstance(value, list):
+        return [
+            project_onto(v, shape[i]) if i < len(shape) else v
+            for i, v in enumerate(value)
+        ]
+    return value
+
+
 def cfg_load_class(model_path: str) -> type:
     """Load class from config file.
 

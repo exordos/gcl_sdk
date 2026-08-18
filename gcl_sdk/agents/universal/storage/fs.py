@@ -22,12 +22,26 @@ from gcl_sdk.agents.universal.storage import common
 from gcl_sdk.agents.universal.storage import exceptions as se
 
 
+def _to_item(
+    kind: str, uuid: sys_uuid.UUID, stored: dict | list
+) -> base.TargetFieldItem:
+    """Build an item from what the file holds, in either format."""
+    shape = stored if isinstance(stored, dict) else None
+    return base.TargetFieldItem(kind, uuid, frozenset(stored), shape)
+
+
 class TargetFieldsFileStorage(base.AbstractTargetFieldsStorage):
     """Target fields JSON file storage.
 
     It stores the target fields in a JSON file.
     The file structure is the following:
-    {kind: {uuid: fields}}
+    {kind: {uuid: shape}}
+
+    `shape` is the key skeleton of the target value, whose top-level names
+    are the target fields. A file written before shapes were stored holds
+    a plain list of those names instead, and is read as a shapeless item.
+    Both directions work: a list and a dict of the same names iterate the
+    same, so an older agent reads a newer file as the name list it expects.
     """
 
     def __init__(self, storage_path: str) -> None:
@@ -36,11 +50,11 @@ class TargetFieldsFileStorage(base.AbstractTargetFieldsStorage):
     def get(self, kind: str, uuid: sys_uuid.UUID) -> base.TargetFieldItem:
         """Get the target fields item from the storage."""
         try:
-            fields = self._storage[kind][str(uuid)]
+            stored = self._storage[kind][str(uuid)]
         except KeyError:
             raise se.ItemNotFound(item=base.TargetFieldItem(kind, uuid, frozenset()))
 
-        return base.TargetFieldItem(kind, uuid, frozenset(fields))
+        return _to_item(kind, uuid, stored)
 
     def create(
         self,
@@ -57,7 +71,8 @@ class TargetFieldsFileStorage(base.AbstractTargetFieldsStorage):
             if not force:
                 raise se.ItemAlreadyExists(item=item)
 
-        self._storage.setdefault(item.kind, {})[str(item.uuid)] = list(item.fields)
+        stored = dict(item.shape) if item.shape is not None else list(item.fields)
+        self._storage.setdefault(item.kind, {})[str(item.uuid)] = stored
         return item
 
     def update(self, item: base.TargetFieldItem) -> base.TargetFieldItem:
@@ -67,8 +82,8 @@ class TargetFieldsFileStorage(base.AbstractTargetFieldsStorage):
     def list(self, kind: str) -> list[base.TargetFieldItem]:
         """Lists all target fields items of a resource kind."""
         return [
-            base.TargetFieldItem(kind, sys_uuid.UUID(uuid), frozenset(fields))
-            for uuid, fields in self._storage.get(kind, {}).items()
+            _to_item(kind, sys_uuid.UUID(uuid), stored)
+            for uuid, stored in self._storage.get(kind, {}).items()
         ]
 
     def delete(self, item: base.TargetFieldItem, force: bool = False) -> None:
@@ -89,6 +104,6 @@ class TargetFieldsFileStorage(base.AbstractTargetFieldsStorage):
         """Persist the storage."""
         self._storage.persist()
 
-    def storage(self) -> dict[str, dict[str, list[str]]]:
+    def storage(self) -> dict[str, dict[str, dict | list[str]]]:
         """Return the raw storage."""
         return self._storage

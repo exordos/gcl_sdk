@@ -19,17 +19,33 @@ import abc
 import typing as tp
 import uuid as sys_uuid
 
+from gcl_sdk.agents.universal import utils
 from gcl_sdk.agents.universal.dm import models
 
 
 class TargetFieldItem(tp.NamedTuple):
+    """The target fields of one resource.
+
+    `fields` are the top-level names the control plane declared. `shape`
+    is the key skeleton of the whole declared value (`utils.value_shape`),
+    which is what lets the nested fields the data plane adds be dropped
+    too. It is optional: an item written by an older agent has none, and
+    the top-level names are then all there is to filter with.
+    """
+
     kind: str
     uuid: sys_uuid.UUID
     fields: frozenset[str]
+    shape: dict[str, tp.Any] | None = None
 
     @classmethod
     def from_ua_resource(cls, resource: models.Resource) -> TargetFieldItem:
-        return cls(resource.kind, resource.uuid, frozenset(resource.value.keys()))
+        return cls(
+            resource.kind,
+            resource.uuid,
+            frozenset(resource.value.keys()),
+            utils.value_shape(resource.value),
+        )
 
 
 class AbstractTargetFieldsStorage(abc.ABC):

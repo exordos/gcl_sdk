@@ -20,6 +20,7 @@ import logging
 import typing as tp
 import uuid as sys_uuid
 
+from gcl_sdk.agents.universal import utils
 from gcl_sdk.agents.universal.clients.backend import base as client_base
 from gcl_sdk.agents.universal.clients.backend import exceptions as client_exc
 from gcl_sdk.agents.universal.dm import models
@@ -121,6 +122,7 @@ class DirectAgentDriver(base.AbstractCapabilityDriver):
         kind: str,
         model: models.ResourceMixin,
         target_fields: frozenset[str],
+        shape: dict[str, tp.Any] | None = None,
     ) -> models.Resource:
         # We need to be sure the return object is resource
         # and not target resource
@@ -130,13 +132,14 @@ class DirectAgentDriver(base.AbstractCapabilityDriver):
         if kind in self._transformer_map:
             value = self._transformer_map[kind].transform(value)
 
-        return models.Resource.from_value(value, kind, target_fields)
+        return models.Resource.from_value(value, kind, target_fields, shape)
 
     def _prepare_res_response(
         self,
         origin_resource: models.Resource,
         value: dict[str, tp.Any] | models.Resource | models.ResourceMixin,
         target_fields: frozenset[str],
+        shape: dict[str, tp.Any] | None = None,
     ) -> models.Resource:
         """Prepare the response from the client."""
         if isinstance(value, models.Resource):
@@ -146,9 +149,11 @@ class DirectAgentDriver(base.AbstractCapabilityDriver):
             if origin_resource.kind in self._transformer_map:
                 value = self._transformer_map[origin_resource.kind].transform(value)
 
-            return origin_resource.replace_value(value, target_fields)
+            return origin_resource.replace_value(value, target_fields, shape=shape)
         else:
-            return self._model_to_resource(origin_resource.kind, value, target_fields)
+            return self._model_to_resource(
+                origin_resource.kind, value, target_fields, shape
+            )
 
     def _validate(self, resource: models.Resource) -> None:
         """Validate the resource."""
@@ -169,7 +174,9 @@ class DirectAgentDriver(base.AbstractCapabilityDriver):
             LOG.error("Unable to find resource on backend %s", resource.uuid)
             raise driver_exc.ResourceNotFound(resource=resource)
 
-        return self._prepare_res_response(resource, value, target_fields.fields)
+        return self._prepare_res_response(
+            resource, value, target_fields.fields, target_fields.shape
+        )
 
     def list(self, capability: str) -> list[models.Resource]:
         """Lists all resources by capability."""
@@ -192,7 +199,7 @@ class DirectAgentDriver(base.AbstractCapabilityDriver):
                     if capability in self._transformer_map:
                         i = self._transformer_map[capability].transform(i)
                     client_resources[uuid] = models.Resource.from_value(
-                        i, capability, storage_item.fields
+                        i, capability, storage_item.fields, storage_item.shape
                     )
                 else:
                     LOG.warning("Missing storage item for %s %s", capability, uuid)
@@ -206,7 +213,7 @@ class DirectAgentDriver(base.AbstractCapabilityDriver):
                 # to explicitly update target fields during the update procedure.
                 if storage_item := storage_items.get(uuid):
                     client_resources[uuid] = self._model_to_resource(
-                        capability, i, storage_item.fields
+                        capability, i, storage_item.fields, storage_item.shape
                     )
                 else:
                     LOG.warning("Missing storage item for %s %s", capability, uuid)
@@ -222,10 +229,12 @@ class DirectAgentDriver(base.AbstractCapabilityDriver):
         """Creates a resource."""
         self._validate(resource)
 
-        # Figure out the target fields to correct hash calculation
+        # Figure out the target fields to correct hash calculation. The
+        # shape goes with them so nested defaults are stripped as well.
         target_fields = frozenset(resource.value.keys())
+        shape = utils.value_shape(resource.value)
         storage_item = storage_base.TargetFieldItem(
-            resource.kind, resource.uuid, target_fields
+            resource.kind, resource.uuid, target_fields, shape
         )
 
         # There are no problems if the client fails its operation later.
@@ -242,16 +251,18 @@ class DirectAgentDriver(base.AbstractCapabilityDriver):
             raise driver_exc.ResourceAlreadyExists(resource=resource)
 
         # Convert response to the resource
-        return self._prepare_res_response(resource, resp, target_fields)
+        return self._prepare_res_response(resource, resp, target_fields, shape)
 
     def update(self, resource: models.Resource) -> models.Resource:
         """Update the resource."""
         self._validate(resource)
 
-        # Figure out the target fields to correct hash calculation
+        # Figure out the target fields to correct hash calculation. The
+        # shape goes with them so nested defaults are stripped as well.
         target_fields = frozenset(resource.value.keys())
+        shape = utils.value_shape(resource.value)
         storage_item = storage_base.TargetFieldItem(
-            resource.kind, resource.uuid, target_fields
+            resource.kind, resource.uuid, target_fields, shape
         )
 
         try:
@@ -265,7 +276,7 @@ class DirectAgentDriver(base.AbstractCapabilityDriver):
             raise driver_exc.ResourceNotFound(resource=resource)
 
         # Convert response to the resource
-        return self._prepare_res_response(resource, resp, target_fields)
+        return self._prepare_res_response(resource, resp, target_fields, shape)
 
     def delete(self, resource: models.Resource) -> None:
         """Delete the resource."""

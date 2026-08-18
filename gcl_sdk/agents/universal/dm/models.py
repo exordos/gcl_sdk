@@ -525,6 +525,12 @@ class Resource(
 
     For hash calculation only the target fields are used as discussed
     above. `full_hash` is calculated for all fields.
+
+    Target fields are top-level names, but the data plane also fills in
+    defaults *inside* a declared dict or list, and those have to be
+    dropped as well or the resource never settles. Pass `shape` -- the
+    key skeleton of the target value, see `utils.value_shape` -- to have
+    the whole declared structure followed rather than just its top level.
     """
 
     # The default status is `ACTIVE` since it's mostly used when inner
@@ -594,9 +600,12 @@ class Resource(
         value: dict[str, tp.Any],
         target_fields: frozenset[str] | None = None,
         extract_status: bool = True,
+        shape: dict[str, tp.Any] | None = None,
     ) -> Resource:
         """Return a new resource with replaced value and hashes."""
-        if target_fields is None:
+        if shape is not None:
+            hash = utils.calculate_hash(utils.project_onto(value, shape))
+        elif target_fields is None:
             hash = self.hash
         else:
             hash = utils.calculate_hash({k: value[k] for k in target_fields})
@@ -631,11 +640,14 @@ class Resource(
         value: dict[str, tp.Any],
         kind: str,
         target_fields: frozenset[str] | None = None,
+        shape: dict[str, tp.Any] | None = None,
     ) -> Resource:
         status = value.get("status", "ACTIVE")
         uuid = sys_uuid.UUID(value["uuid"])
 
-        if target_fields is None:
+        if shape is not None:
+            hash = utils.calculate_hash(utils.project_onto(value, shape))
+        elif target_fields is None:
             hash = ""
         else:
             hash = utils.calculate_hash({k: value[k] for k in target_fields})
