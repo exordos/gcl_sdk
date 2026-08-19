@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import abc
+import json
 import typing as tp
 import uuid as sys_uuid
 
@@ -31,12 +32,33 @@ class TargetFieldItem(tp.NamedTuple):
     which is what lets the nested fields the data plane adds be dropped
     too. It is optional: an item written by an older agent has none, and
     the top-level names are then all there is to filter with.
+
+    A dict cannot be hashed, so carrying the shape would have cost the
+    item the hashability every other field gave it -- and this is a
+    storage type, handed out of `list()` into whatever a driver keeps it
+    in. `__hash__` below buys that back.
     """
 
     kind: str
     uuid: sys_uuid.UUID
     fields: frozenset[str]
     shape: dict[str, tp.Any] | None = None
+
+    def __hash__(self) -> int:
+        """Hash the shape by its canonical JSON.
+
+        The shape is written to a JSON file, so it is always JSON-able,
+        and `sort_keys` makes the encoding depend on nothing but the
+        keys. Items that compare equal have equal shapes and so hash
+        equal, which is the whole contract.
+        """
+        canonical = (
+            None
+            if self.shape is None
+            else json.dumps(self.shape, separators=(",", ":"), sort_keys=True)
+        )
+
+        return hash((self.kind, self.uuid, self.fields, canonical))
 
     @classmethod
     def from_ua_resource(cls, resource: models.Resource) -> TargetFieldItem:

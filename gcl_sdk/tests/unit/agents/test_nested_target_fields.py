@@ -177,6 +177,62 @@ class TestProjectOnto:
         assert "parent" not in projected
         assert projected != POOL_TARGET
 
+    def test_a_declared_empty_dict_swallows_what_is_nested_in_it(self):
+        """A documented blind spot: an empty dict has no keys to keep.
+
+        The shape never changes either, so this one does not heal the way
+        a key removed from a manifest does. See `project_onto`.
+        """
+        declared = {"uuid": str(POOL_UUID), "labels": {}}
+        filled = {"uuid": str(POOL_UUID), "labels": {"env": "prod"}}
+
+        projected = utils.project_onto(filled, utils.value_shape(declared))
+
+        assert projected == declared
+
+    def test_a_declared_empty_list_keeps_what_is_nested_in_it(self):
+        """The other half of the same coin, and the opposite answer."""
+        declared = {"uuid": str(POOL_UUID), "modifiers": []}
+        filled = {"uuid": str(POOL_UUID), "modifiers": [{"kind": "auto_header"}]}
+
+        projected = utils.project_onto(filled, utils.value_shape(declared))
+
+        assert projected == filled
+        assert projected != declared
+
+
+class TestTargetFieldItem:
+    """The item carries a dict now and still has to be hashable."""
+
+    def _item(self, fields, shape):
+        return storage_base.TargetFieldItem(
+            "em_core_network_lb_backend_pools", POOL_UUID, frozenset(fields), shape
+        )
+
+    def test_an_item_with_a_shape_can_go_in_a_set(self):
+        item = self._item(POOL_TARGET.keys(), utils.value_shape(POOL_TARGET))
+
+        assert {item} == {item}
+
+    def test_a_shapeless_item_can_too(self):
+        assert {self._item(POOL_TARGET.keys(), None)}
+
+    def test_equal_items_hash_equal_whatever_the_key_order(self):
+        """The hash/eq contract, which dict ordering could have broken."""
+        one = self._item(("uuid", "parent"), {"uuid": None, "parent": None})
+        other = self._item(("parent", "uuid"), {"parent": None, "uuid": None})
+
+        assert one == other
+        assert hash(one) == hash(other)
+
+    def test_the_shape_tells_two_items_apart(self):
+        fields = ("uuid", "endpoints")
+        top_level_only = self._item(fields, {"uuid": None, "endpoints": None})
+        nested = self._item(fields, {"uuid": None, "endpoints": [{"host": None}]})
+
+        assert top_level_only != nested
+        assert len({top_level_only, nested}) == 2
+
 
 class TestResourceHash:
     def test_shape_makes_the_hashes_match(self):

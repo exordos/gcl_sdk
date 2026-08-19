@@ -93,6 +93,17 @@ def project_onto(value: tp.Any, shape: tp.Any) -> tp.Any:
     Lists are paired by index: elements past the end of the shape are kept
     as they are, so a data plane that returns more elements than were
     declared reads as the drift it is.
+
+    Which makes dicts and lists disagree about a declared empty container,
+    and both readings are worth knowing about. An empty dict has no keys
+    to keep, so it swallows whatever the data plane put inside it -- and
+    since the shape never changes, that stays invisible for as long as the
+    key is declared empty. An empty list keeps everything instead, so a
+    data plane that fills one in never settles, which is the very thing
+    the shape was added to stop. Nothing here can tell a default the data
+    plane owns from drift it does not; that needs a schema, and until
+    there is one, a container declared empty is the case to think twice
+    about.
     """
     if isinstance(shape, dict) and isinstance(value, dict):
         return {k: project_onto(value[k], shape[k]) for k in shape if k in value}
