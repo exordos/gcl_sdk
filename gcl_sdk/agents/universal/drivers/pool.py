@@ -1151,9 +1151,7 @@ class MetaMachine(meta.MetaCoordinatorDataPlaneModel):
         driver.delete_machine(dp_machine)
         LOG.info("The machine %s deleted", self.uuid)
 
-    def _from_dp_machine(
-        self, dp_machine: Machine, ports: tp.Collection[Port]
-    ) -> None:
+    def _from_dp_machine(self, dp_machine: Machine, ports: tp.Collection[Port]) -> None:
         self.cores = dp_machine.cores
         self.ram = dp_machine.ram
         self.status = dp_machine.status
@@ -1310,7 +1308,9 @@ class MetaMachine(meta.MetaCoordinatorDataPlaneModel):
 
         self._from_dp_machine(dp_machine, dp_ports)
 
-    def delete_from_dp(self, pool: MetaPool, volumes: tp.Collection[MetaVolume]) -> None:
+    def delete_from_dp(
+        self, pool: MetaPool, volumes: tp.Collection[MetaVolume]
+    ) -> None:
         """Delete the machine from the data plane."""
         if self.uuid not in pool.dp_machine_map:
             raise ua_driver_exc.ResourceNotFound(resource=self)

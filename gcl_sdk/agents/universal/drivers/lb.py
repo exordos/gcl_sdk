@@ -276,9 +276,16 @@ class LB(lb_models.LB, meta.MetaDataPlaneModel):
                     val = ADD_HEADERS_MAPPING[h]
                     res.append(val(vhost, route) if callable(val) else val)
             elif m["kind"] == "set_header":
+                # Request direction: header nginx sends upstream to the backend.
                 name = m["name"].replace('"', '\\"')
                 value = m["value"].replace('"', '\\"')
                 res.append(f'proxy_set_header "{name}" "{value}";')
+            elif m["kind"] == "set_resp_header":
+                # Response direction: header nginx sends back to the client.
+                # "always" so it survives error responses too.
+                name = m["name"].replace('"', '\\"')
+                value = m["value"].replace('"', '\\"')
+                res.append(f'add_header "{name}" "{value}" always;')
             elif m["kind"] == "rewrite_url":
                 reg = m["regex"].replace('"', '\\"')
                 repl = m["replacement"].replace('"', '\\"')

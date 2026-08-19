@@ -14,8 +14,8 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import uuid as sys_uuid
 from unittest import mock
+import uuid as sys_uuid
 
 import pytest
 
@@ -103,7 +103,7 @@ class TestPoolAgentDriver:
         assert "pool" in drv.get_capabilities()
 
     def test_local_pool_agent_driver_lists_local_pool_as_empty(self, tmp_path):
-        """"local_pool" is a scheduling-only marker, not a real resource
+        """ "local_pool" is a scheduling-only marker, not a real resource
         kind: the generic actualization loop calls list() for every
         advertised capability, so it must not raise for this one.
         """
