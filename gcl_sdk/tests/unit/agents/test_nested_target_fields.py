@@ -291,6 +291,69 @@ class TestTargetFieldsFileStorage:
         assert item.shape == shape
         assert item.fields == frozenset(POOL_TARGET.keys())
 
+    def test_update_replaces_the_shape_on_disk(self, tmp_path):
+        """A manifest that lost a key must lose it in storage too.
+
+        `update()` is where a redeclared value reaches the file, and it
+        has to replace what is there rather than merge with it. A merge
+        reads the same as a replace whenever the shape only grows, so the
+        case that tells them apart is the one that shrinks -- and it has
+        to shrink at both levels, since a merge of either depth survives
+        a value that only lost a key at the other.
+        """
+        kind = "em_core_network_lb_backend_pools"
+        storage = self._storage(tmp_path, "replace")
+        storage.create(
+            storage_base.TargetFieldItem(
+                kind, POOL_UUID, frozenset(POOL_TARGET), utils.value_shape(POOL_TARGET)
+            )
+        )
+        storage.persist()
+
+        # The same pool, redeclared without `parent` and without the
+        # endpoint's `port`.
+        redeclared = json.loads(json.dumps(POOL_TARGET))
+        del redeclared["parent"]
+        del redeclared["endpoints"][0]["port"]
+        shape = utils.value_shape(redeclared)
+
+        storage = self._storage(tmp_path, "replace")
+        storage.update(
+            storage_base.TargetFieldItem(kind, POOL_UUID, frozenset(redeclared), shape)
+        )
+        storage.persist()
+
+        item = self._storage(tmp_path, "replace").get(kind, POOL_UUID)
+
+        assert item.shape == shape
+        assert item.fields == frozenset(redeclared)
+        assert "port" not in item.shape["endpoints"][0]
+
+    def test_update_writes_a_shape_over_an_entry_that_had_none(self, tmp_path):
+        """How a resource stuck since before the upgrade heals, on disk.
+
+        Its mismatch triggers the update that writes the shape, and the
+        agent that reads it back is a later run, not the one that wrote
+        it.
+        """
+        kind = "em_core_network_lb_backend_pools"
+        path = tmp_path / "upgrade.json"
+        path.write_text(json.dumps({kind: {str(POOL_UUID): sorted(POOL_TARGET)}}))
+        common.JsonFileStorageSingleton._instances.pop(str(path), None)
+
+        storage = self._storage(tmp_path, "upgrade")
+        assert storage.get(kind, POOL_UUID).shape is None
+
+        shape = utils.value_shape(POOL_TARGET)
+        storage.update(
+            storage_base.TargetFieldItem(kind, POOL_UUID, frozenset(POOL_TARGET), shape)
+        )
+        storage.persist()
+
+        item = self._storage(tmp_path, "upgrade").get(kind, POOL_UUID)
+
+        assert item.shape == shape
+
     def test_a_file_written_before_shapes_reads_as_shapeless(self, tmp_path):
         path = tmp_path / "legacy.json"
         path.write_text(
