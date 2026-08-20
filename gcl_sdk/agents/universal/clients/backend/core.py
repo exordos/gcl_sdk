@@ -32,6 +32,25 @@ from gcl_sdk.clients.http import base as http
 LOG = logging.getLogger(__name__)
 
 
+class SecretModelSpec(tp.NamedTuple):
+    """Specification of a resource with a secret handled via REST API.
+
+    ``kind`` - resource kind, e.g. ``em_core_iam_users``.
+    ``collection`` - REST collection URL, e.g. ``/v1/iam/users/``.
+    ``secret_field`` - name of the secret field as it appears in the
+        REST API (e.g. ``password`` for users, ``secret`` for IAM clients).
+    ``filters`` - optional per-kind filters for the ``list`` method.
+        When set, these filters are used instead of UUID-based filtering
+        from the target fields storage. When empty/None, UUID-based
+        filtering is used.
+    """
+
+    kind: str
+    collection: str
+    secret_field: str
+    filters: dict[str, str] | None = None
+
+
 class ResourceProjectMismatch(exceptions.BackendClientException):
     __template__ = "The resource project mismatch: {resource}"
     resource: models.Resource
@@ -103,33 +122,44 @@ class GCRestApiBackendClient(rest.RestApiBackendClient):
         return super().list(kind, **self._get_filters(kind))
 
 
-class GCUsersRestApiBackendClient(rest.RestApiBackendClient):
-    """Exordos Core Users Rest API backend client.
+class GCSecretRestApiBackendClient(rest.RestApiBackendClient):
+    """Exordos Core Rest API backend client for resources with secrets.
 
-    Works exclusively with the /v1/iam/users collection.
+    Works with collections of resources that have a secret field (e.g.
+    users, IAM clients). The secret is hashed in the control plane and
+    cannot be restored from the REST API response, so it is enriched
+    from the data plane (Resource table).
+
+    ``model_specs`` describes each handled kind: its REST collection URL
+    and the name of the secret field as it appears in the REST API
+    (e.g. ``password`` for users, ``secret`` for IAM clients).
     """
-
-    USERS_COLLECTION = "/v1/iam/users/"
 
     def __init__(
         self,
         http_client: http.CollectionBaseClient,
-        user_kind: str,
+        model_specs: tp.Collection[SecretModelSpec],
+        project_id: sys_uuid.UUID | None = None,
         tf_storage: storage_base.AbstractTargetFieldsStorage | None = None,
     ) -> None:
         super().__init__(
             http_client=http_client,
-            collection_map={user_kind: self.USERS_COLLECTION},
+            collection_map={s.kind: s.collection for s in model_specs},
         )
-        self._user_kind = user_kind
+        self._spec_map = {s.kind: s for s in model_specs}
+        self._project_id = project_id
         self._tf_storage = tf_storage
 
     def _get_filters(self, kind: str) -> dict[str, str | tuple[str]]:
         """Get filters for the kind.
 
-        Constructs filters from the target fields from the storage.
-        Users are not project-scoped, so only UUID-based filtering is used.
+        If the spec has per-kind filters, use them. Otherwise, construct
+        filters from the target fields storage (UUID-based).
         """
+        spec = self._spec_map.get(kind)
+        if spec is not None and spec.filters:
+            return dict(spec.filters)
+
         if self._tf_storage is None:
             return {}
 
@@ -140,33 +170,42 @@ class GCUsersRestApiBackendClient(rest.RestApiBackendClient):
 
         return {"uuid": tuple(str(u) for u in target_fields[kind])}
 
-    def _enrich_users(self, users: list[dict[str, tp.Any]]) -> list[dict[str, tp.Any]]:
-        """Enrich users with additional fields."""
-        uuids = [user["uuid"] for user in users]
+    def _enrich_resources(
+        self, kind: str, resources: list[dict[str, tp.Any]]
+    ) -> list[dict[str, tp.Any]]:
+        """Enrich resources with the secret field from the data plane."""
+        spec = self._spec_map.get(kind)
+        if spec is None:
+            return resources
 
-        # Fetch actual resources of the users to get additional data
-        resources = {
+        uuids = [r["uuid"] for r in resources]
+
+        # Fetch actual resources from the data plane to get the secret
+        db_resources = {
             str(r.uuid): r
             for r in models.Resource.objects.get_all(
                 filters={
                     "uuid": dm_filters.In(uuids),
-                    "kind": dm_filters.EQ(self._user_kind),
+                    "kind": dm_filters.EQ(kind),
                 }
             )
         }
 
-        # Enrich users with additional data
-        # Skip users not found in data plane - they may have been deleted
-        enriched_users = []
-        for user in users:
-            if user["uuid"] not in resources:
-                LOG.warning("User %s not found in data plane, skipping", user["uuid"])
+        # Enrich resources with the secret from the data plane.
+        # Skip resources not found in data plane - they may have been deleted.
+        enriched = []
+        for res in resources:
+            if res["uuid"] not in db_resources:
+                LOG.warning(
+                    "Resource %s not found in data plane, skipping",
+                    res["uuid"],
+                )
                 continue
-            res = resources[user["uuid"]]
-            user["password"] = res.value.get("password", "")
-            enriched_users.append(user)
+            db_res = db_resources[res["uuid"]]
+            res[spec.secret_field] = db_res.value.get(spec.secret_field, "")
+            enriched.append(res)
 
-        return enriched_users
+        return enriched
 
     def get(self, resource: models.Resource) -> dict[str, tp.Any]:
         """Get the resource value in dictionary format."""
@@ -177,16 +216,20 @@ class GCUsersRestApiBackendClient(rest.RestApiBackendClient):
         except bazooka_exc.NotFoundError:
             raise exceptions.ResourceNotFound(resource=resource)
 
-        enriched = self._enrich_users([result])
+        enriched = self._enrich_resources(resource.kind, [result])
         if not enriched:
-            # User exists in IAM but has no data plane record (e.g. after partial
-            # failure or manual IAM creation). Use the target resource's password
-            # so the resource can be collected and the DB record self-heals.
-            LOG.warning(
-                "User %s has no data plane record, using target password as fallback",
-                resource.uuid,
-            )
-            result["password"] = resource.value.get("password", "")
+            # Resource exists in the control plane but has no data plane
+            # record (e.g. after partial failure or manual creation). Use
+            # the target resource's secret so the resource can be collected
+            # and the DB record self-heals.
+            spec = self._spec_map.get(resource.kind)
+            if spec is not None:
+                LOG.warning(
+                    "Resource %s has no data plane record, "
+                    "using target secret as fallback",
+                    resource.uuid,
+                )
+                result[spec.secret_field] = resource.value.get(spec.secret_field, "")
             return result
         return enriched[0]
 
@@ -195,12 +238,20 @@ class GCUsersRestApiBackendClient(rest.RestApiBackendClient):
         # Inject mandatory fields
         resource.value["uuid"] = str(resource.uuid)
 
-        # Save mandatory field before sending to the backend
-        password = resource.value["password"]
+        # Validate project_id. Only one project is supported.
+        if self._project_id is not None:
+            res_project_id = resource.value.get("project_id", None)
+            if res_project_id and res_project_id != str(self._project_id):
+                raise ResourceProjectMismatch(resource=resource)
+
+        # Save the secret before sending to the backend (it may be stripped)
+        spec = self._spec_map.get(resource.kind)
+        secret = resource.value.get(spec.secret_field) if spec else None
 
         result = super().create(resource)
 
-        result["password"] = password
+        if spec is not None and secret is not None:
+            result[spec.secret_field] = secret
 
         return result
 
@@ -221,8 +272,10 @@ class GCUsersRestApiBackendClient(rest.RestApiBackendClient):
         finally:
             resource.value = value
 
-        # Restore the password
-        result["password"] = enriched_resource["password"]
+        # Restore the secret from the enriched resource
+        spec = self._spec_map.get(resource.kind)
+        if spec is not None:
+            result[spec.secret_field] = enriched_resource[spec.secret_field]
 
         return result
 
@@ -233,5 +286,5 @@ class GCUsersRestApiBackendClient(rest.RestApiBackendClient):
         if not filters:
             return []
 
-        users = super().list(kind, **filters)
-        return self._enrich_users(users)
+        resources = super().list(kind, **filters)
+        return self._enrich_resources(kind, resources)
