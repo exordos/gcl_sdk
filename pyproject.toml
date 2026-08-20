@@ -156,6 +156,7 @@ GuestMachineCapabilityDriver = "gcl_sdk.agents.universal.drivers.guest:GuestMach
 CoreCapabilityDriver = "gcl_sdk.agents.universal.drivers.core:CoreCapabilityDriver"
 RestCoreCapabilityDriver = "gcl_sdk.agents.universal.drivers.core:RestCoreCapabilityDriver"
 UserCapabilityDriver = "gcl_sdk.agents.universal.drivers.core:UserCapabilityDriver"
+SecretCapabilityDriver = "gcl_sdk.agents.universal.drivers.core:SecretCapabilityDriver"
 BorderAgentCapabilityDriver = "gcl_sdk.agents.universal.drivers.border:BorderAgentCapabilityDriver"
 BorderCapabilityDriver = "gcl_sdk.agents.universal.drivers.border:BorderCapabilityDriver"
 PoolAgentDriver = "gcl_sdk.agents.universal.drivers.pool:PoolAgentDriver"

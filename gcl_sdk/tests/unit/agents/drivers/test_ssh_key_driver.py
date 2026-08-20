@@ -21,7 +21,6 @@ import pytest
 
 from gcl_sdk.agents.universal.drivers import ssh_key
 
-
 PUBLIC_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest test-key"
 OTHER_PUBLIC_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOther other-key"
 
