@@ -14,8 +14,8 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import uuid as sys_uuid
 from unittest import mock
+import uuid as sys_uuid
 from xml.dom import minidom
 from xml.etree import ElementTree as ET
 
@@ -35,7 +35,9 @@ def _local_driver() -> libvirt_driver.LibvirtPoolDriver:
     # no real virtualization or daemon needed, so real libvirt calls
     # (lookupByUUIDString, etc.) can be exercised end-to-end.
     spec = pool_base.LibvirtPoolDriverSpec(connection_uri="test:///default")
-    pool = pool_base.MachinePool(uuid=sys_uuid.uuid4(), name="test-pool", driver_spec=spec)
+    pool = pool_base.MachinePool(
+        uuid=sys_uuid.uuid4(), name="test-pool", driver_spec=spec
+    )
     return libvirt_driver.LibvirtPoolDriver(pool)
 
 
@@ -121,9 +123,7 @@ class TestRemoveDirectChildren:
         # getElementsByTagName searches the whole subtree recursively -
         # a naive removeChild(node) on a match found deeper in the tree
         # (not a direct child of root) raises NotFoundErr.
-        doc = minidom.parseString(
-            "<root><a>direct</a><b><a>nested</a></b></root>"
-        )
+        doc = minidom.parseString("<root><a>direct</a><b><a>nested</a></b></root>")
         root = doc.firstChild
 
         libvirt_driver.XMLLibvirtInstance._remove_direct_children(root, "a")
