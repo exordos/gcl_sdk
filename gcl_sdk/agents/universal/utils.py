@@ -109,7 +109,7 @@ def cfg_load_section_map(config_file: str, section: str) -> dict[str, str]:
         if option in parser.defaults():
             continue
 
-        params[option] = parser.get(section, option)
+        params[option] = parser.get(section, option, raw=True)
 
     return params
 
