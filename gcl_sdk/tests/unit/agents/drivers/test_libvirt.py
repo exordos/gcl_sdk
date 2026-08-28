@@ -347,6 +347,12 @@ class TestVhostuserDisk:
         memory_backing = ET.fromstring(domain.xml).find("memoryBacking")
         assert memory_backing is not None
         assert memory_backing.find("access").get("mode") == "shared"
+        # Regression: without an explicit memfd source, libvirt backs the
+        # shared region with a plain file under its own memory_backing_dir
+        # (ordinary disk unless the host happens to point that at tmpfs) -
+        # guest RAM would then be reclaimable/writeback-able like any
+        # other file-backed page, even with no swap configured.
+        assert memory_backing.find("source").get("type") == "memfd"
 
     def test_set_shared_memory_is_idempotent(self):
         domain = libvirt_driver.XMLLibvirtInstance(libvirt_driver.domain_template)
