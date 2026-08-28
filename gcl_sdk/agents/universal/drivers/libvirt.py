@@ -803,6 +803,15 @@ class LibvirtPoolDriver(pool_base.AbstractPoolDriver):
                 if disk.get("device") != "disk":
                     continue
 
+                # `volumes` only ever holds this storage pool's own volumes
+                # (get_pool_info() etc. populate it via
+                # storagePoolLookupByName().listAllVolumes()) -- a disk of
+                # any other type (e.g. "vhostuser", rawstor's own) was never
+                # going to be one of them, so there's nothing to warn about
+                # here; only "file"/"block" disks are.
+                if disk.get("type") not in ("file", "block"):
+                    continue
+
                 source = disk.find("source")
                 if source is None:
                     LOG.warning("Unable to detect source for %s", ET.tostring(disk))
@@ -888,6 +897,11 @@ class LibvirtPoolDriver(pool_base.AbstractPoolDriver):
     ) -> tp.Optional[ET.Element]:
         # Check the volume is attached to the domain
         for disk in domain.find("devices").findall("disk"):
+            # `volume` is a storage-pool volume -- a disk of any other type
+            # (e.g. "vhostuser", rawstor's own) was never going to be it.
+            if disk.get("type") not in ("file", "block"):
+                continue
+
             # Check source and path
             source_node = disk.find("source")
             if source_node is None:
@@ -911,6 +925,14 @@ class LibvirtPoolDriver(pool_base.AbstractPoolDriver):
 
         for disk in domain.findall(".//devices/disk"):
             if disk.get("device") != "disk":
+                continue
+
+            # The legacy naming convention below only ever applied to
+            # storage-pool-backed (file/block) volumes -- a disk of any
+            # other type (e.g. "vhostuser", rawstor's own) was never going
+            # to follow it, so it can't tell us anything about legacy-ness
+            # either way.
+            if disk.get("type") not in ("file", "block"):
                 continue
 
             source = disk.find("source")
