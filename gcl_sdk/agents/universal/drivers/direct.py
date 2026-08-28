@@ -20,6 +20,7 @@ import logging
 import typing as tp
 import uuid as sys_uuid
 
+from gcl_sdk.agents.universal import utils
 from gcl_sdk.agents.universal.clients.backend import base as client_base
 from gcl_sdk.agents.universal.clients.backend import exceptions as client_exc
 from gcl_sdk.agents.universal.dm import models
@@ -116,11 +117,19 @@ class DirectAgentDriver(base.AbstractCapabilityDriver):
         self._storage = storage
         self._transformer_map = transformer_map or {}
 
+    def _resolve_target_fields(self, resource: models.Resource) -> models.TargetFields:
+        """Derive the target fields for the resource.
+
+        The key skeleton of the target value (``utils.value_shape``),
+        which lets the nested fields the data plane adds be dropped too.
+        """
+        return utils.value_shape(resource.value)
+
     def _model_to_resource(
         self,
         kind: str,
         model: models.ResourceMixin,
-        target_fields: frozenset[str],
+        target_fields: models.TargetFields | None = None,
     ) -> models.Resource:
         # We need to be sure the return object is resource
         # and not target resource
@@ -136,7 +145,7 @@ class DirectAgentDriver(base.AbstractCapabilityDriver):
         self,
         origin_resource: models.Resource,
         value: dict[str, tp.Any] | models.Resource | models.ResourceMixin,
-        target_fields: frozenset[str],
+        target_fields: models.TargetFields | None = None,
     ) -> models.Resource:
         """Prepare the response from the client."""
         if isinstance(value, models.Resource):
@@ -169,7 +178,7 @@ class DirectAgentDriver(base.AbstractCapabilityDriver):
             LOG.error("Unable to find resource on backend %s", resource.uuid)
             raise driver_exc.ResourceNotFound(resource=resource)
 
-        return self._prepare_res_response(resource, value, target_fields.fields)
+        return self._prepare_res_response(resource, value, target_fields.target_fields)
 
     def list(self, capability: str) -> list[models.Resource]:
         """Lists all resources by capability."""
@@ -192,7 +201,7 @@ class DirectAgentDriver(base.AbstractCapabilityDriver):
                     if capability in self._transformer_map:
                         i = self._transformer_map[capability].transform(i)
                     client_resources[uuid] = models.Resource.from_value(
-                        i, capability, storage_item.fields
+                        i, capability, storage_item.target_fields
                     )
                 else:
                     LOG.warning("Missing storage item for %s %s", capability, uuid)
@@ -206,7 +215,7 @@ class DirectAgentDriver(base.AbstractCapabilityDriver):
                 # to explicitly update target fields during the update procedure.
                 if storage_item := storage_items.get(uuid):
                     client_resources[uuid] = self._model_to_resource(
-                        capability, i, storage_item.fields
+                        capability, i, storage_item.target_fields
                     )
                 else:
                     LOG.warning("Missing storage item for %s %s", capability, uuid)
@@ -222,8 +231,9 @@ class DirectAgentDriver(base.AbstractCapabilityDriver):
         """Creates a resource."""
         self._validate(resource)
 
-        # Figure out the target fields to correct hash calculation
-        target_fields = frozenset(resource.value.keys())
+        # Figure out the target fields to correct hash calculation. The
+        # shape goes with them so nested defaults are stripped as well.
+        target_fields = self._resolve_target_fields(resource)
         storage_item = storage_base.TargetFieldItem(
             resource.kind, resource.uuid, target_fields
         )
@@ -248,8 +258,9 @@ class DirectAgentDriver(base.AbstractCapabilityDriver):
         """Update the resource."""
         self._validate(resource)
 
-        # Figure out the target fields to correct hash calculation
-        target_fields = frozenset(resource.value.keys())
+        # Figure out the target fields to correct hash calculation. The
+        # shape goes with them so nested defaults are stripped as well.
+        target_fields = self._resolve_target_fields(resource)
         storage_item = storage_base.TargetFieldItem(
             resource.kind, resource.uuid, target_fields
         )
