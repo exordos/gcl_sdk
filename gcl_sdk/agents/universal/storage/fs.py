@@ -15,6 +15,7 @@
 #    under the License.
 from __future__ import annotations
 
+import typing as tp
 import uuid as sys_uuid
 
 from gcl_sdk.agents.universal.storage import base
@@ -22,12 +23,40 @@ from gcl_sdk.agents.universal.storage import common
 from gcl_sdk.agents.universal.storage import exceptions as se
 
 
+def _to_item(
+    kind: str, uuid: sys_uuid.UUID, stored: dict | list
+) -> base.TargetFieldItem:
+    """Build an item from what the file holds, in either format.
+
+    A dict is the key skeleton of the declared value (a mapping --
+    ``utils.project_onto`` filters with it). A list is a plain collection
+    of names / dotted paths (``utils.extract_target_value`` filters with
+    it). A file written before shapes were stored holds a list, and a
+    list and a dict of the same names iterate the same, so an older agent
+    reads a newer file as the name list it expects.
+    """
+    target_fields = stored if isinstance(stored, dict) else frozenset(stored)
+    return base.TargetFieldItem(kind, uuid, target_fields)
+
+
 class TargetFieldsFileStorage(base.AbstractTargetFieldsStorage):
     """Target fields JSON file storage.
 
     It stores the target fields in a JSON file.
     The file structure is the following:
-    {kind: {uuid: fields}}
+    {kind: {uuid: target_fields}}
+
+    ``target_fields`` is either a list of names / dotted paths (when the
+    driver declared them explicitly) or a dict -- the key skeleton of the
+    target value. A file written before shapes were stored holds a plain
+    list of names instead, and is read as a collection. A list is also
+    written when the driver declared its target fields explicitly
+    (`DirectAgentDriver.get_resource_target_fields`), since there is no
+    shape to derive then -- the list may hold dot separated paths, in
+    which case an older agent cannot make sense of them. Otherwise both
+    directions work: a list and a dict of the same names iterate the
+    same, so an older agent reads a newer file as the name list it
+    expects.
     """
 
     def __init__(self, storage_path: str) -> None:
@@ -36,11 +65,11 @@ class TargetFieldsFileStorage(base.AbstractTargetFieldsStorage):
     def get(self, kind: str, uuid: sys_uuid.UUID) -> base.TargetFieldItem:
         """Get the target fields item from the storage."""
         try:
-            fields = self._storage[kind][str(uuid)]
+            stored = self._storage[kind][str(uuid)]
         except KeyError:
             raise se.ItemNotFound(item=base.TargetFieldItem(kind, uuid, frozenset()))
 
-        return base.TargetFieldItem(kind, uuid, frozenset(fields))
+        return _to_item(kind, uuid, stored)
 
     def create(
         self,
@@ -57,7 +86,12 @@ class TargetFieldsFileStorage(base.AbstractTargetFieldsStorage):
             if not force:
                 raise se.ItemAlreadyExists(item=item)
 
-        self._storage.setdefault(item.kind, {})[str(item.uuid)] = list(item.fields)
+        stored = (
+            dict(item.target_fields)
+            if isinstance(item.target_fields, tp.Mapping)
+            else list(item.target_fields)
+        )
+        self._storage.setdefault(item.kind, {})[str(item.uuid)] = stored
         return item
 
     def update(self, item: base.TargetFieldItem) -> base.TargetFieldItem:
@@ -67,8 +101,8 @@ class TargetFieldsFileStorage(base.AbstractTargetFieldsStorage):
     def list(self, kind: str) -> list[base.TargetFieldItem]:
         """Lists all target fields items of a resource kind."""
         return [
-            base.TargetFieldItem(kind, sys_uuid.UUID(uuid), frozenset(fields))
-            for uuid, fields in self._storage.get(kind, {}).items()
+            _to_item(kind, sys_uuid.UUID(uuid), stored)
+            for uuid, stored in self._storage.get(kind, {}).items()
         ]
 
     def delete(self, item: base.TargetFieldItem, force: bool = False) -> None:
@@ -89,6 +123,6 @@ class TargetFieldsFileStorage(base.AbstractTargetFieldsStorage):
         """Persist the storage."""
         self._storage.persist()
 
-    def storage(self) -> dict[str, dict[str, list[str]]]:
+    def storage(self) -> dict[str, dict[str, dict | list[str]]]:
         """Return the raw storage."""
         return self._storage
