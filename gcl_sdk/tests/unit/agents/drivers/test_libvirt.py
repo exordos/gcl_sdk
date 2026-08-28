@@ -364,6 +364,48 @@ class TestVhostuserDisk:
         assert len(memory_backings) == 1
 
 
+class TestVolumeAttachments:
+    def test_skips_vhostuser_disks_without_warning(self, caplog):
+        # Regression: a vhostuser disk's <source> carries its path in a
+        # `path` attribute (type="unix"), not `file`/`dev` -- this used to
+        # be treated as a genuine "couldn't find this disk's path" failure
+        # and logged a warning every reconciliation pass, even though a
+        # vhostuser disk (rawstor's own) was never going to be one of
+        # this storage pool's volumes in the first place.
+        driver = _local_driver()
+
+        root = ET.fromstring(
+            """
+            <domain>
+              <devices>
+                <disk type="vhostuser" device="disk">
+                  <source type="unix"
+                          path="/run/rawstor/00000000-0000-0000-0000-000000000001.sock" />
+                  <target dev="vda" bus="virtio" />
+                </disk>
+                <disk type="file" device="disk">
+                  <source file="/var/lib/libvirt/images/pool-volume.qcow2" />
+                  <target dev="vdb" bus="virtio" />
+                </disk>
+              </devices>
+            </domain>
+            """
+        )
+        volume = mock.Mock()
+        volume.path.return_value = "/var/lib/libvirt/images/pool-volume.qcow2"
+
+        with caplog.at_level("WARNING"):
+            attachments = driver._volume_attachments(
+                domains=[("fake-domain", root)], volumes=[volume]
+            )
+
+        assert "Unable to detect" not in caplog.text
+        # The pool volume is still matched correctly -- and at index 0,
+        # since the vhostuser disk ahead of it in the XML is skipped
+        # rather than counted.
+        assert attachments[volume] == ("fake-domain", 0)
+
+
 def test_domain_console_logs_to_file():
     log_path = "/var/log/libvirt/qemu/test-vm.console.log"
 
