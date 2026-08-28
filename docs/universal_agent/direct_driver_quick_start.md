@@ -184,6 +184,37 @@ After `create`:
 - file object is created via REST API
 - target fields for this `(kind, uuid)` are saved in storage
 
+## Target fields
+
+The agent decides a resource has reached its target by comparing the hash
+of the target resource with the hash of the resource gathered from the data
+plane. Both are computed over the *target fields* only, so a field the
+backend fills in by itself (`created_at`, a materialized default deep in
+the value) cannot make a resource settle forever.
+
+The direct driver derives the fields from the target resource: the key
+skeleton of its value (`utils.value_shape`), which strips nested defaults
+too, inside declared dicts and inside declared lists:
+
+```python
+# declared by the control plane
+{"name": "web", "server": {"port": 80}}
+# gathered by the backend, weight is a backend default
+{"name": "web", "server": {"port": 80, "weight": 1}}
+# both hash over -> {"name": "web", "server": {"port": 80}}
+```
+
+Target fields are declared on the model via
+`get_resource_target_fields()`, which may return plain names (`"name"`)
+or dot separated paths (`"setter.kind"`) that descend through dicts and
+through every element of a list. A plain name selects the whole value
+below it and wins over paths with the same head.
+
+Whatever is used lands in the target fields storage at create/update time,
+so changing the declaration does not rehash resources that already exist
+until the next update. Legacy storage files written before this feature are
+read as before and the hashes of such resources do not change.
+
 ## Register the driver
 
 ```toml

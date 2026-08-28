@@ -33,6 +33,8 @@ class PGInstance(models.PGInstance, ua_models.InstanceWithDerivativesMixin):
     def get_resource_target_fields(self) -> tp.Collection[str]:
         """Return the collection of target fields.
 
+        Plain names (``"name"``) or dot separated paths
+        (``"setter.kind"``) that descend through nested dicts and lists.
         Refer to the Resource model for more details about target fields.
         """
         return frozenset(

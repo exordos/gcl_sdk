@@ -77,6 +77,35 @@ All these fields are considered as target fields and they are used to calculate 
 
 For hash calculation only the target fields are used as discussed above. `full_hash` is calculated for all fields.
 
+Target fields are declared either as plain names (`"name"`) or as dot
+separated paths (`"setter.kind"`) that descend through nested dicts and
+through every element of a list. A plain name selects the whole value
+below it and wins over paths with the same head. This lets the control
+plane exclude a nested default the data plane fills in (for instance
+`setter.element`) without listing every sibling field:
+
+```json
+    {
+        "uuid": "...",
+        "name": "default_replicas",
+        "setter": {
+            "kind": "profile",
+            "profiles": [{"profile": "...", "value": 1}]
+        }
+    }
+```
+
+with target fields `{"uuid", "name", "setter.kind",
+"setter.profiles.profile", "setter.profiles.value"}` hashes over exactly
+those keys, and a `setter.element` the backend adds does not keep the
+hashes apart.
+
+When nobody declared the fields explicitly, the direct driver derives a
+*shape* -- the key skeleton of the target value -- and projects the
+actual value onto it before hashing. See
+[Direct driver quick start](direct_driver_quick_start.md#target-fields)
+for details.
+
 ### TargetResource
 
 Almost the same as `Resource` but it's used as a target resource. Additional fields are:
