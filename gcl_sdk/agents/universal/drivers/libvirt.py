@@ -372,10 +372,23 @@ class XMLLibvirtInstance(XMLLibvirtMixin):
         memory - libvirt refuses to attach one ("'vhostuser' requires
         shared memory") unless the domain itself was defined with
         <memoryBacking><access mode="shared"/></memoryBacking>.
+
+        <source type="memfd"/> is required alongside it: without it,
+        libvirt still satisfies "shared" by backing the region with a
+        plain file under its own memory_backing_dir (defaults to
+        /var/lib/libvirt/qemu/ram/, ordinary disk unless the host admin
+        happens to have pointed that at tmpfs) - meaning guest RAM would
+        be sitting on disk, reclaimable/writeback-able by the host kernel
+        like any other file-backed page even with no swap configured.
+        memfd keeps the shared region anonymous/in-memory regardless of
+        host configuration.
         """
         root = domain.firstChild
         cls._remove_direct_children(root, "memoryBacking")
         memory_backing = domain.createElement("memoryBacking")
+        source = domain.createElement("source")
+        source.setAttribute("type", "memfd")
+        memory_backing.appendChild(source)
         access = domain.createElement("access")
         access.setAttribute("mode", "shared")
         memory_backing.appendChild(access)
