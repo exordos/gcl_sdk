@@ -102,7 +102,7 @@ class TestDirectDriver:
         tf_item = storage_base.TargetFieldItem(
             kind=res.kind,
             uuid=res.uuid,
-            fields=frozenset({"a", "b", "uuid", "status"}),
+            target_fields=frozenset({"a", "b", "uuid", "status"}),
         )
 
         # Note: DirectAgentDriver.get currently
@@ -173,7 +173,7 @@ class TestDirectDriver:
         client_list = [
             {"uuid": str(uuid1), "a": 1, "b": 2},
             models.Resource.from_value(
-                {"uuid": str(uuid3), "a": 3, "b": 4}, "config", s_item2.fields
+                {"uuid": str(uuid3), "a": 3, "b": 4}, "config", s_item2.target_fields
             ),
             {"uuid": str(uuid2), "a": 5, "b": 6},
         ]

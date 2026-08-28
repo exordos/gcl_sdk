@@ -41,6 +41,18 @@ from gcl_sdk.common import utils as common_utils
 
 LOG = logging.getLogger(__name__)
 
+# Target fields select which keys participate in the resource hash. They
+# are either a collection of plain names / dotted paths (``frozenset``,
+# ``list``, ``set`` -- filtered by ``utils.extract_target_value``) or a
+# mapping -- the key skeleton of the declared value (``utils.value_shape``),
+# filtered by ``utils.project_onto``. A mapping is what the direct driver
+# derives when nobody declared the fields explicitly; a collection is what
+# a model or driver declares. See ``Resource.from_value``.
+TargetFields = tp.Union[
+    tp.Collection[str],
+    tp.Mapping[str, tp.Any],
+]
+
 
 class ResourceIdentifier(tp.NamedTuple):
     """A resource identifier.
@@ -525,6 +537,21 @@ class Resource(
 
     For hash calculation only the target fields are used as discussed
     above. `full_hash` is calculated for all fields.
+
+    Target fields are declared either as a collection of plain names /
+    dot separated paths (``"setter.kind"``), see `ResourceMixin` and
+    `utils.extract_target_value`, or as a mapping -- the key skeleton of
+    the declared value (`utils.value_shape`), filtered by
+    `utils.project_onto`. A path descends through dicts and through
+    every element of a list, so a default the data plane fills in below
+    the declared paths -- inside a nested dict or a list element --
+    cannot keep the hashes apart. A plain name selects the whole value
+    below it and wins over paths with the same head::
+
+        {"setter.kind", "setter.profiles.profile", "setter.profiles.value"}
+
+    A mapping is what the direct driver derives when nobody declared the
+    fields explicitly; a collection is what a model or driver declares.
     """
 
     # The default status is `ACTIVE` since it's mostly used when inner
@@ -592,14 +619,24 @@ class Resource(
     def replace_value(
         self,
         value: dict[str, tp.Any],
-        target_fields: frozenset[str] | None = None,
+        target_fields: TargetFields | None = None,
         extract_status: bool = True,
     ) -> Resource:
-        """Return a new resource with replaced value and hashes."""
+        """Return a new resource with replaced value and hashes.
+
+        ``target_fields`` is either a collection of names / dotted paths
+        (filtered by ``utils.extract_target_value``) or a mapping -- the
+        key skeleton of the declared value (filtered by
+        ``utils.project_onto``). ``None`` keeps the current hash.
+        """
         if target_fields is None:
             hash = self.hash
+        elif isinstance(target_fields, tp.Mapping):
+            hash = utils.calculate_hash(utils.project_onto(value, target_fields))
         else:
-            hash = utils.calculate_hash({k: value[k] for k in target_fields})
+            hash = utils.calculate_hash(
+                utils.extract_target_value(value, target_fields)
+            )
 
         if extract_status:
             status = value.get("status", self.status)
@@ -630,15 +667,26 @@ class Resource(
         cls,
         value: dict[str, tp.Any],
         kind: str,
-        target_fields: frozenset[str] | None = None,
+        target_fields: TargetFields | None = None,
     ) -> Resource:
+        """Build a resource from a data-plane value.
+
+        ``target_fields`` is either a collection of names / dotted paths
+        (filtered by ``utils.extract_target_value``) or a mapping -- the
+        key skeleton of the declared value (filtered by
+        ``utils.project_onto``). ``None`` leaves the hash empty.
+        """
         status = value.get("status", "ACTIVE")
         uuid = sys_uuid.UUID(value["uuid"])
 
         if target_fields is None:
             hash = ""
+        elif isinstance(target_fields, tp.Mapping):
+            hash = utils.calculate_hash(utils.project_onto(value, target_fields))
         else:
-            hash = utils.calculate_hash({k: value[k] for k in target_fields})
+            hash = utils.calculate_hash(
+                utils.extract_target_value(value, target_fields)
+            )
 
         return cls(
             uuid=uuid,
@@ -712,6 +760,8 @@ class ResourceMixin(models.SimpleViewMixin):
         """Return the collection of target fields.
 
         Refer to the Resource model for more details about target fields.
+        Fields may be plain names or dot separated paths, e.g.
+        ``"setter.kind"``.
         """
         return set()
 
@@ -726,7 +776,7 @@ class ResourceMixin(models.SimpleViewMixin):
         target_fields = self.get_resource_target_fields()
 
         if target_fields:
-            target_data = {k: v for k, v in value.items() if k in target_fields}
+            target_data = utils.extract_target_value(value, target_fields, strict=False)
         else:
             target_data = value
         return value, target_data

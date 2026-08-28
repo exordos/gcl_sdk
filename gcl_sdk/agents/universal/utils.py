@@ -60,6 +60,176 @@ def calculate_hash(
     return m.hexdigest()
 
 
+class _Drop:
+    """Sentinel: the path has nothing left to select at this node."""
+
+
+def extract_target_value(
+    value: dict[str, tp.Any],
+    target_fields: tp.Collection[str],
+    strict: bool = True,
+) -> dict[str, tp.Any]:
+    """Extract a nested subset of ``value`` selected by ``target_fields``.
+
+    Each item in ``target_fields`` is either a plain top-level key
+    (``"setter"``), which selects the whole value under that key, or a
+    dot-separated path (``"setter.kind"``), which selects only that
+    nested key. A path descends through dicts and through every element
+    of a list, so ``setter.profiles.profile`` selects ``"profile"``
+    inside each dict of the ``setter.profiles`` list::
+
+        extract_target_value(
+            {"setter": {"kind": "profile", "element": "u",
+                        "profiles": [{"profile": "a", "value": 1, "note": "x"},
+                                     {"profile": "b", "value": 2, "note": "y"}]}},
+            {"setter.kind", "setter.profiles.profile", "setter.profiles.value"},
+        )
+        {"setter": {"kind": "profile",
+                    "profiles": [{"profile": "a", "value": 1},
+                                 {"profile": "b", "value": 2}]}}
+
+    ``element`` and ``note`` are outside the declared paths, so a default
+    the data plane fills in there cannot keep the hashes apart.
+
+    Rules:
+
+    - a plain key wins over dotted paths with the same head: ``"setter"``
+      together with ``"setter.kind"`` keeps the whole ``"setter"`` value;
+    - a list element that is not a dict cannot take the rest of a path
+      and is dropped from the resulting list;
+    - a key missing on the way down is skipped -- a nested object
+      legitimately may not have every possible sub-field set;
+    - if ``strict`` is True (default), a missing plain top-level key
+      raises ``KeyError``, matching the plain dict-comprehension filter
+      this replaces. Dotted paths never raise;
+    - a field that is empty or has an empty segment (``"setter."``,
+      ``".x"``, ``"a..b"``) raises ``ValueError``: such a path silently
+      selects nothing or an empty dict, which diverges the hashes
+      without a clue as to why.
+
+    Applying the very same paths to the target and to the actual resource
+    keeps their hashes symmetric, which is what lets a resource settle.
+    """
+    plain_fields: list[str] = []
+    nested_paths: dict[str, list[str]] = {}
+    for field in target_fields:
+        if not field or ("." in field and any(not s for s in field.split("."))):
+            raise ValueError(f"empty path segment in target field {field!r}")
+        head, sep, rest = field.partition(".")
+        if sep:
+            nested_paths.setdefault(head, []).append(rest)
+        else:
+            plain_fields.append(field)
+
+    if strict:
+        result = {f: value[f] for f in plain_fields}
+    else:
+        result = {f: value[f] for f in plain_fields if f in value}
+
+    for head, rest_paths in nested_paths.items():
+        if head in result or head not in value:
+            # A plain field already selected the whole value, or the
+            # declared head is simply absent from it.
+            continue
+        selected = _extract_nested(value[head], rest_paths)
+        if selected is not _Drop:
+            result[head] = selected
+
+    return result
+
+
+def _extract_nested(node: tp.Any, rest_paths: tp.Collection[str]) -> tp.Any:
+    """Apply the tails of dotted paths below their top-level key.
+
+    ``rest_paths`` are the path remainders after the key that led here,
+    e.g. ``["profile", "value"]`` for ``setter.profiles.profile`` once
+    ``setter`` and ``profiles`` have been consumed.
+    """
+    if isinstance(node, dict):
+        result = {}
+        grouped: dict[str, list[str]] = {}
+        for field in rest_paths:
+            head, sep, rest = field.partition(".")
+            if sep:
+                grouped.setdefault(head, []).append(rest)
+            elif head in node:
+                result[head] = node[head]
+
+        for head, tails in grouped.items():
+            if head in result:
+                # A plain field wins: the whole value is kept.
+                continue
+            if head in node:
+                selected = _extract_nested(node[head], tails)
+                if selected is not _Drop:
+                    result[head] = selected
+        return result
+    if isinstance(node, list):
+        # A path below a list applies to every element.
+        return [
+            selected
+            for selected in (_extract_nested(item, rest_paths) for item in node)
+            if selected is not _Drop
+        ]
+    # A leaf cannot hold the rest of a path.
+    return _Drop
+
+
+def value_shape(value: tp.Any) -> tp.Any:
+    """Return the key skeleton of `value`, without any of its leaves.
+
+    Target fields are the top-level names the control plane declared, and
+    they are all `replace_value` needs to strip the extra top-level fields
+    the data plane adds. Nested fields it cannot help with: a default the
+    data plane fills in *inside* a declared dict or list -- an endpoint's
+    `weight`, a route condition's `allowed_ips` -- lands in the target
+    hash, never matches, and the resource never settles.
+
+    So the shape is kept alongside the names. Only keys are retained; every
+    leaf becomes None, because this is persisted to the agent's work dir
+    and resource values carry passwords and certificates.
+
+    {"a": 1, "b": {"c": 2}} -> {"a": None, "b": {"c": None}}
+    """
+    if isinstance(value, dict):
+        return {k: value_shape(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [value_shape(v) for v in value]
+    return None
+
+
+def project_onto(value: tp.Any, shape: tp.Any) -> tp.Any:
+    """Reduce `value` to the keys `shape` has, recursively.
+
+    A key the shape does not have is dropped. A key it has but the value
+    does not is simply absent -- the hashes then differ, which is what a
+    data plane that drops a declared field should look like.
+
+    Lists are paired by index: elements past the end of the shape are kept
+    as they are, so a data plane that returns more elements than were
+    declared reads as the drift it is.
+
+    Which makes dicts and lists disagree about a declared empty container,
+    and both readings are worth knowing about. An empty dict has no keys
+    to keep, so it swallows whatever the data plane put inside it -- and
+    since the shape never changes, that stays invisible for as long as the
+    key is declared empty. An empty list keeps everything instead, so a
+    data plane that fills one in never settles, which is the very thing
+    the shape was added to stop. Nothing here can tell a default the data
+    plane owns from drift it does not; that needs a schema, and until
+    there is one, a container declared empty is the case to think twice
+    about.
+    """
+    if isinstance(shape, dict) and isinstance(value, dict):
+        return {k: project_onto(value[k], shape[k]) for k in shape if k in value}
+    if isinstance(shape, list) and isinstance(value, list):
+        return [
+            project_onto(v, shape[i]) if i < len(shape) else v
+            for i, v in enumerate(value)
+        ]
+    return value
+
+
 def cfg_load_class(model_path: str) -> type:
     """Load class from config file.
 

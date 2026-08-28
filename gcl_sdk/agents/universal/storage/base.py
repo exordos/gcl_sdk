@@ -16,20 +16,61 @@
 from __future__ import annotations
 
 import abc
+import json
 import typing as tp
 import uuid as sys_uuid
 
+from gcl_sdk.agents.universal import utils
 from gcl_sdk.agents.universal.dm import models
 
 
 class TargetFieldItem(tp.NamedTuple):
+    """The target fields of one resource.
+
+    `target_fields` is what ``Resource.from_value`` / ``replace_value``
+    filter the hash by. It is either a collection of plain names / dot
+    separated paths (``"setter.kind"``) as returned by
+    ``DirectAgentDriver.get_resource_target_fields``, or a mapping -- the
+    key skeleton of the declared value (`utils.value_shape`) -- which is
+    what lets the nested fields the data plane adds be dropped too when
+    no paths were declared. A mapping is what the direct driver derives
+    when nobody declared the fields explicitly.
+
+    A dict cannot be hashed, so carrying a mapping would have cost the
+    item the hashability every other field gave it -- and this is a
+    storage type, handed out of `list()` into whatever a driver keeps it
+    in. `__hash__` below buys that back.
+    """
+
     kind: str
     uuid: sys_uuid.UUID
-    fields: frozenset[str]
+    target_fields: frozenset[str] | dict[str, tp.Any]
+
+    def __hash__(self) -> int:
+        """Hash the target fields by their canonical JSON.
+
+        A mapping is encoded directly; a collection is sorted first, so
+        two collections with the same members in a different order
+        produce the same hash. ``sort_keys`` makes the encoding depend
+        on nothing but the keys for a mapping. Items that compare equal
+        have equal fields and so hash equal, which is the whole contract.
+        """
+        if isinstance(self.target_fields, tp.Mapping):
+            canonical = json.dumps(
+                self.target_fields, separators=(",", ":"), sort_keys=True
+            )
+        else:
+            canonical = json.dumps(sorted(self.target_fields), separators=(",", ":"))
+
+        return hash((self.kind, self.uuid, canonical))
 
     @classmethod
     def from_ua_resource(cls, resource: models.Resource) -> TargetFieldItem:
-        return cls(resource.kind, resource.uuid, frozenset(resource.value.keys()))
+        return cls(
+            resource.kind,
+            resource.uuid,
+            utils.value_shape(resource.value),
+        )
 
 
 class AbstractTargetFieldsStorage(abc.ABC):
