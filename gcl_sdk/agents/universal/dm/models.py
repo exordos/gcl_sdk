@@ -789,13 +789,22 @@ class ResourceMixin(models.SimpleViewMixin):
         else:
             status = Resource.RESOURCE_DEF_STATUS
 
+        full_hash = utils.calculate_hash(value)
+        # When there are no dedicated target fields the hashed payload is the
+        # very same object as the full value, so reuse the digest instead of
+        # serializing and hashing it a second time.
+        if target_data is value:
+            resource_hash = full_hash
+        else:
+            resource_hash = utils.calculate_hash(target_data)
+
         return Resource(
             uuid=self.get_resource_uuid(),
             kind=kind,
             res_uuid=Resource.gen_res_uuid(self.get_resource_uuid(), kind),
             value=value,
-            hash=utils.calculate_hash(target_data),
-            full_hash=utils.calculate_hash(value),
+            hash=resource_hash,
+            full_hash=full_hash,
             status=status,
         )
 
