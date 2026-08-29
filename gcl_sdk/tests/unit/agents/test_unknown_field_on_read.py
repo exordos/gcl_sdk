@@ -37,8 +37,9 @@ class _Leg(ra_models.ModelWithUUID, models.ResourceMixin):
     name = properties.property(types.String(max_length=32), required=True)
 
 
-class _Sealed(ra_models.ModelWithUUID, ra_models.CustomPropertiesMixin,
-              models.ResourceMixin):
+class _Sealed(
+    ra_models.ModelWithUUID, ra_models.CustomPropertiesMixin, models.ResourceMixin
+):
     """A model whose `__init__` needs a custom property, as `User` does."""
 
     __custom_properties__ = {"secret": types.String(max_length=32)}
@@ -49,7 +50,6 @@ class _Sealed(ra_models.ModelWithUUID, ra_models.CustomPropertiesMixin,
 
 
 class TestAFieldThisModelDoesNotHave:
-
     def _resource(self, value):
         return models.Resource(
             uuid=sys_uuid.uuid4(),
@@ -62,9 +62,7 @@ class TestAFieldThisModelDoesNotHave:
 
     def test_the_field_is_skipped_and_the_rest_is_read(self):
         uuid = sys_uuid.uuid4()
-        resource = self._resource(
-            {"uuid": str(uuid), "name": "eth0", "tags": ["one"]}
-        )
+        resource = self._resource({"uuid": str(uuid), "name": "eth0", "tags": ["one"]})
 
         leg = _Leg.from_ua_resource(resource)
 

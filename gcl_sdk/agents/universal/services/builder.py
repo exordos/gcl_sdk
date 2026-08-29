@@ -25,11 +25,11 @@ from restalchemy.common import contexts
 from restalchemy.dm import filters as dm_filters
 from restalchemy.dm import relationships
 from restalchemy.storage import exceptions as storage_exceptions
+from restalchemy.storage.sql import utils as sql_utils
 
 from gcl_sdk.agents.universal import constants as ua_c
 from gcl_sdk.agents.universal.dm import models
 from gcl_sdk.agents.universal.services import common as svc_common
-from gcl_sdk.agents.universal.services import savepoints as db_utils
 from gcl_sdk.common import constants as c
 
 LOG = logging.getLogger(__name__)
@@ -592,7 +592,7 @@ class UniversalBuilderService(
 
     # `Outdated` actualization methods
 
-    @db_utils.savepoint()
+    @sql_utils.savepoint()
     def _actualize_outdated_instance(
         self,
         instance: models.InstanceMixin,
@@ -637,7 +637,7 @@ class UniversalBuilderService(
             target_resource.uuid,
         )
 
-    @db_utils.savepoint()
+    @sql_utils.savepoint()
     def _actualize_outdated_instance_derivatives(
         self,
         instance: models.InstanceWithDerivativesMixin,
@@ -714,7 +714,7 @@ class UniversalBuilderService(
             target_resource.full_hash = actual_resource.full_hash
         target_resource.update()
 
-    @db_utils.savepoint()
+    @sql_utils.savepoint()
     def _actualize_outdated_instance_all_derivatives(
         self,
         instance: models.InstanceWithDerivativesMixin,
@@ -796,7 +796,7 @@ class UniversalBuilderService(
             target_resource.full_hash = actual_resource.full_hash
         target_resource.update()
 
-    @db_utils.savepoint()
+    @sql_utils.savepoint()
     def _actualize_new_instance(self, instance: models.InstanceMixin) -> None:
         """Actualize resources of the new instance."""
         instance_resource = None
@@ -813,41 +813,22 @@ class UniversalBuilderService(
 
         # Convert instance to resource
         instance_resource = instance.to_ua_resource()
+        instance_resource.insert()
 
         # Schedule instance to the UA agent for simple cases
         if isinstance(instance, models.SchedulableToAgentMixin):
             self._schedule_to_ua_agent(instance, instance_resource)
 
-        # Build the derivative resources (not persisted yet).
+        # Save the derivative objects
         derivative_resources = []
         for derivative_object in derivative_objects:
             derivative_resource = derivative_object.to_ua_resource(
                 master=instance_resource.uuid
             )
+            derivative_resources.append(derivative_resource)
             # Schedule derivatives to the UA agent for simple cases
             if isinstance(derivative_object, models.SchedulableToAgentMixin):
                 self._schedule_to_ua_agent(derivative_object, derivative_resource)
-            derivative_resources.append(derivative_resource)
-
-        # NOTE(akremenetsky): `post_create_instance_resource` may adjust the
-        # instance status, so it must run before the status is committed to
-        # the resource. It is performed here (instead of after the insert) to
-        # persist everything with a single INSERT and avoid a redundant
-        # follow-up UPDATE on every created instance.
-        self.post_create_instance_resource(
-            instance, instance_resource, derivative_resources
-        )
-
-        # Commit tracked_at and the (possibly adjusted) status before the
-        # single insert of the instance resource.
-        instance_resource.tracked_at = instance.updated_at
-        instance_resource.status = instance.status
-
-        # Persist the instance resource before the derivatives and tracked
-        # resources that reference it.
-        instance_resource.insert()
-
-        for derivative_resource in derivative_resources:
             derivative_resource.save()
 
         # Actualize tracked instances
@@ -858,7 +839,19 @@ class UniversalBuilderService(
                 frozenset(tracked),
             )
 
+        self.post_create_instance_resource(
+            instance, instance_resource, derivative_resources
+        )
+        for derivative_resource in derivative_resources:
+            derivative_resource.update()
+
         instance.save()
+
+        # Commit tracked_at ts
+        instance_resource.tracked_at = instance.updated_at
+        instance_resource.status = instance.status
+
+        instance_resource.update()
 
         LOG.info(
             "Instance resource(%s) %s created",
@@ -891,7 +884,7 @@ class UniversalBuilderService(
 
     # `Updated` actualization methods
 
-    @db_utils.savepoint()
+    @sql_utils.savepoint()
     def _actualize_updated_instance(
         self,
         instance: models.InstanceMixin,
@@ -1336,7 +1329,7 @@ class UniversalBuilderService(
             for pair in outdated
         )
 
-    @db_utils.savepoint()
+    @sql_utils.savepoint()
     def _actualize_outdated_master_hash_instance(
         self,
         target_resource: models.TargetResource,
@@ -1450,7 +1443,7 @@ class UniversalBuilderService(
         resources = self._get_outdated_master_full_hash_resources()
         self._actualize_outdated_master_instances(resources, tracked_field="full_hash")
 
-    @db_utils.savepoint()
+    @sql_utils.savepoint()
     def _actualize_instance_with_outdated_tracked(
         self,
         instance: models.InstanceMixin,

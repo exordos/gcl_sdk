@@ -361,9 +361,9 @@ class UniversalAgentService(looper_basic.BasicService):
         if collected_payload != payload:
             self._actualize_facts(collected_payload.facts, payload.facts)
 
-        # The capabilities were applied but the target and actual payloads
-        # are different. So the difference in the facts. Update it.
-
-        # Save the collected payload after actualization
+        # Save the collected payload after actualization. The hash is already
+        # up to date (calculated above) and the payload isn't mutated
+        # afterwards, so skip the re-hashing that ``Payload.save`` performs by
+        # default to avoid doubling the per-iteration hashing cost.
         if self._payload_path:
-            collected_payload.save(self._payload_path)
+            collected_payload.save(self._payload_path, recalculate_hash=False)
