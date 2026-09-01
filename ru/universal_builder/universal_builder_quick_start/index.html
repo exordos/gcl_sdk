@@ -868,6 +868,8 @@
     <span class="k">def</span><span class="w"> </span><span class="nf">get_resource_target_fields</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">tp</span><span class="o">.</span><span class="n">Collection</span><span class="p">[</span><span class="nb">str</span><span class="p">]:</span>
 <span class="w">        </span><span class="sd">"""Return the collection of target fields.</span>
 
+<span class="sd">        Plain names (``"name"``) or dot separated paths</span>
+<span class="sd">        (``"setter.kind"``) that descend through nested dicts and lists.</span>
 <span class="sd">        Refer to the Resource model for more details about target fields.</span>
 <span class="sd">        """</span>
         <span class="k">return</span> <span class="nb">frozenset</span><span class="p">(</span>

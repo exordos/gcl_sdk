@@ -646,6 +646,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#target-fields" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Target fields
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#register-the-driver" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1060,6 +1071,30 @@ Objects behind this API are files.</p>
 <li>file object is created via REST API</li>
 <li>target fields for this <code>(kind, uuid)</code> are saved in storage</li>
 </ul>
+<h2 id="target-fields">Target fields<a class="headerlink" href="#target-fields" title="Permanent link">#</a></h2>
+<p>The agent decides a resource has reached its target by comparing the hash
+of the target resource with the hash of the resource gathered from the data
+plane. Both are computed over the <em>target fields</em> only, so a field the
+backend fills in by itself (<code>created_at</code>, a materialized default deep in
+the value) cannot make a resource settle forever.</p>
+<p>The direct driver derives the fields from the target resource: the key
+skeleton of its value (<code>utils.value_shape</code>), which strips nested defaults
+too, inside declared dicts and inside declared lists:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># declared by the control plane</span>
+<span class="p">{</span><span class="s2">"name"</span><span class="p">:</span> <span class="s2">"web"</span><span class="p">,</span> <span class="s2">"server"</span><span class="p">:</span> <span class="p">{</span><span class="s2">"port"</span><span class="p">:</span> <span class="mi">80</span><span class="p">}}</span>
+<span class="c1"># gathered by the backend, weight is a backend default</span>
+<span class="p">{</span><span class="s2">"name"</span><span class="p">:</span> <span class="s2">"web"</span><span class="p">,</span> <span class="s2">"server"</span><span class="p">:</span> <span class="p">{</span><span class="s2">"port"</span><span class="p">:</span> <span class="mi">80</span><span class="p">,</span> <span class="s2">"weight"</span><span class="p">:</span> <span class="mi">1</span><span class="p">}}</span>
+<span class="c1"># both hash over -&gt; {"name": "web", "server": {"port": 80}}</span>
+</code></pre></div>
+<p>Target fields are declared on the model via
+<code>get_resource_target_fields()</code>, which may return plain names (<code>"name"</code>)
+or dot separated paths (<code>"setter.kind"</code>) that descend through dicts and
+through every element of a list. A plain name selects the whole value
+below it and wins over paths with the same head.</p>
+<p>Whatever is used lands in the target fields storage at create/update time,
+so changing the declaration does not rehash resources that already exist
+until the next update. Legacy storage files written before this feature are
+read as before and the hashes of such resources do not change.</p>
 <h2 id="register-the-driver">Register the driver<a class="headerlink" href="#register-the-driver" title="Permanent link">#</a></h2>
 <div class="highlight"><pre><span></span><code><span class="k">[project.entry-points.gcl_sdk_universal_agent]</span>
 <span class="n">FilesDirectCapabilityDriver</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"your_package.drivers.files_direct:FilesDirectCapabilityDriver"</span>

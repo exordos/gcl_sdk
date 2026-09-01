@@ -1042,6 +1042,30 @@
 <span class="w">    </span><span class="p">}</span>
 </code></pre></div>
 <p>For hash calculation only the target fields are used as discussed above. <code>full_hash</code> is calculated for all fields.</p>
+<p>Target fields are declared either as plain names (<code>"name"</code>) or as dot
+separated paths (<code>"setter.kind"</code>) that descend through nested dicts and
+through every element of a list. A plain name selects the whole value
+below it and wins over paths with the same head. This lets the control
+plane exclude a nested default the data plane fills in (for instance
+<code>setter.element</code>) without listing every sibling field:</p>
+<div class="highlight"><pre><span></span><code><span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="nt">"uuid"</span><span class="p">:</span><span class="w"> </span><span class="s2">"..."</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"default_replicas"</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"setter"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="nt">"kind"</span><span class="p">:</span><span class="w"> </span><span class="s2">"profile"</span><span class="p">,</span>
+<span class="w">            </span><span class="nt">"profiles"</span><span class="p">:</span><span class="w"> </span><span class="p">[{</span><span class="nt">"profile"</span><span class="p">:</span><span class="w"> </span><span class="s2">"..."</span><span class="p">,</span><span class="w"> </span><span class="nt">"value"</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">}]</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+</code></pre></div>
+<p>with target fields <code>{"uuid", "name", "setter.kind",
+"setter.profiles.profile", "setter.profiles.value"}</code> hashes over exactly
+those keys, and a <code>setter.element</code> the backend adds does not keep the
+hashes apart.</p>
+<p>When nobody declared the fields explicitly, the direct driver derives a
+<em>shape</em> -- the key skeleton of the target value -- and projects the
+actual value onto it before hashing. See
+<a href="../direct_driver_quick_start/#target-fields">Direct driver quick start</a>
+for details.</p>
 <h3 id="targetresource">TargetResource<a class="headerlink" href="#targetresource" title="Permanent link">#</a></h3>
 <p>Almost the same as <code>Resource</code> but it's used as a target resource. Additional fields are:</p>
 <ul>
