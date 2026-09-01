@@ -35,6 +35,7 @@ from gcl_sdk.agents.universal.dm import models as ua_models
 from gcl_sdk.agents.universal.drivers import exceptions as ua_driver_exc
 from gcl_sdk.agents.universal.drivers import meta
 from gcl_sdk.common import exceptions
+from gcl_sdk.common import types as common_types
 from gcl_sdk.common import utils
 
 LOG = logging.getLogger(__name__)
@@ -71,6 +72,12 @@ class VolumeStatus(str, enum.Enum):
     IN_PROGRESS = "IN_PROGRESS"
     ACTIVE = "ACTIVE"
     ERROR = "ERROR"
+
+
+class DiskSpeed(str, enum.Enum):
+    COLD = "cold"
+    WARM = "warm"
+    HOT = "hot"
 
 
 class PortStatus(str, enum.Enum):
@@ -245,6 +252,17 @@ class MachineVolume(
         types.AllowNone(types.String(max_length=127)), default=None
     )
     device_type = properties.property(types.String(max_length=64), default="")
+    speed = properties.property(
+        types.Enum([s.value for s in DiskSpeed]),
+        default=DiskSpeed.WARM.value,
+    )
+    ephemeral = properties.property(types.Boolean(), default=False)
+    # Name of the storage pool (see AbstractPoolDriverSpec.storage_pool) the
+    # volume was scheduled onto. Set by MetaVolume when it's first created;
+    # left as-is afterwards (see get_meta_model_fields).
+    storage_pool = properties.property(
+        types.AllowNone(types.String(max_length=255)), default=None
+    )
     status = properties.property(
         types.Enum([s.value for s in VolumeStatus]),
         default=VolumeStatus.NEW.value,
@@ -271,6 +289,11 @@ class AbstractStoragePool(
         default=lambda: sys_uuid.uuid4(),
     )
     pool_type = properties.property(types.String(), required=True)
+    speed = properties.property(
+        types.Enum([s.value for s in DiskSpeed]),
+        default=DiskSpeed.WARM.value,
+    )
+    ephemeral = properties.property(types.Boolean(), default=False)
 
     @property
     def capacity(self) -> int:
@@ -373,10 +396,27 @@ class LibvirtPoolDriverSpec(AbstractPoolDriverSpec):
     )
 
 
+class StoragePoolEntry(common_types.SchematicType):
+    __scheme__ = {
+        "name": types.String(max_length=255),
+        "speed": types.Enum([s.value for s in DiskSpeed]),
+        "ephemeral": types.Boolean(),
+    }
+    __mandatory__ = {"name"}
+
+
 class ExordosLocalHyperDriverSpec(LibvirtPoolDriverSpec):
     KIND = "exordos_local_hyper"
 
     node = properties.property(types.UUID(), required=True)
+
+    # Overrides LibvirtPoolDriverSpec.storage_pool (a single pool name)
+    # with a list of named pools, each independently tagged with
+    # speed/ephemeral so the scheduler can place a disk on the right one.
+    storage_pool = properties.property(
+        types.TypedList(StoragePoolEntry()),
+        default=list,
+    )
 
 
 class DummyPoolDriverSpec(AbstractPoolDriverSpec):
@@ -789,6 +829,18 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
         types.AllowNone(types.String(max_length=127)), default=None
     )
     device_type = properties.property(types.String(max_length=64), default="")
+    speed = properties.property(
+        types.Enum([s.value for s in DiskSpeed]),
+        default=DiskSpeed.WARM.value,
+    )
+    ephemeral = properties.property(types.Boolean(), default=False)
+    # Name of the storage pool this volume was scheduled onto. None until
+    # dump_to_dp() first creates it; fixed from then on (see
+    # get_meta_model_fields) so later cycles don't reshuffle existing
+    # volumes across pools.
+    storage_pool = properties.property(
+        types.AllowNone(types.String(max_length=255)), default=None
+    )
     index = properties.property(
         types.Integer(min_value=0, max_value=4096),
         default=4096,
@@ -910,6 +962,9 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
             boot=self.boot,
             label=self.label,
             device_type=self.device_type,
+            speed=self.speed,
+            ephemeral=self.ephemeral,
+            storage_pool=self.storage_pool,
             index=self.index,
             machine=self.machine,
             project_id=self.project_id,
@@ -918,6 +973,30 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
     def _is_root_volume(self) -> bool:
         return self.machine and self.index == 0
 
+    def _find_storage_pool(
+        self, pool: MetaPool, size: int
+    ) -> tp.Optional[AbstractStoragePool]:
+        """Find the storage pool to use for this volume.
+
+        If the volume has already been scheduled (self.storage_pool is
+        set), only that pool is considered - the check here is purely
+        about whether it still has room, e.g. for a resize. Otherwise
+        every pool matching this volume's speed/ephemeral request
+        (exact match) is a candidate.
+        """
+        if self.storage_pool is not None:
+            candidates = (
+                sp for sp in pool.storage_pools if sp.name == self.storage_pool
+            )
+        else:
+            candidates = (
+                sp
+                for sp in pool.storage_pools
+                if sp.speed == self.speed and sp.ephemeral == self.ephemeral
+            )
+
+        return next((sp for sp in candidates if sp.has_capacity(size)), None)
+
     def _has_storage_capacity(
         self, pool: MetaPool, size: tp.Optional[int] = None
     ) -> bool:
@@ -925,14 +1004,11 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
             return False
 
         size = size if size is not None else self.size
-
-        # FIXME(akremenetsky): It's fine for current implementation
-        # but we need to support multiple storage pools
-        return pool.storage_pools[0].has_capacity(size)
+        return self._find_storage_pool(pool, size) is not None
 
     def _allocate_capacity(self, pool: MetaPool, size: tp.Optional[int] = None) -> None:
         size = size if size is not None else self.size
-        storage_pool = pool.storage_pools[0]
+        storage_pool = self._find_storage_pool(pool, size)
         storage_pool.allocate_capacity(size)
 
     def get_meta_model_fields(self) -> tp.Optional[tp.Set[str]]:
@@ -951,6 +1027,9 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
             "boot",
             "label",
             "device_type",
+            "speed",
+            "ephemeral",
+            "storage_pool",
             "project_id",
         }
 
@@ -963,10 +1042,14 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
             # Reuse it
             dp_volume = pool.dp_volume_map[self.uuid]
         else:
-            # Check the storage pool has enough capacity
-            if not self._has_storage_capacity(pool):
+            # Find a storage pool matching this volume's speed/ephemeral
+            # request with enough room for it.
+            storage_pool = self._find_storage_pool(pool, self.size)
+            if storage_pool is None:
                 self.status = VolumeStatus.ERROR.value
                 return
+
+            self.storage_pool = storage_pool.name
 
             dp_volume = MachineVolume(
                 uuid=self.uuid,
@@ -976,13 +1059,16 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
                 boot=self.boot,
                 label=self.label,
                 device_type=self.device_type,
+                speed=self.speed,
+                ephemeral=self.ephemeral,
+                storage_pool=self.storage_pool,
                 index=self.index,
                 # TODO(akremenetsky): Detect machine without volume name
                 machine=self.machine,
                 project_id=self.project_id,
             )
             self._create_volume(pool, driver, dp_volume)
-            self._allocate_capacity(pool)
+            storage_pool.allocate_capacity(self.size)
 
         self._from_dp_volume(dp_volume)
 

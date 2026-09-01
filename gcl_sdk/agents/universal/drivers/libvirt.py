@@ -860,6 +860,54 @@ class LibvirtPoolDriver(pool_base.AbstractPoolDriver):
 
         return False
 
+    def _storage_pool_names(self) -> tp.List[str]:
+        """Names of all storage pools configured for this driver.
+
+        `storage_pool` is either a single pool name (str, e.g. plain
+        "libvirt" driver specs) or a list of named, individually
+        speed/ephemeral-tagged pools (e.g. ExordosLocalHyperDriverSpec).
+        """
+        storage_pool = self._spec.storage_pool
+        if isinstance(storage_pool, list):
+            return [entry["name"] for entry in storage_pool]
+        return [storage_pool] if storage_pool else []
+
+    def _storage_pool_name_for(self, volume: pool_base.MachineVolume) -> str:
+        """Name of the storage pool a specific volume lives/will live on."""
+        storage_pool = self._spec.storage_pool
+        if not isinstance(storage_pool, list):
+            return storage_pool
+
+        if volume.storage_pool is not None:
+            return volume.storage_pool
+
+        # No pool chosen (e.g. volume built outside the scheduler) - fall
+        # back to the sole configured pool, same as a single-pool spec.
+        names = self._storage_pool_names()
+        if len(names) == 1:
+            return names[0]
+
+        raise ValueError(
+            f"Volume {volume.uuid} has no storage pool assigned and "
+            f"{len(names)} storage pools are configured"
+        )
+
+    def _storage_pool_tags(self, name: str) -> tp.Tuple[str, bool]:
+        """(speed, ephemeral) tags for a named storage pool."""
+        storage_pool = self._spec.storage_pool
+        if not isinstance(storage_pool, list):
+            # A single implicit pool has fixed default tags.
+            return pool_base.DiskSpeed.WARM.value, False
+
+        for entry in storage_pool:
+            if entry["name"] == name:
+                return (
+                    entry.get("speed", pool_base.DiskSpeed.WARM.value),
+                    entry.get("ephemeral", False),
+                )
+
+        raise ValueError(f"Unknown storage pool {name!r}")
+
     def get_pool_info(self) -> pool_base.MachinePool:
         """Get pool info."""
         info = self._client.getInfo()
@@ -878,40 +926,47 @@ class LibvirtPoolDriver(pool_base.AbstractPoolDriver):
         tp.Collection[pool_base.MachineVolume],
     ]:
         pool = self.get_pool_info()
-        vir_storage_pool = self._client.storagePoolLookupByName(self._spec.storage_pool)
-        volumes = vir_storage_pool.listAllVolumes()
         domains = tuple(
             (d, ET.fromstring(d.XMLDesc())) for d in self._client.listAllDomains()
         )
-
-        volumes = self._list_volumes(domains, volumes)
         machines = self._list_machines(domains)
 
-        storage_pool_element = ET.fromstring(vir_storage_pool.XMLDesc())
-        pool_type = storage_pool_element.get("type")
+        storage_pools = []
+        volumes = []
+        for name in self._storage_pool_names():
+            vir_storage_pool = self._client.storagePoolLookupByName(name)
+            pool_volumes = self._list_volumes(domains, vir_storage_pool.listAllVolumes())
+            volumes.extend(pool_volumes)
 
-        storage_pool = pool_base.ThinStoragePool(
-            uuid=sys_uuid.UUID(vir_storage_pool.UUIDString()),
-            name=vir_storage_pool.name(),
-            capacity_usable=vir_storage_pool.info()[1] >> 30,  # GB
-            available_actual=vir_storage_pool.info()[3] >> 30,  # GB
-            pool_type=pool_type,
-        )
+            storage_pool_element = ET.fromstring(vir_storage_pool.XMLDesc())
+            pool_type = storage_pool_element.get("type")
+            speed, ephemeral = self._storage_pool_tags(name)
 
-        self._fill_thin_storage_pool(storage_pool, volumes)
+            thin_pool = pool_base.ThinStoragePool(
+                uuid=sys_uuid.UUID(vir_storage_pool.UUIDString()),
+                name=vir_storage_pool.name(),
+                capacity_usable=vir_storage_pool.info()[1] >> 30,  # GB
+                available_actual=vir_storage_pool.info()[3] >> 30,  # GB
+                pool_type=pool_type,
+                speed=speed,
+                ephemeral=ephemeral,
+            )
+            self._fill_thin_storage_pool(thin_pool, pool_volumes)
+            storage_pools.append(thin_pool)
 
-        return pool, (storage_pool,), machines, volumes
+        return pool, tuple(storage_pools), machines, volumes
 
     def list_volumes(
         self, machine: tp.Optional[pool_base.Machine] = None
     ) -> tp.Iterable[pool_base.MachineVolume]:
-        storage_pool = self._client.storagePoolLookupByName(self._spec.storage_pool)
-        volumes = storage_pool.listAllVolumes()
         domains = tuple(
             (d, ET.fromstring(d.XMLDesc())) for d in self._client.listAllDomains()
         )
 
-        volumes = self._list_volumes(domains, volumes)
+        volumes = []
+        for name in self._storage_pool_names():
+            storage_pool = self._client.storagePoolLookupByName(name)
+            volumes.extend(self._list_volumes(domains, storage_pool.listAllVolumes()))
 
         if machine is None:
             return volumes
@@ -923,31 +978,33 @@ class LibvirtPoolDriver(pool_base.AbstractPoolDriver):
         return machine_volumes
 
     def get_volume(self, volume: sys_uuid.UUID) -> pool_base.MachineVolume:
-        storage_pool = self._client.storagePoolLookupByName(self._spec.storage_pool)
-        pool_xml = ET.fromstring(storage_pool.XMLDesc())
-        pool_type = StoragePoolType(pool_xml.get("type"))
-        name = pool_type.volume_name(str(volume))
+        for name in self._storage_pool_names():
+            storage_pool = self._client.storagePoolLookupByName(name)
+            pool_xml = ET.fromstring(storage_pool.XMLDesc())
+            pool_type = StoragePoolType(pool_xml.get("type"))
+            vol_name = pool_type.volume_name(str(volume))
 
-        # Firstly try the name directly
-        try:
-            vir_volume = storage_pool.storageVolLookupByName(name)
-            # Explicitly pass None as the machine UUID
-            return self._vir_volume2machine_volume(vir_volume, None)
-        except libvirt.libvirtError as e:
-            if e.get_error_code() != libvirt.VIR_ERR_NO_STORAGE_VOL:
-                raise
+            # Firstly try the name directly
+            try:
+                vir_volume = storage_pool.storageVolLookupByName(vol_name)
+                # Explicitly pass None as the machine UUID
+                return self._vir_volume2machine_volume(vir_volume, None)
+            except libvirt.libvirtError as e:
+                if e.get_error_code() != libvirt.VIR_ERR_NO_STORAGE_VOL:
+                    raise
 
-        # If the volume is not found, perhaps it has a legacy name format
-        volumes = storage_pool.listAllVolumes()
-        for v in volumes:
-            if v.name().startswith(str(volume)):
-                return self._vir_volume2machine_volume(v, None)
+            # If the volume is not found, perhaps it has a legacy name format
+            for v in storage_pool.listAllVolumes():
+                if v.name().startswith(str(volume)):
+                    return self._vir_volume2machine_volume(v, None)
 
         raise pool_base.VolumeNotFoundError(volume=volume)
 
     @dry_run_decorator()
     def create_volume(self, volume: pool_base.MachineVolume) -> pool_base.MachineVolume:
-        storage_pool = self._client.storagePoolLookupByName(self._spec.storage_pool)
+        storage_pool = self._client.storagePoolLookupByName(
+            self._storage_pool_name_for(volume)
+        )
 
         # TODO(akremenetsky): Rework `xml_from_base_template` to use
         # the correct name format
@@ -980,7 +1037,9 @@ class LibvirtPoolDriver(pool_base.AbstractPoolDriver):
 
     @dry_run_decorator()
     def delete_volume(self, volume: pool_base.MachineVolume) -> None:
-        storage_pool = self._client.storagePoolLookupByName(self._spec.storage_pool)
+        storage_pool = self._client.storagePoolLookupByName(
+            self._storage_pool_name_for(volume)
+        )
         name = self._vir_volume_name(storage_pool, volume)
 
         try:
@@ -1038,7 +1097,9 @@ class LibvirtPoolDriver(pool_base.AbstractPoolDriver):
                 )
 
         # Lookup storage pool and volume
-        storage_pool = self._client.storagePoolLookupByName(self._spec.storage_pool)
+        storage_pool = self._client.storagePoolLookupByName(
+            self._storage_pool_name_for(volume)
+        )
         volume_name = self._vir_volume_name(storage_pool, volume)
 
         try:
@@ -1113,7 +1174,9 @@ class LibvirtPoolDriver(pool_base.AbstractPoolDriver):
     @dry_run_decorator()
     def resize_volume(self, volume: pool_base.MachineVolume) -> None:
         """Resize the volume."""
-        storage_pool = self._client.storagePoolLookupByName(self._spec.storage_pool)
+        storage_pool = self._client.storagePoolLookupByName(
+            self._storage_pool_name_for(volume)
+        )
         volume_name = self._vir_volume_name(storage_pool, volume)
 
         try:
@@ -1284,15 +1347,19 @@ class LibvirtPoolDriver(pool_base.AbstractPoolDriver):
                 source=port.source,
             )
 
-        # Prepare volume paths
-        storage_pool = self._client.storagePoolLookupByName(self._spec.storage_pool)
-
-        storage_pool_xml = ET.fromstring(storage_pool.XMLDesc())
-        pool_type = StoragePoolType(storage_pool_xml.get("type"))
-        pool_path = storage_pool_xml.find("target").find("path").text
-
         # Add the volumes to the domain
+        pool_info_cache: tp.Dict[str, tp.Tuple["StoragePoolType", str]] = {}
         for i, volume in enumerate(volumes):
+            pool_name = self._storage_pool_name_for(volume)
+            if pool_name not in pool_info_cache:
+                storage_pool = self._client.storagePoolLookupByName(pool_name)
+                storage_pool_xml = ET.fromstring(storage_pool.XMLDesc())
+                pool_info_cache[pool_name] = (
+                    StoragePoolType(storage_pool_xml.get("type")),
+                    storage_pool_xml.find("target").find("path").text,
+                )
+            pool_type, pool_path = pool_info_cache[pool_name]
+
             if not legacy_machine:
                 domain.add_disk(
                     image_path=f"{pool_path}/{pool_type.volume_name(volume.name)}",
