@@ -446,6 +446,10 @@ class NodeSet(
     ra_models.ModelWithProject,
     ra_models.ModelWithNameDesc,
     ra_models.ModelWithTimestamp,
+    # The core stamps its own rows with tags, and answers with them. A
+    # mirror that does not have the field cannot reproduce what it was
+    # sent, so its derivative never matches and is actualized for ever.
+    ra_models.ModelWithTags,
     ua_models.TargetResourceKindAwareMixin,
 ):
     """The model represents a node set in Exordos Core infrastructure.
@@ -604,6 +608,8 @@ class Config(
     ra_models.ModelWithProject,
     ra_models.ModelWithNameDesc,
     ra_models.ModelWithTimestamp,
+    # See `NodeSet`: the core carries tags on this row too.
+    ra_models.ModelWithTags,
     ua_models.TargetResourceKindAwareMixin,
 ):
     __init_resource_status__ = pc.NodeStatus.NEW.value
