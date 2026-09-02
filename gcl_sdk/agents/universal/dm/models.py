@@ -801,7 +801,23 @@ class ResourceMixin(models.SimpleViewMixin):
 
     @classmethod
     def from_ua_resource(cls, resource: Resource) -> ResourceMixin:
-        return cls.restore_from_simple_view(**resource.value)
+        """Build the model from what the other side sent.
+
+        A name this model does not have is skipped rather than fatal. The
+        data plane already answers that way (`MetaDataPlaneModel`); this is
+        the same question on the control plane's own side, where a
+        derivative is rebuilt from what a core answered with, and where one
+        unknown name took every resource of the instance down with
+        `AttributeError: ... has no attribute get_custom_property_type`,
+        naming neither the field nor the model.
+
+        A core newer than the element reading it is an ordinary state -- an
+        installation is upgraded element by element -- and it should cost
+        the field, not the reconcile loop.
+        """
+        return cls.restore_from_simple_view(
+            skip_unknown_fields=True, **resource.value
+        )
 
 
 class TargetResourceMixin(ResourceMixin):
