@@ -980,22 +980,38 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
 
         If the volume has already been scheduled (self.storage_pool is
         set), only that pool is considered - the check here is purely
-        about whether it still has room, e.g. for a resize. Otherwise
-        every pool matching this volume's speed/ephemeral request
-        (exact match) is a candidate.
+        about whether it still has room, e.g. for a resize.
+
+        Otherwise this is a soft (best-effort) match, the same way
+        DummySoftAntiAffinityFilter treats affinity: prefer a pool with
+        an exact speed/ephemeral match, but if the requested tier
+        doesn't exist or is full, place the disk on any pool with room
+        rather than failing outright.
         """
         if self.storage_pool is not None:
-            candidates = (
-                sp for sp in pool.storage_pools if sp.name == self.storage_pool
-            )
-        else:
-            candidates = (
-                sp
-                for sp in pool.storage_pools
-                if sp.speed == self.speed and sp.ephemeral == self.ephemeral
+            return next(
+                (
+                    sp
+                    for sp in pool.storage_pools
+                    if sp.name == self.storage_pool and sp.has_capacity(size)
+                ),
+                None,
             )
 
-        return next((sp for sp in candidates if sp.has_capacity(size)), None)
+        exact_match = next(
+            (
+                sp
+                for sp in pool.storage_pools
+                if sp.speed == self.speed
+                and sp.ephemeral == self.ephemeral
+                and sp.has_capacity(size)
+            ),
+            None,
+        )
+        if exact_match is not None:
+            return exact_match
+
+        return next((sp for sp in pool.storage_pools if sp.has_capacity(size)), None)
 
     def _has_storage_capacity(
         self, pool: MetaPool, size: tp.Optional[int] = None
