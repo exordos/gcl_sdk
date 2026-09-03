@@ -364,7 +364,10 @@ def select_storage_pool(
     DummySoftAntiAffinityFilter treats affinity: prefer a pool with an
     exact speed/ephemeral match, but if the requested tier doesn't
     exist or is full, fall back to any pool with room rather than
-    failing outright.
+    failing outright. Within either candidate set, the pool with the
+    most free capacity ("weight") wins, rather than the first found -
+    this spreads volumes across pools instead of piling them onto
+    whichever pool happens to come first.
     """
     if assigned_name is not None:
         return next(
@@ -376,18 +379,21 @@ def select_storage_pool(
             None,
         )
 
-    exact_match = next(
-        (
-            sp
-            for sp in storage_pools
-            if sp.speed == speed and sp.ephemeral == ephemeral and sp.has_capacity(size)
-        ),
-        None,
-    )
-    if exact_match is not None:
-        return exact_match
+    candidates = list(storage_pools)
 
-    return next((sp for sp in storage_pools if sp.has_capacity(size)), None)
+    exact_matches = [
+        sp
+        for sp in candidates
+        if sp.speed == speed and sp.ephemeral == ephemeral and sp.has_capacity(size)
+    ]
+    if exact_matches:
+        return max(exact_matches, key=lambda sp: sp.available)
+
+    fallback_matches = [sp for sp in candidates if sp.has_capacity(size)]
+    if fallback_matches:
+        return max(fallback_matches, key=lambda sp: sp.available)
+
+    return None
 
 
 class AbstractPoolDriverSpec(
