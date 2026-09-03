@@ -37,6 +37,7 @@ from gcl_sdk.agents.universal.drivers import meta
 from gcl_sdk.common import exceptions
 from gcl_sdk.common import types as common_types
 from gcl_sdk.common import utils
+from gcl_sdk.infra import constants as pc
 
 LOG = logging.getLogger(__name__)
 
@@ -72,12 +73,6 @@ class VolumeStatus(str, enum.Enum):
     IN_PROGRESS = "IN_PROGRESS"
     ACTIVE = "ACTIVE"
     ERROR = "ERROR"
-
-
-class DiskSpeed(str, enum.Enum):
-    COLD = "cold"
-    WARM = "warm"
-    HOT = "hot"
 
 
 class PortStatus(str, enum.Enum):
@@ -253,8 +248,8 @@ class MachineVolume(
     )
     device_type = properties.property(types.String(max_length=64), default="")
     speed = properties.property(
-        types.Enum([s.value for s in DiskSpeed]),
-        default=DiskSpeed.WARM.value,
+        types.Enum([s.value for s in pc.DiskSpeed]),
+        default=pc.DiskSpeed.WARM.value,
     )
     ephemeral = properties.property(types.Boolean(), default=False)
     # Name of the storage pool (see AbstractPoolDriverSpec.storage_pool) the
@@ -290,8 +285,8 @@ class AbstractStoragePool(
     )
     pool_type = properties.property(types.String(), required=True)
     speed = properties.property(
-        types.Enum([s.value for s in DiskSpeed]),
-        default=DiskSpeed.WARM.value,
+        types.Enum([s.value for s in pc.DiskSpeed]),
+        default=pc.DiskSpeed.WARM.value,
     )
     ephemeral = properties.property(types.Boolean(), default=False)
 
@@ -399,7 +394,7 @@ class LibvirtPoolDriverSpec(AbstractPoolDriverSpec):
 class StoragePoolEntry(common_types.SchematicType):
     __scheme__ = {
         "name": types.String(max_length=255),
-        "speed": types.Enum([s.value for s in DiskSpeed]),
+        "speed": types.Enum([s.value for s in pc.DiskSpeed]),
         "ephemeral": types.Boolean(),
     }
     __mandatory__ = {"name"}
@@ -830,8 +825,8 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
     )
     device_type = properties.property(types.String(max_length=64), default="")
     speed = properties.property(
-        types.Enum([s.value for s in DiskSpeed]),
-        default=DiskSpeed.WARM.value,
+        types.Enum([s.value for s in pc.DiskSpeed]),
+        default=pc.DiskSpeed.WARM.value,
     )
     ephemeral = properties.property(types.Boolean(), default=False)
     # Name of the storage pool this volume was scheduled onto. None until
