@@ -347,6 +347,49 @@ class ThinStoragePool(
         self.capacity_provisioned -= size
 
 
+def select_storage_pool(
+    storage_pools: tp.Iterable[AbstractStoragePool],
+    speed: str,
+    ephemeral: bool,
+    size: int,
+    assigned_name: tp.Optional[str] = None,
+) -> tp.Optional[AbstractStoragePool]:
+    """Select the storage pool to use for a disk request.
+
+    If the disk has already been scheduled onto a pool (`assigned_name`
+    given), only that pool is considered - this is then just a capacity
+    check, e.g. for a resize.
+
+    Otherwise this is a soft (best-effort) match, the same way
+    DummySoftAntiAffinityFilter treats affinity: prefer a pool with an
+    exact speed/ephemeral match, but if the requested tier doesn't
+    exist or is full, fall back to any pool with room rather than
+    failing outright.
+    """
+    if assigned_name is not None:
+        return next(
+            (
+                sp
+                for sp in storage_pools
+                if sp.name == assigned_name and sp.has_capacity(size)
+            ),
+            None,
+        )
+
+    exact_match = next(
+        (
+            sp
+            for sp in storage_pools
+            if sp.speed == speed and sp.ephemeral == ephemeral and sp.has_capacity(size)
+        ),
+        None,
+    )
+    if exact_match is not None:
+        return exact_match
+
+    return next((sp for sp in storage_pools if sp.has_capacity(size)), None)
+
+
 class AbstractPoolDriverSpec(
     types_dynamic.AbstractKindModel,
     models.SimpleViewMixin,
@@ -971,42 +1014,13 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
     def _find_storage_pool(
         self, pool: MetaPool, size: int
     ) -> tp.Optional[AbstractStoragePool]:
-        """Find the storage pool to use for this volume.
+        """Select the storage pool to use for this volume.
 
-        If the volume has already been scheduled (self.storage_pool is
-        set), only that pool is considered - the check here is purely
-        about whether it still has room, e.g. for a resize.
-
-        Otherwise this is a soft (best-effort) match, the same way
-        DummySoftAntiAffinityFilter treats affinity: prefer a pool with
-        an exact speed/ephemeral match, but if the requested tier
-        doesn't exist or is full, place the disk on any pool with room
-        rather than failing outright.
+        See `select_storage_pool` for the actual matching rules.
         """
-        if self.storage_pool is not None:
-            return next(
-                (
-                    sp
-                    for sp in pool.storage_pools
-                    if sp.name == self.storage_pool and sp.has_capacity(size)
-                ),
-                None,
-            )
-
-        exact_match = next(
-            (
-                sp
-                for sp in pool.storage_pools
-                if sp.speed == self.speed
-                and sp.ephemeral == self.ephemeral
-                and sp.has_capacity(size)
-            ),
-            None,
+        return select_storage_pool(
+            pool.storage_pools, self.speed, self.ephemeral, size, self.storage_pool
         )
-        if exact_match is not None:
-            return exact_match
-
-        return next((sp for sp in pool.storage_pools if sp.has_capacity(size)), None)
 
     def _has_storage_capacity(
         self, pool: MetaPool, size: tp.Optional[int] = None
