@@ -293,6 +293,119 @@ class TestRemoveDirectChildren:
         assert element.find(".//currentMemory").text == "2048"
 
 
+class TestVhostuserDisk:
+    def test_disk_xml_shape(self):
+        # Shape validated against libvirt's RelaxNG schema
+        # (diskSourceVhostUser in domaincommon.rng): type='unix' source
+        # with no `mode` attribute (that only applies to network
+        # interfaces, not disk sources) plus an optional <reconnect>.
+        xml = libvirt_driver.XMLLibvirtInstance.vhostuser_disk_xml(
+            "/run/rawstor/00000000-0000-0000-0000-000000000001.sock",
+            device="vdb",
+        )
+        disk = ET.fromstring(xml)
+
+        assert disk.get("type") == "vhostuser"
+        assert disk.get("device") == "disk"
+        assert disk.find("driver").get("name") == "qemu"
+
+        source = disk.find("source")
+        assert source.get("type") == "unix"
+        assert (
+            source.get("path")
+            == "/run/rawstor/00000000-0000-0000-0000-000000000001.sock"
+        )
+        assert source.get("mode") is None
+
+        reconnect = source.find("reconnect")
+        assert reconnect.get("enabled") == "yes"
+
+        target = disk.find("target")
+        assert target.get("dev") == "vdb"
+        assert target.get("bus") == "virtio"
+
+    def test_domain_add_vhostuser_disk_appends_to_devices(self):
+        domain = libvirt_driver.XMLLibvirtInstance(libvirt_driver.domain_template)
+
+        domain.add_vhostuser_disk(
+            "/run/rawstor/00000000-0000-0000-0000-000000000002.sock", device="vdc"
+        )
+
+        disks = ET.fromstring(domain.xml).findall(".//devices/disk")
+        assert len(disks) == 1
+        assert disks[0].get("type") == "vhostuser"
+        assert disks[0].find("target").get("dev") == "vdc"
+
+    def test_set_shared_memory_adds_memory_backing(self):
+        # Regression: libvirt refuses to attach a vhostuser disk
+        # ("'vhostuser' requires shared memory") unless the domain was
+        # defined with this element - it can't be added after the fact.
+        domain = libvirt_driver.XMLLibvirtInstance(libvirt_driver.domain_template)
+
+        domain.set_shared_memory()
+
+        memory_backing = ET.fromstring(domain.xml).find("memoryBacking")
+        assert memory_backing is not None
+        assert memory_backing.find("access").get("mode") == "shared"
+        # Regression: without an explicit memfd source, libvirt backs the
+        # shared region with a plain file under its own memory_backing_dir
+        # (ordinary disk unless the host happens to point that at tmpfs) -
+        # guest RAM would then be reclaimable/writeback-able like any
+        # other file-backed page, even with no swap configured.
+        assert memory_backing.find("source").get("type") == "memfd"
+
+    def test_set_shared_memory_is_idempotent(self):
+        domain = libvirt_driver.XMLLibvirtInstance(libvirt_driver.domain_template)
+
+        domain.set_shared_memory()
+        domain.set_shared_memory()
+
+        memory_backings = ET.fromstring(domain.xml).findall("memoryBacking")
+        assert len(memory_backings) == 1
+
+
+class TestVolumeAttachments:
+    def test_skips_vhostuser_disks_without_warning(self, caplog):
+        # Regression: a vhostuser disk's <source> carries its path in a
+        # `path` attribute (type="unix"), not `file`/`dev` -- this used to
+        # be treated as a genuine "couldn't find this disk's path" failure
+        # and logged a warning every reconciliation pass, even though a
+        # vhostuser disk (rawstor's own) was never going to be one of
+        # this storage pool's volumes in the first place.
+        driver = _local_driver()
+
+        root = ET.fromstring(
+            """
+            <domain>
+              <devices>
+                <disk type="vhostuser" device="disk">
+                  <source type="unix"
+                          path="/run/rawstor/00000000-0000-0000-0000-000000000001.sock" />
+                  <target dev="vda" bus="virtio" />
+                </disk>
+                <disk type="file" device="disk">
+                  <source file="/var/lib/libvirt/images/pool-volume.qcow2" />
+                  <target dev="vdb" bus="virtio" />
+                </disk>
+              </devices>
+            </domain>
+            """
+        )
+        volume = mock.Mock()
+        volume.path.return_value = "/var/lib/libvirt/images/pool-volume.qcow2"
+
+        with caplog.at_level("WARNING"):
+            attachments = driver._volume_attachments(
+                domains=[("fake-domain", root)], volumes=[volume]
+            )
+
+        assert "Unable to detect" not in caplog.text
+        # The pool volume is still matched correctly -- and at index 0,
+        # since the vhostuser disk ahead of it in the XML is skipped
+        # rather than counted.
+        assert attachments[volume] == ("fake-domain", 0)
+
+
 def test_domain_console_logs_to_file():
     log_path = "/var/log/libvirt/qemu/test-vm.console.log"
 

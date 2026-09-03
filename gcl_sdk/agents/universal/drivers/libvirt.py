@@ -365,6 +365,36 @@ class XMLLibvirtInstance(XMLLibvirtMixin):
         )
 
     @classmethod
+    def domain_set_shared_memory(cls, domain: minidom.Document) -> None:
+        """Back the domain's RAM with shared memory.
+
+        vhost-user devices exchange virtqueues with the guest over shared
+        memory - libvirt refuses to attach one ("'vhostuser' requires
+        shared memory") unless the domain itself was defined with
+        <memoryBacking><access mode="shared"/></memoryBacking>.
+
+        <source type="memfd"/> is required alongside it: without it,
+        libvirt still satisfies "shared" by backing the region with a
+        plain file under its own memory_backing_dir (defaults to
+        /var/lib/libvirt/qemu/ram/, ordinary disk unless the host admin
+        happens to have pointed that at tmpfs) - meaning guest RAM would
+        be sitting on disk, reclaimable/writeback-able by the host kernel
+        like any other file-backed page even with no swap configured.
+        memfd keeps the shared region anonymous/in-memory regardless of
+        host configuration.
+        """
+        root = domain.firstChild
+        cls._remove_direct_children(root, "memoryBacking")
+        memory_backing = domain.createElement("memoryBacking")
+        source = domain.createElement("source")
+        source.setAttribute("type", "memfd")
+        memory_backing.appendChild(source)
+        access = domain.createElement("access")
+        access.setAttribute("mode", "shared")
+        memory_backing.appendChild(access)
+        root.appendChild(memory_backing)
+
+    @classmethod
     def domain_set_image(cls, domain: minidom.Document, image: str) -> None:
         cls.document_meta_set_tag(
             domain,
@@ -429,6 +459,35 @@ class XMLLibvirtInstance(XMLLibvirtMixin):
         device_element = domain.getElementsByTagName("devices")[0]
         device_element.appendChild(
             minidom.parseString(cls.disk_device_xml(image_path, device, bus)).firstChild
+        )
+
+    @classmethod
+    def vhostuser_disk_xml(
+        cls,
+        socket_path: str,
+        device: str = "vdb",
+        bus: str = "virtio",
+    ) -> str:
+        disk = ET.Element("disk", type="vhostuser", device="disk")
+        ET.SubElement(disk, "driver", name="qemu")
+        source = ET.SubElement(disk, "source", type="unix", path=socket_path)
+        ET.SubElement(source, "reconnect", enabled="yes", timeout="5")
+        ET.SubElement(disk, "target", dev=device, bus=bus)
+        return ET.tostring(disk, encoding="unicode")
+
+    @classmethod
+    def domain_add_vhostuser_disk(
+        cls,
+        domain: minidom.Document,
+        socket_path: str,
+        device: str = "vdb",
+        bus: str = "virtio",
+    ) -> None:
+        device_element = domain.getElementsByTagName("devices")[0]
+        device_element.appendChild(
+            minidom.parseString(
+                cls.vhostuser_disk_xml(socket_path, device, bus)
+            ).firstChild
         )
 
     @classmethod
@@ -499,6 +558,9 @@ class XMLLibvirtInstance(XMLLibvirtMixin):
     def set_memory(self, memory: int) -> None:
         return self.domain_set_memory(self._domain, memory)
 
+    def set_shared_memory(self) -> None:
+        return self.domain_set_shared_memory(self._domain)
+
     def set_image(self, image: tp.Optional[str]) -> None:
         if image is None:
             return
@@ -517,6 +579,14 @@ class XMLLibvirtInstance(XMLLibvirtMixin):
         bus: str = "virtio",
     ) -> None:
         return self.domain_add_disk(self._domain, image_path, device, bus)
+
+    def add_vhostuser_disk(
+        self,
+        socket_path: str,
+        device: str = "vdb",
+        bus: str = "virtio",
+    ) -> None:
+        return self.domain_add_vhostuser_disk(self._domain, socket_path, device, bus)
 
     def add_interface(
         self,
@@ -733,6 +803,15 @@ class LibvirtPoolDriver(pool_base.AbstractPoolDriver):
                 if disk.get("device") != "disk":
                     continue
 
+                # `volumes` only ever holds this storage pool's own volumes
+                # (get_pool_info() etc. populate it via
+                # storagePoolLookupByName().listAllVolumes()) -- a disk of
+                # any other type (e.g. "vhostuser", rawstor's own) was never
+                # going to be one of them, so there's nothing to warn about
+                # here; only "file"/"block" disks are.
+                if disk.get("type") not in ("file", "block"):
+                    continue
+
                 source = disk.find("source")
                 if source is None:
                     LOG.warning("Unable to detect source for %s", ET.tostring(disk))
@@ -818,6 +897,11 @@ class LibvirtPoolDriver(pool_base.AbstractPoolDriver):
     ) -> tp.Optional[ET.Element]:
         # Check the volume is attached to the domain
         for disk in domain.find("devices").findall("disk"):
+            # `volume` is a storage-pool volume -- a disk of any other type
+            # (e.g. "vhostuser", rawstor's own) was never going to be it.
+            if disk.get("type") not in ("file", "block"):
+                continue
+
             # Check source and path
             source_node = disk.find("source")
             if source_node is None:
@@ -841,6 +925,14 @@ class LibvirtPoolDriver(pool_base.AbstractPoolDriver):
 
         for disk in domain.findall(".//devices/disk"):
             if disk.get("device") != "disk":
+                continue
+
+            # The legacy naming convention below only ever applied to
+            # storage-pool-backed (file/block) volumes -- a disk of any
+            # other type (e.g. "vhostuser", rawstor's own) was never going
+            # to follow it, so it can't tell us anything about legacy-ness
+            # either way.
+            if disk.get("type") not in ("file", "block"):
                 continue
 
             source = disk.find("source")
@@ -1326,6 +1418,43 @@ class LibvirtPoolDriver(pool_base.AbstractPoolDriver):
         domains = self._client.listAllDomains()
         return self._list_machines(tuple((d, None) for d in domains))
 
+    def _add_volumes_to_domain(
+        self,
+        domain: "XMLLibvirtInstance",
+        machine: pool_base.Machine,
+        volumes: tp.Iterable[pool_base.MachineVolume],
+        legacy_machine: bool = False,
+    ) -> None:
+        """Add volumes to the domain XML as libvirt-storage-pool-backed disks."""
+        pool_info_cache: tp.Dict[str, tp.Tuple["StoragePoolType", str]] = {}
+        for i, volume in enumerate(volumes):
+            pool_name = self._storage_pool_name_for(volume)
+            if pool_name not in pool_info_cache:
+                storage_pool = self._client.storagePoolLookupByName(pool_name)
+                storage_pool_xml = ET.fromstring(storage_pool.XMLDesc())
+                pool_info_cache[pool_name] = (
+                    StoragePoolType(storage_pool_xml.get("type")),
+                    storage_pool_xml.find("target").find("path").text,
+                )
+            pool_type, pool_path = pool_info_cache[pool_name]
+
+            if not legacy_machine:
+                domain.add_disk(
+                    image_path=f"{pool_path}/{pool_type.volume_name(volume.name)}",
+                    device="vd" + chr(ord("a") + i),
+                    bus="virtio",
+                )
+            else:
+                # TODO(akremenetsky): Remove this snippet one day
+                legacy_volume_name = pool_type.legacy_volume_name(
+                    volume.name, machine.uuid
+                )
+                domain.add_disk(
+                    image_path=f"{pool_path}/{legacy_volume_name}",
+                    device="vd" + chr(ord("a") + i),
+                    bus="virtio",
+                )
+
     def create_machine(
         self,
         machine: pool_base.Machine,
@@ -1362,34 +1491,7 @@ class LibvirtPoolDriver(pool_base.AbstractPoolDriver):
             )
 
         # Add the volumes to the domain
-        pool_info_cache: tp.Dict[str, tp.Tuple["StoragePoolType", str]] = {}
-        for i, volume in enumerate(volumes):
-            pool_name = self._storage_pool_name_for(volume)
-            if pool_name not in pool_info_cache:
-                storage_pool = self._client.storagePoolLookupByName(pool_name)
-                storage_pool_xml = ET.fromstring(storage_pool.XMLDesc())
-                pool_info_cache[pool_name] = (
-                    StoragePoolType(storage_pool_xml.get("type")),
-                    storage_pool_xml.find("target").find("path").text,
-                )
-            pool_type, pool_path = pool_info_cache[pool_name]
-
-            if not legacy_machine:
-                domain.add_disk(
-                    image_path=f"{pool_path}/{pool_type.volume_name(volume.name)}",
-                    device="vd" + chr(ord("a") + i),
-                    bus="virtio",
-                )
-            else:
-                # TODO(akremenetsky): Remove this snippet one day
-                legacy_volume_name = pool_type.legacy_volume_name(
-                    volume.name, machine.uuid
-                )
-                domain.add_disk(
-                    image_path=f"{pool_path}/{legacy_volume_name}",
-                    device="vd" + chr(ord("a") + i),
-                    bus="virtio",
-                )
+        self._add_volumes_to_domain(domain, machine, volumes, legacy_machine)
 
         # Create the domain from the XML specification
         domain_spec = domain.xml
