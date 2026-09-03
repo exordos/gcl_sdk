@@ -501,13 +501,23 @@ class StoragePoolListOrLegacyName(types.BaseType):
         return self._nested_type.example
 
 
+class RawstorPoolEntry(common_types.SchematicType):
+    __scheme__ = {
+        "name": types.String(max_length=255),
+        "location": types.String(max_length=2048),
+        "speed": types.Enum([s.value for s in ic.DiskSpeed]),
+        "ephemeral": types.Boolean(),
+    }
+    __mandatory__ = {"name", "location"}
+
+
 class ExordosLocalHyperDriverSpec(LibvirtPoolDriverSpec):
     KIND = "exordos_local_hyper"
 
     node = properties.property(types.UUID(), required=True)
 
     # Overrides LibvirtPoolDriverSpec.storage_pool (a single pool name)
-    # with a list of named pools, each independently tagged with
+    # with a list of named qcow2 pools, each independently tagged with
     # speed/ephemeral so the scheduler can place a disk on the right one.
     # A bare pool name string is still accepted for backward compatibility
     # - see StoragePoolListOrLegacyName.
@@ -516,9 +526,16 @@ class ExordosLocalHyperDriverSpec(LibvirtPoolDriverSpec):
         default=list,
     )
 
-    rawstor_location = properties.property(
-        types.String(max_length=2048),
-        required=True,
+    # Named rawstor-backed pools, tagged with speed/ephemeral the same
+    # way as the qcow2 pools above. select_storage_pool (see gcl_sdk's
+    # `select_storage_pool`) sees both kinds side by side and picks
+    # purely by tier/capacity - ExordosLocalHyperDriver then decides
+    # which backend (qcow2 vs rawstor) to use for a given disk by
+    # checking which of these two lists the assigned pool name is in,
+    # not from an explicit per-disk field.
+    rawstor_pools = properties.property(
+        types.TypedList(RawstorPoolEntry()),
+        default=list,
     )
 
 
