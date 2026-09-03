@@ -41,6 +41,60 @@ def _local_driver() -> libvirt_driver.LibvirtPoolDriver:
     return libvirt_driver.LibvirtPoolDriver(pool)
 
 
+def _multi_pool_driver(storage_pool) -> libvirt_driver.LibvirtPoolDriver:
+    spec = pool_base.ExordosLocalHyperDriverSpec(
+        connection_uri="test:///default",
+        node=sys_uuid.uuid4(),
+        storage_pool=storage_pool,
+    )
+    pool = pool_base.MachinePool(
+        uuid=sys_uuid.uuid4(), name="test-pool", driver_spec=spec
+    )
+    return libvirt_driver.LibvirtPoolDriver(pool)
+
+
+class TestStoragePoolBackwardCompat:
+    """ExordosLocalHyperDriverSpec.storage_pool also accepts a bare pool
+    name string (the format an exordos_core that predates per-pool
+    speed/ephemeral tagging still sends), not only the new named-pool
+    list - see StoragePoolListOrLegacyName.
+    """
+
+    def test_legacy_string_is_treated_as_the_sole_pool(self):
+        driver = _multi_pool_driver("default-pool")
+
+        assert driver._storage_pool_names() == ["default-pool"]
+        assert driver._storage_pool_attributes("default-pool") == ("warm", False)
+
+        volume = pool_base.MachineVolume(
+            uuid=sys_uuid.uuid4(), name="vol", size=1, project_id=sys_uuid.uuid4()
+        )
+        assert driver._storage_pool_name_for(volume) == "default-pool"
+
+    def test_new_list_format_keeps_per_pool_attributes(self):
+        driver = _multi_pool_driver(
+            [
+                {"name": "hot-pool", "speed": "hot", "ephemeral": True},
+                {"name": "cold-pool"},
+            ]
+        )
+
+        assert driver._storage_pool_names() == ["hot-pool", "cold-pool"]
+        assert driver._storage_pool_attributes("hot-pool") == ("hot", True)
+        # Attributes omitted from an entry fall back to the same defaults
+        # as the legacy string format.
+        assert driver._storage_pool_attributes("cold-pool") == ("warm", False)
+
+        volume = pool_base.MachineVolume(
+            uuid=sys_uuid.uuid4(),
+            name="vol",
+            size=1,
+            project_id=sys_uuid.uuid4(),
+            storage_pool="hot-pool",
+        )
+        assert driver._storage_pool_name_for(volume) == "hot-pool"
+
+
 class TestDeleteMachine:
     def test_is_idempotent_when_the_domain_is_already_gone(self):
         driver = _local_driver()

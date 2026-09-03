@@ -449,6 +449,53 @@ class StoragePoolEntry(common_types.SchematicType):
     __mandatory__ = {"name"}
 
 
+class StoragePoolListOrLegacyName(types.BaseType):
+    """The new list-of-named-pools format, or a bare legacy pool name.
+
+    A control plane that predates per-pool speed/ephemeral tagging (an
+    exordos_core that hasn't picked up this gcl_sdk change yet) still
+    sends `storage_pool` as a single pool name string, the way
+    LibvirtPoolDriverSpec.storage_pool always has. Accepting that shape
+    here - left untouched, as a plain string - keeps such a control
+    plane working: LibvirtPoolDriver's `_storage_pool_*` hooks already
+    treat a non-list `storage_pool` as one implicit pool with default
+    (warm, non-ephemeral) attributes.
+    """
+
+    def __init__(self, nested_type):
+        super().__init__(openapi_type="array")
+        self._nested_type = types.TypedList(nested_type)
+        self._legacy_type = types.String(max_length=255)
+
+    def validate(self, value):
+        return self._legacy_type.validate(value) or self._nested_type.validate(value)
+
+    def to_simple_type(self, value):
+        if isinstance(value, str):
+            return value
+        return self._nested_type.to_simple_type(value)
+
+    def from_simple_type(self, value):
+        if isinstance(value, str):
+            return value
+        return self._nested_type.from_simple_type(value)
+
+    def from_unicode(self, value):
+        if not isinstance(value, str):
+            raise TypeError("Value must be str, not %s" % type(value))
+        try:
+            return self._nested_type.from_unicode(value)
+        except Exception:
+            return value
+
+    def to_openapi_spec(self, prop_kwargs):
+        return self._nested_type.to_openapi_spec(prop_kwargs)
+
+    @property
+    def example(self):
+        return self._nested_type.example
+
+
 class ExordosLocalHyperDriverSpec(LibvirtPoolDriverSpec):
     KIND = "exordos_local_hyper"
 
@@ -457,8 +504,10 @@ class ExordosLocalHyperDriverSpec(LibvirtPoolDriverSpec):
     # Overrides LibvirtPoolDriverSpec.storage_pool (a single pool name)
     # with a list of named pools, each independently tagged with
     # speed/ephemeral so the scheduler can place a disk on the right one.
+    # A bare pool name string is still accepted for backward compatibility
+    # - see StoragePoolListOrLegacyName.
     storage_pool = properties.property(
-        types.TypedList(StoragePoolEntry()),
+        StoragePoolListOrLegacyName(StoragePoolEntry()),
         default=list,
     )
 
