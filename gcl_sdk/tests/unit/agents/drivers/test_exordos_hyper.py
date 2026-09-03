@@ -41,7 +41,7 @@ def _driver(
     spec = pool_base.ExordosLocalHyperDriverSpec(
         connection_uri="test:///default",
         node=node or sys_uuid.uuid4(),
-        rawstor_location=f"file://{tmp_path}",
+        rawstor_pools=[{"name": "rawstor", "location": f"file://{tmp_path}"}],
         storage_pool=storage_pool,
     )
     pool = pool_base.MachinePool(
@@ -66,7 +66,8 @@ class TestVolumeUuidFromSocketPath:
     def test_target_uri(self, tmp_path):
         driver = _driver(tmp_path)
         volume_uuid = sys_uuid.uuid4()
-        assert driver._uuid_from_socket_path(f"{driver._location.uri}/{volume_uuid}") == (
+        location_uri = driver._location_for("rawstor").uri
+        assert driver._uuid_from_socket_path(f"{location_uri}/{volume_uuid}") == (
             volume_uuid
         )
 
@@ -82,9 +83,9 @@ class TestVolumeUuidFromSocketPath:
         assert driver._uuid_from_socket_path("/run/rawstor/not-a-uuid.sock") is None
 
 
-def _fake_location_info(monkeypatch, driver, *, used_gb, total_gb):
+def _fake_location_info(monkeypatch, driver, *, used_gb, total_gb, pool_name="rawstor"):
     monkeypatch.setattr(
-        driver._location,
+        driver._location_for(pool_name),
         "info",
         lambda: types.SimpleNamespace(used=used_gb << 30, total=total_gb << 30),
     )
@@ -98,7 +99,7 @@ class TestBuildStoragePool:
         driver = _driver(tmp_path)
         _fake_location_info(monkeypatch, driver, used_gb=20, total_gb=100)
 
-        storage_pool = driver._build_storage_pool([])
+        storage_pool = driver._build_storage_pool("rawstor", [])
 
         assert storage_pool.capacity_usable == 100
         assert storage_pool.pool_type == "rawstor"
@@ -121,7 +122,7 @@ class TestBuildStoragePool:
             ),
         ]
 
-        storage_pool = driver._build_storage_pool(volumes)
+        storage_pool = driver._build_storage_pool("rawstor", volumes)
 
         assert storage_pool.available == 100 - 10 - 15
 
