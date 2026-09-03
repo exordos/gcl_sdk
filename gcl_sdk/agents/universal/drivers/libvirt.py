@@ -29,7 +29,7 @@ from xml.etree import ElementTree as ET
 import libvirt
 
 from gcl_sdk.agents.universal.drivers import pool as pool_base
-from gcl_sdk.infra import constants as pc
+from gcl_sdk.infra import constants as ic
 
 ImageFormatType = tp.Literal["raw", "qcow2"]
 NetworkType = tp.Literal["bridge", "network"]
@@ -898,12 +898,12 @@ class LibvirtPoolDriver(pool_base.AbstractPoolDriver):
         storage_pool = self._spec.storage_pool
         if not isinstance(storage_pool, list):
             # A single implicit pool has fixed default attributes.
-            return pc.DiskSpeed.WARM.value, False
+            return ic.DiskSpeed.WARM.value, False
 
         for entry in storage_pool:
             if entry["name"] == name:
                 return (
-                    entry.get("speed", pc.DiskSpeed.WARM.value),
+                    entry.get("speed", ic.DiskSpeed.WARM.value),
                     entry.get("ephemeral", False),
                 )
 
