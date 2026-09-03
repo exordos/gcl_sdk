@@ -306,3 +306,46 @@ class TestSelectStoragePool:
         )
 
         assert selected is None
+
+
+class TestExordosLocalHyperDriverSpecStoragePoolCompat:
+    """`storage_pool` also accepts a bare pool name string, so a gcl_sdk
+    upgrade doesn't require exordos_core to move to the named-pool list
+    format at the same time.
+    """
+
+    def _spec(self, storage_pool):
+        return pool_driver.ExordosLocalHyperDriverSpec(
+            connection_uri="qemu:///system",
+            node=sys_uuid.uuid4(),
+            storage_pool=storage_pool,
+        )
+
+    def test_legacy_string_round_trips_unchanged(self):
+        spec = self._spec("default-pool")
+
+        assert spec.storage_pool == "default-pool"
+        assert spec.dump_to_simple_view()["storage_pool"] == "default-pool"
+
+        restored = pool_driver.ExordosLocalHyperDriverSpec.restore_from_simple_view(
+            **spec.dump_to_simple_view()
+        )
+        assert restored.storage_pool == "default-pool"
+
+    def test_new_list_format_round_trips(self):
+        entries = [{"name": "hot-pool", "speed": "hot", "ephemeral": True}]
+        spec = self._spec(entries)
+
+        assert spec.storage_pool == entries
+        assert spec.dump_to_simple_view()["storage_pool"] == entries
+
+        restored = pool_driver.ExordosLocalHyperDriverSpec.restore_from_simple_view(
+            **spec.dump_to_simple_view()
+        )
+        assert restored.storage_pool == entries
+
+    def test_invalid_shapes_are_rejected(self):
+        with pytest.raises(Exception):
+            self._spec(123)
+        with pytest.raises(Exception):
+            self._spec([{"speed": "hot"}])  # missing mandatory "name"
