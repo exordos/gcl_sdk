@@ -671,6 +671,7 @@ class LibvirtPoolDriver(pool_base.AbstractPoolDriver):
         volume: libvirt.virStorageVol,
         machine_uuid: tp.Optional[sys_uuid.UUID] = None,
         index: tp.Optional[int] = None,
+        storage_pool: tp.Optional[str] = None,
     ) -> pool_base.MachineVolume:
         index = index if index is not None else MAX_VOLUME_INDEX
 
@@ -686,6 +687,7 @@ class LibvirtPoolDriver(pool_base.AbstractPoolDriver):
             size=info[1] >> 30,  # in GB
             index=index,
             status=pool_base.VolumeStatus.ACTIVE.value,
+            storage_pool=storage_pool,
         )
 
     def _list_interfaces(self, machine: pool_base.Machine) -> tp.List[pool_base.Port]:
@@ -755,6 +757,7 @@ class LibvirtPoolDriver(pool_base.AbstractPoolDriver):
         self,
         domains: tp.Collection[tp.Tuple[libvirt.virDomain, ET.Element]],
         volumes: tp.Collection[libvirt.virStorageVol],
+        storage_pool: tp.Optional[str] = None,
     ) -> tp.List[pool_base.MachineVolume]:
         attachments = self._volume_attachments(domains, volumes)
         result = []
@@ -766,7 +769,9 @@ class LibvirtPoolDriver(pool_base.AbstractPoolDriver):
             )
             try:
                 result.append(
-                    self._vir_volume2machine_volume(volume, machine_uuid, index=idx)
+                    self._vir_volume2machine_volume(
+                        volume, machine_uuid, index=idx, storage_pool=storage_pool
+                    )
                 )
             except Exception:
                 LOG.debug("Failed to parse volume %s", volume.name())
@@ -936,7 +941,9 @@ class LibvirtPoolDriver(pool_base.AbstractPoolDriver):
         volumes = []
         for name in self._storage_pool_names():
             vir_storage_pool = self._client.storagePoolLookupByName(name)
-            pool_volumes = self._list_volumes(domains, vir_storage_pool.listAllVolumes())
+            pool_volumes = self._list_volumes(
+                domains, vir_storage_pool.listAllVolumes(), storage_pool=name
+            )
             volumes.extend(pool_volumes)
 
             storage_pool_element = ET.fromstring(vir_storage_pool.XMLDesc())
@@ -967,7 +974,11 @@ class LibvirtPoolDriver(pool_base.AbstractPoolDriver):
         volumes = []
         for name in self._storage_pool_names():
             storage_pool = self._client.storagePoolLookupByName(name)
-            volumes.extend(self._list_volumes(domains, storage_pool.listAllVolumes()))
+            volumes.extend(
+                self._list_volumes(
+                    domains, storage_pool.listAllVolumes(), storage_pool=name
+                )
+            )
 
         if machine is None:
             return volumes
@@ -989,7 +1000,9 @@ class LibvirtPoolDriver(pool_base.AbstractPoolDriver):
             try:
                 vir_volume = storage_pool.storageVolLookupByName(vol_name)
                 # Explicitly pass None as the machine UUID
-                return self._vir_volume2machine_volume(vir_volume, None)
+                return self._vir_volume2machine_volume(
+                    vir_volume, None, storage_pool=name
+                )
             except libvirt.libvirtError as e:
                 if e.get_error_code() != libvirt.VIR_ERR_NO_STORAGE_VOL:
                     raise
@@ -997,7 +1010,7 @@ class LibvirtPoolDriver(pool_base.AbstractPoolDriver):
             # If the volume is not found, perhaps it has a legacy name format
             for v in storage_pool.listAllVolumes():
                 if v.name().startswith(str(volume)):
-                    return self._vir_volume2machine_volume(v, None)
+                    return self._vir_volume2machine_volume(v, None, storage_pool=name)
 
         raise pool_base.VolumeNotFoundError(volume=volume)
 
