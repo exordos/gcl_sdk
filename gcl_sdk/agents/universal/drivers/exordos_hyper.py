@@ -29,6 +29,7 @@ import rawstor
 
 from gcl_sdk.agents.universal.drivers import libvirt as libvirt_driver
 from gcl_sdk.agents.universal.drivers import pool as pool_base
+from gcl_sdk.infra import constants as ic
 
 LOG = logging.getLogger(__name__)
 
@@ -57,11 +58,82 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
             raise ValueError(f"Unsupported driver spec kind: {self._spec.KIND!r}")
 
     @functools.cached_property
-    def _location(self) -> rawstor.Location:
-        return rawstor.Location(self._spec.rawstor_location)
+    def _locations(self) -> tp.Dict[str, rawstor.Location]:
+        return {}
 
-    def _target_uri(self, volume_uuid: sys_uuid.UUID) -> str:
-        return f"{self._spec.rawstor_location}/{volume_uuid}"
+    def _rawstor_pool_names(self) -> tp.List[str]:
+        return [entry["name"] for entry in self._spec.rawstor_pools]
+
+    def _rawstor_pool_entry(self, name: str) -> dict:
+        for entry in self._spec.rawstor_pools:
+            if entry["name"] == name:
+                return entry
+        raise ValueError(f"Unknown rawstor pool {name!r}")
+
+    def _location_for(self, name: str) -> rawstor.Location:
+        if name not in self._locations:
+            self._locations[name] = rawstor.Location(
+                self._rawstor_pool_entry(name)["location"]
+            )
+        return self._locations[name]
+
+    def _resolve_rawstor_pool(
+        self, volume: pool_base.MachineVolume, probe: bool = False
+    ) -> tp.Optional[str]:
+        """Name of the rawstor pool `volume` is (or will be) on, or None
+        if it belongs to a qcow2 pool instead.
+
+        Backend choice is derived purely from which named pool a disk was
+        scheduled onto - see ExordosLocalHyperDriverSpec.rawstor_pools -
+        not from an explicit per-disk field.
+
+        If `volume.storage_pool` isn't set (e.g. a pre-existing foreign
+        disk, or a volume built outside the scheduler) and `probe` is
+        set, check whether a rawstor object for it actually exists in any
+        configured rawstor pool instead of guessing - used by operations
+        on a volume that's expected to already exist (attach/detach/
+        delete/resize), as opposed to create_volume, where it can't be.
+        """
+        if volume.storage_pool is not None:
+            if volume.storage_pool in self._rawstor_pool_names():
+                return volume.storage_pool
+            return None
+
+        if probe:
+            rawstor_names = self._rawstor_pool_names()
+            for name in rawstor_names:
+                try:
+                    rawstor.Target(self._target_uri(volume.uuid, name)).spec()
+                except FileNotFoundError:
+                    continue
+                return name
+
+            # Not found as a rawstor object anywhere. If rawstor is the
+            # only backend configured at all, it must belong here anyway
+            # (not created yet, or already deleted/detached) - let the
+            # rawstor-specific logic below handle "doesn't exist" itself,
+            # idempotently, rather than guessing it might be qcow2.
+            if not self._storage_pool_names() and len(rawstor_names) == 1:
+                return rawstor_names[0]
+
+            return None
+
+        # The object doesn't exist yet (create_volume) - only unambiguous
+        # if exactly one pool of either kind is configured, same as
+        # LibvirtPoolDriver's own single-pool fallback.
+        rawstor_names = self._rawstor_pool_names()
+        qcow2_names = self._storage_pool_names()
+        if len(rawstor_names) + len(qcow2_names) == 1:
+            return rawstor_names[0] if rawstor_names else None
+
+        raise ValueError(
+            f"Volume {volume.uuid} has no storage pool assigned and "
+            f"{len(rawstor_names) + len(qcow2_names)} storage pools "
+            f"are configured"
+        )
+
+    def _target_uri(self, volume_uuid: sys_uuid.UUID, pool_name: str) -> str:
+        return f"{self._rawstor_pool_entry(pool_name)['location']}/{volume_uuid}"
 
     def _socket_path(self, volume_uuid: sys_uuid.UUID) -> str:
         return f"{SOCKET_DIR}/{volume_uuid}.sock"
@@ -155,6 +227,7 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
         self,
         target: "rawstor.Target",
         attachments: tp.Dict[sys_uuid.UUID, tp.Tuple[libvirt.virDomain, int]],
+        storage_pool: str,
     ) -> tp.Optional[pool_base.MachineVolume]:
         volume_uuid = self._uuid_from_socket_path(target.uri)
         if volume_uuid is None:
@@ -177,6 +250,7 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
             size=spec.size >> 30,  # in GB
             index=idx if idx is not None else libvirt_driver.MAX_VOLUME_INDEX,
             status=pool_base.VolumeStatus.ACTIVE.value,
+            storage_pool=storage_pool,
         )
 
     def _list_rawstor_volumes(
@@ -186,24 +260,28 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
         attachments = self._rawstor_attachments(domains)
         volumes = []
 
-        for target in self._location:
-            volume = self._target_to_volume(target, attachments)
-            if volume is not None:
-                volumes.append(volume)
+        for name in self._rawstor_pool_names():
+            for target in self._location_for(name):
+                volume = self._target_to_volume(target, attachments, storage_pool=name)
+                if volume is not None:
+                    volumes.append(volume)
 
         return volumes
 
     def _build_storage_pool(
-        self, volumes: tp.Collection[pool_base.MachineVolume]
+        self, name: str, volumes: tp.Collection[pool_base.MachineVolume]
     ) -> pool_base.ThinStoragePool:
-        info = self._location.info()
+        entry = self._rawstor_pool_entry(name)
+        info = self._location_for(name).info()
         storage_pool = pool_base.ThinStoragePool(
-            uuid=self._pool.uuid,
-            name=f"rawstor-{self._spec.node}",
+            uuid=sys_uuid.uuid5(self._pool.uuid, name),
+            name=name,
             capacity_usable=info.total >> 30,  # GB
             available_actual=(info.total - info.used) >> 30,  # GB
             pool_type="rawstor",
             oversubscription_ratio=1.0,
+            speed=entry.get("speed", ic.DiskSpeed.WARM.value),
+            ephemeral=entry.get("ephemeral", False),
         )
 
         for volume in volumes:
@@ -218,43 +296,56 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
         volumes: tp.Iterable[pool_base.MachineVolume],
         legacy_machine: bool = False,
     ) -> None:
-        # Every volume of this pool is a vhost-user disk (attached now or
-        # later via attach_volume), so the domain always needs shared
-        # memory - it can't be added after the domain is defined.
-        domain.set_shared_memory()
+        volumes = tuple(volumes)
+        rawstor_pools = {
+            v.uuid: self._resolve_rawstor_pool(v, probe=True) for v in volumes
+        }
 
+        if any(rawstor_pools.values()):
+            # A rawstor volume is a vhost-user disk (attached now or later
+            # via attach_volume), so the domain needs shared memory for
+            # it - it can't be added after the domain is defined.
+            domain.set_shared_memory()
+
+        pool_info_cache: tp.Dict[str, tp.Tuple["libvirt_driver.StoragePoolType", str]] = {}
         for i, volume in enumerate(volumes):
-            self._start_vhost(volume.uuid)
-            domain.add_vhostuser_disk(
-                socket_path=self._socket_path(volume.uuid),
-                device="vd" + chr(ord("a") + i),
-                bus="virtio",
-            )
+            device = "vd" + chr(ord("a") + i)
 
-    def _list_foreign_volumes(
-        self,
-        domains: tp.Collection[tp.Tuple[libvirt.virDomain, ET.Element]],
-    ) -> tp.List[pool_base.MachineVolume]:
-        """List volumes on the plain libvirt storage pool, not rawstor.
+            if rawstor_pools[volume.uuid] is not None:
+                self._start_vhost(volume.uuid)
+                domain.add_vhostuser_disk(
+                    socket_path=self._socket_path(volume.uuid),
+                    device=device,
+                    bus="virtio",
+                )
+                continue
 
-        A machine can be adopted into this pool without its disks ever
-        going through rawstor - the core bootstrap VM is created directly
-        by the CLI on the plain libvirt storage pool, before this pool
-        (or any agent) exists. Recognizing those disks here means the
-        reconciler treats them as already satisfied instead of creating a
-        rawstor volume and vhost-attaching it on top of them.
-        """
-        if not self._spec.storage_pool:
-            return []
+            pool_name = self._storage_pool_name_for(volume)
+            if pool_name not in pool_info_cache:
+                storage_pool = self._client.storagePoolLookupByName(pool_name)
+                storage_pool_xml = ET.fromstring(storage_pool.XMLDesc())
+                pool_info_cache[pool_name] = (
+                    libvirt_driver.StoragePoolType(storage_pool_xml.get("type")),
+                    storage_pool_xml.find("target").find("path").text,
+                )
+            pool_type, pool_path = pool_info_cache[pool_name]
 
-        try:
-            storage_pool = self._client.storagePoolLookupByName(
-                self._spec.storage_pool
-            )
-        except libvirt.libvirtError:
-            return []
-
-        return self._list_volumes(domains, storage_pool.listAllVolumes())
+            if not legacy_machine:
+                domain.add_disk(
+                    image_path=f"{pool_path}/{pool_type.volume_name(volume.name)}",
+                    device=device,
+                    bus="virtio",
+                )
+            else:
+                # TODO(akremenetsky): Remove this snippet one day
+                legacy_volume_name = pool_type.legacy_volume_name(
+                    volume.name, machine.uuid
+                )
+                domain.add_disk(
+                    image_path=f"{pool_path}/{legacy_volume_name}",
+                    device=device,
+                    bus="virtio",
+                )
 
     def list_pool_resources(
         self,
@@ -267,19 +358,37 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
         pool = self.get_pool_info()
         domains = self._domains_with_xml()
         machines = self._list_machines(domains)
-        rawstor_volumes = self._list_rawstor_volumes(domains)
-        foreign_volumes = self._list_foreign_volumes(domains)
-        storage_pool = self._build_storage_pool(rawstor_volumes)
 
-        return pool, (storage_pool,), machines, rawstor_volumes + foreign_volumes
+        rawstor_volumes = self._list_rawstor_volumes(domains)
+        volumes_by_pool: tp.Dict[str, tp.List[pool_base.MachineVolume]] = {}
+        for v in rawstor_volumes:
+            volumes_by_pool.setdefault(v.storage_pool, []).append(v)
+
+        storage_pools = [
+            self._build_storage_pool(name, volumes_by_pool.get(name, []))
+            for name in self._rawstor_pool_names()
+        ]
+        volumes = list(rawstor_volumes)
+
+        if self._storage_pool_names():
+            # Some volumes of this pool are qcow2-backed (including any
+            # pre-existing disk adopted from before this pool existed,
+            # e.g. the core bootstrap VM's) - LibvirtPoolDriver already
+            # knows how to discover those.
+            _, qcow2_pools, _, qcow2_volumes = super().list_pool_resources()
+            storage_pools.extend(qcow2_pools)
+            volumes.extend(qcow2_volumes)
+
+        return pool, tuple(storage_pools), machines, volumes
 
     def list_volumes(
         self, machine: tp.Optional[pool_base.Machine] = None
     ) -> tp.Iterable[pool_base.MachineVolume]:
         domains = self._domains_with_xml()
-        volumes = self._list_rawstor_volumes(domains) + self._list_foreign_volumes(
-            domains
-        )
+        volumes = self._list_rawstor_volumes(domains)
+
+        if self._storage_pool_names():
+            volumes = volumes + list(super().list_volumes())
 
         if machine is None:
             return volumes
@@ -291,14 +400,16 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
         return machine_volumes
 
     def get_volume(self, volume: sys_uuid.UUID) -> pool_base.MachineVolume:
-        target = rawstor.Target(self._target_uri(volume))
-        try:
-            spec = target.spec()
-        except FileNotFoundError:
-            pass
-        else:
-            domains = self._domains_with_xml()
-            attachments = self._rawstor_attachments(domains)
+        domains = self._domains_with_xml()
+        attachments = self._rawstor_attachments(domains)
+
+        for name in self._rawstor_pool_names():
+            target = rawstor.Target(self._target_uri(volume, name))
+            try:
+                spec = target.spec()
+            except FileNotFoundError:
+                continue
+
             domain, idx = attachments.get(volume, (None, None))
             machine_uuid = (
                 None if domain is None else sys_uuid.UUID(domain.UUIDString())
@@ -312,20 +423,27 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
                 size=spec.size >> 30,  # in GB
                 index=idx if idx is not None else libvirt_driver.MAX_VOLUME_INDEX,
                 status=pool_base.VolumeStatus.ACTIVE.value,
+                storage_pool=name,
             )
 
-        # Not a rawstor object - maybe a foreign (pre-existing) libvirt
-        # volume, e.g. the core bootstrap VM's original qcow2 disks.
-        domains = self._domains_with_xml()
-        for foreign in self._list_foreign_volumes(domains):
-            if foreign.uuid == volume:
-                return foreign
+        # Not a rawstor object - maybe a qcow2 volume (including a
+        # pre-existing disk adopted from before this pool existed, e.g.
+        # the core bootstrap VM's).
+        if self._storage_pool_names():
+            try:
+                return super().get_volume(volume)
+            except pool_base.VolumeNotFoundError:
+                pass
 
         raise pool_base.VolumeNotFoundError(volume=volume)
 
     @libvirt_driver.dry_run_decorator()
     def create_volume(self, volume: pool_base.MachineVolume) -> pool_base.MachineVolume:
-        target = rawstor.Target(self._target_uri(volume.uuid))
+        pool_name = self._resolve_rawstor_pool(volume)
+        if pool_name is None:
+            return super().create_volume(volume)
+
+        target = rawstor.Target(self._target_uri(volume.uuid, pool_name))
         try:
             target.create(size=volume.size << 30)
         except FileExistsError:
@@ -337,6 +455,10 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
 
     @libvirt_driver.dry_run_decorator()
     def delete_volume(self, volume: pool_base.MachineVolume) -> None:
+        pool_name = self._resolve_rawstor_pool(volume, probe=True)
+        if pool_name is None:
+            return super().delete_volume(volume)
+
         # The vhost-user backend is an attachment of the volume: don't
         # leave it running against an object that's about to disappear.
         # Idempotent - disabling a unit that was never enabled (the
@@ -345,7 +467,7 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
         # delete rather than orphan an enabled unit.
         self._stop_vhost(volume.uuid)
 
-        target = rawstor.Target(self._target_uri(volume.uuid))
+        target = rawstor.Target(self._target_uri(volume.uuid, pool_name))
         try:
             target.remove()
         except FileNotFoundError:
@@ -360,6 +482,9 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
         if volume.machine is None:
             raise ValueError("Cannot attach volume without machine")
 
+        if self._resolve_rawstor_pool(volume, probe=True) is None:
+            return super().attach_volume(volume)
+
         try:
             domain = self._client.lookupByUUIDString(str(volume.machine))
         except libvirt.libvirtError as e:
@@ -369,16 +494,6 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
 
         domain_element = ET.fromstring(domain.XMLDesc())
         if self._find_rawstor_disk(domain_element, volume.uuid) is not None:
-            raise pool_base.VolumeAlreadyAttachedError(
-                volume=volume.uuid, machine=volume.machine
-            )
-
-        # A pre-existing (non-rawstor) disk may already occupy this
-        # volume's slot - e.g. the core bootstrap VM's own qcow2 disks,
-        # adopted by this pool without ever being migrated to rawstor.
-        # Nothing to attach.
-        domains = self._domains_with_xml()
-        if any(v.uuid == volume.uuid for v in self._list_foreign_volumes(domains)):
             raise pool_base.VolumeAlreadyAttachedError(
                 volume=volume.uuid, machine=volume.machine
             )
@@ -406,6 +521,9 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
         """Detach the volume."""
         if volume.machine is None:
             raise ValueError("Cannot detach volume without machine")
+
+        if self._resolve_rawstor_pool(volume, probe=True) is None:
+            return super().detach_volume(volume)
 
         try:
             domain = self._client.lookupByUUIDString(str(volume.machine))
@@ -436,9 +554,21 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
     @libvirt_driver.dry_run_decorator()
     def resize_volume(self, volume: pool_base.MachineVolume) -> None:
         """Resize the volume."""
+        if self._resolve_rawstor_pool(volume, probe=True) is None:
+            return super().resize_volume(volume)
+
         # rawstor has no resize API.
         raise pool_base.VolumeResizeNotSupportedError(volume=volume.uuid)
 
     def list_storage_pools(self) -> tp.List[pool_base.ThinStoragePool]:
         """List storage pools."""
-        return [self._build_storage_pool(self.list_volumes())]
+        domains = self._domains_with_xml()
+        rawstor_volumes = self._list_rawstor_volumes(domains)
+        volumes_by_pool: tp.Dict[str, tp.List[pool_base.MachineVolume]] = {}
+        for v in rawstor_volumes:
+            volumes_by_pool.setdefault(v.storage_pool, []).append(v)
+
+        return [
+            self._build_storage_pool(name, volumes_by_pool.get(name, []))
+            for name in self._rawstor_pool_names()
+        ]
