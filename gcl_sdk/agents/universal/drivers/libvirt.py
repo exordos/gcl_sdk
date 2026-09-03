@@ -892,11 +892,11 @@ class LibvirtPoolDriver(pool_base.AbstractPoolDriver):
             f"{len(names)} storage pools are configured"
         )
 
-    def _storage_pool_tags(self, name: str) -> tp.Tuple[str, bool]:
-        """(speed, ephemeral) tags for a named storage pool."""
+    def _storage_pool_attributes(self, name: str) -> tp.Tuple[str, bool]:
+        """(speed, ephemeral) attributes for a named storage pool."""
         storage_pool = self._spec.storage_pool
         if not isinstance(storage_pool, list):
-            # A single implicit pool has fixed default tags.
+            # A single implicit pool has fixed default attributes.
             return pool_base.DiskSpeed.WARM.value, False
 
         for entry in storage_pool:
@@ -940,7 +940,7 @@ class LibvirtPoolDriver(pool_base.AbstractPoolDriver):
 
             storage_pool_element = ET.fromstring(vir_storage_pool.XMLDesc())
             pool_type = storage_pool_element.get("type")
-            speed, ephemeral = self._storage_pool_tags(name)
+            speed, ephemeral = self._storage_pool_attributes(name)
 
             thin_pool = pool_base.ThinStoragePool(
                 uuid=sys_uuid.UUID(vir_storage_pool.UUIDString()),
