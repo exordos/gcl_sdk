@@ -21,6 +21,7 @@ import pytest
 
 from gcl_sdk.agents.universal.dm import models
 from gcl_sdk.agents.universal.drivers import pool as pool_driver
+from gcl_sdk.infra import constants as ic
 
 
 def _make_resource(kind: str, value: dict) -> models.Resource:
@@ -232,3 +233,76 @@ class TestVolumeResizeCapacity:
         assert meta_volume.status == pool_driver.VolumeStatus.ERROR.value
         assert driver.resized_to is None
         assert storage_pool.capacity_provisioned == 10
+
+
+def _make_storage_pool(name, speed, ephemeral, capacity_usable, capacity_provisioned=0):
+    return pool_driver.ThinStoragePool(
+        name=name,
+        pool_type="dir",
+        speed=speed,
+        ephemeral=ephemeral,
+        capacity_usable=capacity_usable,
+        capacity_provisioned=capacity_provisioned,
+    )
+
+
+class TestSelectStoragePool:
+    """The soft match picks the most free-space pool, not the first one."""
+
+    def test_exact_match_picks_the_one_with_most_free_space(self):
+        small_hot = _make_storage_pool("small-hot", ic.DiskSpeed.HOT.value, False, 20)
+        big_hot = _make_storage_pool("big-hot", ic.DiskSpeed.HOT.value, False, 100)
+        warm = _make_storage_pool("warm", ic.DiskSpeed.WARM.value, False, 1000)
+
+        selected = pool_driver.select_storage_pool(
+            [small_hot, big_hot, warm], ic.DiskSpeed.HOT.value, False, 10
+        )
+
+        assert selected is big_hot
+
+    def test_fallback_match_picks_the_one_with_most_free_space(self):
+        # Neither pool is hot, so this falls back to the largest pool with
+        # room, rather than whichever happens to be listed first.
+        small = _make_storage_pool("small", ic.DiskSpeed.WARM.value, False, 20)
+        big = _make_storage_pool("big", ic.DiskSpeed.COLD.value, False, 100)
+
+        selected = pool_driver.select_storage_pool(
+            [small, big], ic.DiskSpeed.HOT.value, False, 10
+        )
+
+        assert selected is big
+
+    def test_fuller_exact_match_loses_to_emptier_one(self):
+        full_hot = _make_storage_pool(
+            "full-hot", ic.DiskSpeed.HOT.value, False, 100, capacity_provisioned=95
+        )
+        empty_hot = _make_storage_pool("empty-hot", ic.DiskSpeed.HOT.value, False, 100)
+
+        selected = pool_driver.select_storage_pool(
+            [full_hot, empty_hot], ic.DiskSpeed.HOT.value, False, 10
+        )
+
+        assert selected is empty_hot
+
+    def test_assigned_name_ignores_weight(self):
+        assigned = _make_storage_pool("assigned", ic.DiskSpeed.WARM.value, False, 20)
+        bigger = _make_storage_pool("bigger", ic.DiskSpeed.WARM.value, False, 100)
+
+        selected = pool_driver.select_storage_pool(
+            [assigned, bigger],
+            ic.DiskSpeed.WARM.value,
+            False,
+            10,
+            assigned_name="assigned",
+        )
+
+        assert selected is assigned
+
+    def test_no_pool_fits(self):
+        small = _make_storage_pool("small", ic.DiskSpeed.WARM.value, False, 5)
+
+        selected = pool_driver.select_storage_pool(
+            [small], ic.DiskSpeed.WARM.value, False, 10
+        )
+
+        assert selected is None
