@@ -21,6 +21,7 @@ import pytest
 
 from gcl_sdk.agents.universal.dm import models
 from gcl_sdk.agents.universal.drivers import pool as pool_driver
+from gcl_sdk.infra import constants as ic
 
 
 def _make_resource(kind: str, value: dict) -> models.Resource:
@@ -232,3 +233,119 @@ class TestVolumeResizeCapacity:
         assert meta_volume.status == pool_driver.VolumeStatus.ERROR.value
         assert driver.resized_to is None
         assert storage_pool.capacity_provisioned == 10
+
+
+def _make_storage_pool(name, speed, ephemeral, capacity_usable, capacity_provisioned=0):
+    return pool_driver.ThinStoragePool(
+        name=name,
+        pool_type="dir",
+        speed=speed,
+        ephemeral=ephemeral,
+        capacity_usable=capacity_usable,
+        capacity_provisioned=capacity_provisioned,
+    )
+
+
+class TestSelectStoragePool:
+    """The soft match picks the most free-space pool, not the first one."""
+
+    def test_exact_match_picks_the_one_with_most_free_space(self):
+        small_hot = _make_storage_pool("small-hot", ic.DiskSpeed.HOT.value, False, 20)
+        big_hot = _make_storage_pool("big-hot", ic.DiskSpeed.HOT.value, False, 100)
+        warm = _make_storage_pool("warm", ic.DiskSpeed.WARM.value, False, 1000)
+
+        selected = pool_driver.select_storage_pool(
+            [small_hot, big_hot, warm], ic.DiskSpeed.HOT.value, False, 10
+        )
+
+        assert selected is big_hot
+
+    def test_fallback_match_picks_the_one_with_most_free_space(self):
+        # Neither pool is hot, so this falls back to the largest pool with
+        # room, rather than whichever happens to be listed first.
+        small = _make_storage_pool("small", ic.DiskSpeed.WARM.value, False, 20)
+        big = _make_storage_pool("big", ic.DiskSpeed.COLD.value, False, 100)
+
+        selected = pool_driver.select_storage_pool(
+            [small, big], ic.DiskSpeed.HOT.value, False, 10
+        )
+
+        assert selected is big
+
+    def test_fuller_exact_match_loses_to_emptier_one(self):
+        full_hot = _make_storage_pool(
+            "full-hot", ic.DiskSpeed.HOT.value, False, 100, capacity_provisioned=95
+        )
+        empty_hot = _make_storage_pool("empty-hot", ic.DiskSpeed.HOT.value, False, 100)
+
+        selected = pool_driver.select_storage_pool(
+            [full_hot, empty_hot], ic.DiskSpeed.HOT.value, False, 10
+        )
+
+        assert selected is empty_hot
+
+    def test_assigned_name_ignores_weight(self):
+        assigned = _make_storage_pool("assigned", ic.DiskSpeed.WARM.value, False, 20)
+        bigger = _make_storage_pool("bigger", ic.DiskSpeed.WARM.value, False, 100)
+
+        selected = pool_driver.select_storage_pool(
+            [assigned, bigger],
+            ic.DiskSpeed.WARM.value,
+            False,
+            10,
+            assigned_name="assigned",
+        )
+
+        assert selected is assigned
+
+    def test_no_pool_fits(self):
+        small = _make_storage_pool("small", ic.DiskSpeed.WARM.value, False, 5)
+
+        selected = pool_driver.select_storage_pool(
+            [small], ic.DiskSpeed.WARM.value, False, 10
+        )
+
+        assert selected is None
+
+
+class TestExordosLocalHyperDriverSpecStoragePoolCompat:
+    """`storage_pool` also accepts a bare pool name string, so a gcl_sdk
+    upgrade doesn't require exordos_core to move to the named-pool list
+    format at the same time.
+    """
+
+    def _spec(self, storage_pool):
+        return pool_driver.ExordosLocalHyperDriverSpec(
+            connection_uri="qemu:///system",
+            node=sys_uuid.uuid4(),
+            storage_pool=storage_pool,
+        )
+
+    def test_legacy_string_round_trips_unchanged(self):
+        spec = self._spec("default-pool")
+
+        assert spec.storage_pool == "default-pool"
+        assert spec.dump_to_simple_view()["storage_pool"] == "default-pool"
+
+        restored = pool_driver.ExordosLocalHyperDriverSpec.restore_from_simple_view(
+            **spec.dump_to_simple_view()
+        )
+        assert restored.storage_pool == "default-pool"
+
+    def test_new_list_format_round_trips(self):
+        entries = [{"name": "hot-pool", "speed": "hot", "ephemeral": True}]
+        spec = self._spec(entries)
+
+        assert spec.storage_pool == entries
+        assert spec.dump_to_simple_view()["storage_pool"] == entries
+
+        restored = pool_driver.ExordosLocalHyperDriverSpec.restore_from_simple_view(
+            **spec.dump_to_simple_view()
+        )
+        assert restored.storage_pool == entries
+
+    def test_invalid_shapes_are_rejected(self):
+        with pytest.raises(Exception):
+            self._spec(123)
+        with pytest.raises(Exception):
+            self._spec([{"speed": "hot"}])  # missing mandatory "name"

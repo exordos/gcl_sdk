@@ -35,7 +35,9 @@ from gcl_sdk.agents.universal.dm import models as ua_models
 from gcl_sdk.agents.universal.drivers import exceptions as ua_driver_exc
 from gcl_sdk.agents.universal.drivers import meta
 from gcl_sdk.common import exceptions
+from gcl_sdk.common import types as common_types
 from gcl_sdk.common import utils
+from gcl_sdk.infra import constants as ic
 
 LOG = logging.getLogger(__name__)
 
@@ -245,6 +247,17 @@ class MachineVolume(
         types.AllowNone(types.String(max_length=127)), default=None
     )
     device_type = properties.property(types.String(max_length=64), default="")
+    speed = properties.property(
+        types.Enum([s.value for s in ic.DiskSpeed]),
+        default=ic.DiskSpeed.WARM.value,
+    )
+    ephemeral = properties.property(types.Boolean(), default=False)
+    # Name of the storage pool (see AbstractPoolDriverSpec.storage_pool) the
+    # volume was scheduled onto. Set by MetaVolume when it's first created;
+    # left as-is afterwards (see get_meta_model_fields).
+    storage_pool = properties.property(
+        types.AllowNone(types.String(max_length=255)), default=None
+    )
     status = properties.property(
         types.Enum([s.value for s in VolumeStatus]),
         default=VolumeStatus.NEW.value,
@@ -271,6 +284,11 @@ class AbstractStoragePool(
         default=lambda: sys_uuid.uuid4(),
     )
     pool_type = properties.property(types.String(), required=True)
+    speed = properties.property(
+        types.Enum([s.value for s in ic.DiskSpeed]),
+        default=ic.DiskSpeed.WARM.value,
+    )
+    ephemeral = properties.property(types.Boolean(), default=False)
 
     @property
     def capacity(self) -> int:
@@ -329,6 +347,55 @@ class ThinStoragePool(
         self.capacity_provisioned -= size
 
 
+def select_storage_pool(
+    storage_pools: tp.Iterable[AbstractStoragePool],
+    speed: str,
+    ephemeral: bool,
+    size: int,
+    assigned_name: tp.Optional[str] = None,
+) -> tp.Optional[AbstractStoragePool]:
+    """Select the storage pool to use for a disk request.
+
+    If the disk has already been scheduled onto a pool (`assigned_name`
+    given), only that pool is considered - this is then just a capacity
+    check, e.g. for a resize.
+
+    Otherwise this is a soft (best-effort) match, the same way
+    DummySoftAntiAffinityFilter treats affinity: prefer a pool with an
+    exact speed/ephemeral match, but if the requested tier doesn't
+    exist or is full, fall back to any pool with room rather than
+    failing outright. Within either candidate set, the pool with the
+    most free capacity ("weight") wins, rather than the first found -
+    this spreads volumes across pools instead of piling them onto
+    whichever pool happens to come first.
+    """
+    if assigned_name is not None:
+        return next(
+            (
+                sp
+                for sp in storage_pools
+                if sp.name == assigned_name and sp.has_capacity(size)
+            ),
+            None,
+        )
+
+    candidates = list(storage_pools)
+
+    exact_matches = [
+        sp
+        for sp in candidates
+        if sp.speed == speed and sp.ephemeral == ephemeral and sp.has_capacity(size)
+    ]
+    if exact_matches:
+        return max(exact_matches, key=lambda sp: sp.available)
+
+    fallback_matches = [sp for sp in candidates if sp.has_capacity(size)]
+    if fallback_matches:
+        return max(fallback_matches, key=lambda sp: sp.available)
+
+    return None
+
+
 class AbstractPoolDriverSpec(
     types_dynamic.AbstractKindModel,
     models.SimpleViewMixin,
@@ -373,10 +440,76 @@ class LibvirtPoolDriverSpec(AbstractPoolDriverSpec):
     )
 
 
+class StoragePoolEntry(common_types.SchematicType):
+    __scheme__ = {
+        "name": types.String(max_length=255),
+        "speed": types.Enum([s.value for s in ic.DiskSpeed]),
+        "ephemeral": types.Boolean(),
+    }
+    __mandatory__ = {"name"}
+
+
+class StoragePoolListOrLegacyName(types.BaseType):
+    """The new list-of-named-pools format, or a bare legacy pool name.
+
+    A control plane that predates per-pool speed/ephemeral tagging (an
+    exordos_core that hasn't picked up this gcl_sdk change yet) still
+    sends `storage_pool` as a single pool name string, the way
+    LibvirtPoolDriverSpec.storage_pool always has. Accepting that shape
+    here - left untouched, as a plain string - keeps such a control
+    plane working: LibvirtPoolDriver's `_storage_pool_*` hooks already
+    treat a non-list `storage_pool` as one implicit pool with default
+    (warm, non-ephemeral) attributes.
+    """
+
+    def __init__(self, nested_type):
+        super().__init__(openapi_type="array")
+        self._nested_type = types.TypedList(nested_type)
+        self._legacy_type = types.String(max_length=255)
+
+    def validate(self, value):
+        return self._legacy_type.validate(value) or self._nested_type.validate(value)
+
+    def to_simple_type(self, value):
+        if isinstance(value, str):
+            return value
+        return self._nested_type.to_simple_type(value)
+
+    def from_simple_type(self, value):
+        if isinstance(value, str):
+            return value
+        return self._nested_type.from_simple_type(value)
+
+    def from_unicode(self, value):
+        if not isinstance(value, str):
+            raise TypeError("Value must be str, not %s" % type(value))
+        try:
+            return self._nested_type.from_unicode(value)
+        except Exception:
+            return value
+
+    def to_openapi_spec(self, prop_kwargs):
+        return self._nested_type.to_openapi_spec(prop_kwargs)
+
+    @property
+    def example(self):
+        return self._nested_type.example
+
+
 class ExordosLocalHyperDriverSpec(LibvirtPoolDriverSpec):
     KIND = "exordos_local_hyper"
 
     node = properties.property(types.UUID(), required=True)
+
+    # Overrides LibvirtPoolDriverSpec.storage_pool (a single pool name)
+    # with a list of named pools, each independently tagged with
+    # speed/ephemeral so the scheduler can place a disk on the right one.
+    # A bare pool name string is still accepted for backward compatibility
+    # - see StoragePoolListOrLegacyName.
+    storage_pool = properties.property(
+        StoragePoolListOrLegacyName(StoragePoolEntry()),
+        default=list,
+    )
 
 
 class DummyPoolDriverSpec(AbstractPoolDriverSpec):
@@ -789,6 +922,18 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
         types.AllowNone(types.String(max_length=127)), default=None
     )
     device_type = properties.property(types.String(max_length=64), default="")
+    speed = properties.property(
+        types.Enum([s.value for s in ic.DiskSpeed]),
+        default=ic.DiskSpeed.WARM.value,
+    )
+    ephemeral = properties.property(types.Boolean(), default=False)
+    # Name of the storage pool this volume was scheduled onto. None until
+    # dump_to_dp() first creates it; fixed from then on (see
+    # get_meta_model_fields) so later cycles don't reshuffle existing
+    # volumes across pools.
+    storage_pool = properties.property(
+        types.AllowNone(types.String(max_length=255)), default=None
+    )
     index = properties.property(
         types.Integer(min_value=0, max_value=4096),
         default=4096,
@@ -910,6 +1055,9 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
             boot=self.boot,
             label=self.label,
             device_type=self.device_type,
+            speed=self.speed,
+            ephemeral=self.ephemeral,
+            storage_pool=self.storage_pool,
             index=self.index,
             machine=self.machine,
             project_id=self.project_id,
@@ -918,6 +1066,17 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
     def _is_root_volume(self) -> bool:
         return self.machine and self.index == 0
 
+    def _find_storage_pool(
+        self, pool: MetaPool, size: int
+    ) -> tp.Optional[AbstractStoragePool]:
+        """Select the storage pool to use for this volume.
+
+        See `select_storage_pool` for the actual matching rules.
+        """
+        return select_storage_pool(
+            pool.storage_pools, self.speed, self.ephemeral, size, self.storage_pool
+        )
+
     def _has_storage_capacity(
         self, pool: MetaPool, size: tp.Optional[int] = None
     ) -> bool:
@@ -925,14 +1084,11 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
             return False
 
         size = size if size is not None else self.size
-
-        # FIXME(akremenetsky): It's fine for current implementation
-        # but we need to support multiple storage pools
-        return pool.storage_pools[0].has_capacity(size)
+        return self._find_storage_pool(pool, size) is not None
 
     def _allocate_capacity(self, pool: MetaPool, size: tp.Optional[int] = None) -> None:
         size = size if size is not None else self.size
-        storage_pool = pool.storage_pools[0]
+        storage_pool = self._find_storage_pool(pool, size)
         storage_pool.allocate_capacity(size)
 
     def get_meta_model_fields(self) -> tp.Optional[tp.Set[str]]:
@@ -951,6 +1107,9 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
             "boot",
             "label",
             "device_type",
+            "speed",
+            "ephemeral",
+            "storage_pool",
             "project_id",
         }
 
@@ -963,10 +1122,14 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
             # Reuse it
             dp_volume = pool.dp_volume_map[self.uuid]
         else:
-            # Check the storage pool has enough capacity
-            if not self._has_storage_capacity(pool):
+            # Find a storage pool matching this volume's speed/ephemeral
+            # request with enough room for it.
+            storage_pool = self._find_storage_pool(pool, self.size)
+            if storage_pool is None:
                 self.status = VolumeStatus.ERROR.value
                 return
+
+            self.storage_pool = storage_pool.name
 
             dp_volume = MachineVolume(
                 uuid=self.uuid,
@@ -976,13 +1139,16 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
                 boot=self.boot,
                 label=self.label,
                 device_type=self.device_type,
+                speed=self.speed,
+                ephemeral=self.ephemeral,
+                storage_pool=self.storage_pool,
                 index=self.index,
                 # TODO(akremenetsky): Detect machine without volume name
                 machine=self.machine,
                 project_id=self.project_id,
             )
             self._create_volume(pool, driver, dp_volume)
-            self._allocate_capacity(pool)
+            storage_pool.allocate_capacity(self.size)
 
         self._from_dp_volume(dp_volume)
 
