@@ -132,16 +132,38 @@ class Payload(models.Model, models.SimpleViewMixin):
         self, hash_method: tp.Callable[[str | bytes], str] = xxhash.xxh3_64
     ) -> None:
         m = hash_method()
-        caps_resources = self.caps_resources()
-        facts_resources = self.facts_resources()
-        caps_resources.sort(key=lambda r: r.hash)
-        facts_resources.sort(key=lambda r: r.full_hash)
-        hashes = [r.hash for r in caps_resources]
-        hashes.extend([r.full_hash for r in facts_resources])
+        # Only the ``hash``/``full_hash`` strings are needed here and both are
+        # already present in the stored simple-view representations, so read
+        # them straight from the resource dicts instead of restoring every
+        # resource. This avoids deserializing (and decrypting) the whole payload
+        # on every hash calculation while producing an identical result.
+        caps_hashes = [
+            resource.get("hash", "")
+            for resource in self._iter_resource_dicts(self.capabilities)
+        ]
+        facts_hashes = [
+            resource.get("full_hash", "")
+            for resource in self._iter_resource_dicts(self.facts)
+        ]
+        caps_hashes.sort()
+        facts_hashes.sort()
+        hashes = caps_hashes
+        hashes.extend(facts_hashes)
         m.update(
             json.dumps(hashes, separators=(",", ":"), sort_keys=True).encode("utf-8")
         )
         self.hash = m.hexdigest()
+
+    @classmethod
+    def _iter_resource_dicts(cls, source: dict) -> tp.Iterator[dict]:
+        """Iterate over the raw resource dicts stored in a caps/facts basket.
+
+        This yields the exact same resources, in the same order, as
+        :meth:`_resources` returns (restored) ``Resource`` objects, but without
+        the deserialization cost.
+        """
+        for basket in source.values():
+            yield from basket.get("resources", ())
 
     def resources(self) -> list[Resource]:
         """Lists all resources by in the payload."""
@@ -183,13 +205,20 @@ class Payload(models.Model, models.SimpleViewMixin):
         """Add resources to the facts basket."""
         self._add_resources(self.facts, resources, skip_fields)
 
-    def save(self, payload_path: str) -> None:
-        """Save the payload from the data plane."""
-        self.calculate_hash()
+    def save(self, payload_path: str, recalculate_hash: bool = True) -> None:
+        """Save the payload to the file atomically.
+
+        When ``recalculate_hash`` is ``True`` (the default) the payload hash is
+        recomputed before writing. Callers that have already kept the hash up to
+        date (and don't mutate the payload afterwards) may pass ``False`` to
+        avoid hashing the whole payload a second time.
+        """
+        if recalculate_hash:
+            self.calculate_hash()
 
         # Create missing directories
         payload_dir = os.path.dirname(payload_path)
-        if not os.path.exists(payload_dir):
+        if payload_dir and not os.path.exists(payload_dir):
             os.makedirs(payload_dir)
 
         payload_data = self.dump_to_simple_view()
@@ -789,13 +818,22 @@ class ResourceMixin(models.SimpleViewMixin):
         else:
             status = Resource.RESOURCE_DEF_STATUS
 
+        full_hash = utils.calculate_hash(value)
+        # When there are no dedicated target fields the hashed payload is the
+        # very same object as the full value, so reuse the digest instead of
+        # serializing and hashing it a second time.
+        if target_data is value:
+            resource_hash = full_hash
+        else:
+            resource_hash = utils.calculate_hash(target_data)
+
         return Resource(
             uuid=self.get_resource_uuid(),
             kind=kind,
             res_uuid=Resource.gen_res_uuid(self.get_resource_uuid(), kind),
             value=value,
-            hash=utils.calculate_hash(target_data),
-            full_hash=utils.calculate_hash(value),
+            hash=resource_hash,
+            full_hash=full_hash,
             status=status,
         )
 
@@ -815,9 +853,7 @@ class ResourceMixin(models.SimpleViewMixin):
         installation is upgraded element by element -- and it should cost
         the field, not the reconcile loop.
         """
-        return cls.restore_from_simple_view(
-            skip_unknown_fields=True, **resource.value
-        )
+        return cls.restore_from_simple_view(skip_unknown_fields=True, **resource.value)
 
 
 class TargetResourceMixin(ResourceMixin):
