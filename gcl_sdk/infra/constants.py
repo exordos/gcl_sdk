@@ -56,9 +56,9 @@ class VolumeStatus(str, enum.Enum):
 
 
 class DiskSpeed(str, enum.Enum):
-    COLD = "cold"
-    WARM = "warm"
-    HOT = "hot"
+    COLD = "COLD"
+    WARM = "WARM"
+    HOT = "HOT"
 
 
 class ProfileType(str, enum.Enum):
