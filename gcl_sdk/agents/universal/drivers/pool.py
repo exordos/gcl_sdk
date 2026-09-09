@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import abc
 import enum
+import json
 import logging
 import os
 import random
@@ -360,10 +361,14 @@ def select_storage_pool(
     given), only that pool is considered - this is then just a capacity
     check, e.g. for a resize.
 
-    Otherwise this is a soft (best-effort) match, the same way
+    Otherwise `ephemeral` is a hard constraint - unlike `speed`, it's not
+    a performance preference but a data-safety property, so a durable
+    (non-ephemeral) request is never placed on an ephemeral pool (or
+    vice versa) as a fallback. Within the pools matching it, this is a
+    soft (best-effort) match on `speed`, the same way
     DummySoftAntiAffinityFilter treats affinity: prefer a pool with an
-    exact speed/ephemeral match, but if the requested tier doesn't
-    exist or is full, fall back to any pool with room rather than
+    exact speed match, but if the requested tier doesn't exist or is
+    full, fall back to any same-durability pool with room rather than
     failing outright. Within either candidate set, the pool with the
     most free capacity ("weight") wins, rather than the first found -
     this spreads volumes across pools instead of piling them onto
@@ -379,12 +384,10 @@ def select_storage_pool(
             None,
         )
 
-    candidates = list(storage_pools)
+    candidates = [sp for sp in storage_pools if sp.ephemeral == ephemeral]
 
     exact_matches = [
-        sp
-        for sp in candidates
-        if sp.speed == speed and sp.ephemeral == ephemeral and sp.has_capacity(size)
+        sp for sp in candidates if sp.speed == speed and sp.has_capacity(size)
     ]
     if exact_matches:
         return max(exact_matches, key=lambda sp: sp.available)
@@ -449,7 +452,7 @@ class StoragePoolEntry(common_types.SchematicType):
     __mandatory__ = {"name"}
 
 
-class StoragePoolListOrLegacyName(types.BaseType):
+class StoragePoolListOrLegacyName(types.TypedList):
     """The new list-of-named-pools format, or a bare legacy pool name.
 
     A control plane that predates per-pool speed/ephemeral tagging (an
@@ -463,37 +466,42 @@ class StoragePoolListOrLegacyName(types.BaseType):
     """
 
     def __init__(self, nested_type):
-        super().__init__(openapi_type="array")
-        self._nested_type = types.TypedList(nested_type)
+        super().__init__(nested_type)
         self._legacy_type = types.String(max_length=255)
 
     def validate(self, value):
-        return self._legacy_type.validate(value) or self._nested_type.validate(value)
+        if isinstance(value, str):
+            return self._legacy_type.validate(value)
+        return super().validate(value)
 
     def to_simple_type(self, value):
         if isinstance(value, str):
             return value
-        return self._nested_type.to_simple_type(value)
+        return super().to_simple_type(value)
 
     def from_simple_type(self, value):
         if isinstance(value, str):
             return value
-        return self._nested_type.from_simple_type(value)
+        return super().from_simple_type(value)
 
     def from_unicode(self, value):
         if not isinstance(value, str):
             raise TypeError("Value must be str, not %s" % type(value))
-        try:
-            return self._nested_type.from_unicode(value)
-        except Exception:
+
+        if not value.lstrip().startswith("["):
+            # Not list-shaped - the legacy bare pool name.
             return value
 
-    def to_openapi_spec(self, prop_kwargs):
-        return self._nested_type.to_openapi_spec(prop_kwargs)
-
-    @property
-    def example(self):
-        return self._nested_type.example
+        # List-shaped: parse and validate it for real rather than
+        # silently falling back to treating it as a pool name - a
+        # malformed list (e.g. an entry missing "name") must fail
+        # loudly, not get treated as a nonexistent pool later on.
+        # from_simple_type() alone doesn't check mandatory fields, so
+        # validate explicitly.
+        parsed = self.from_simple_type(json.loads(value))
+        if not self.validate(parsed):
+            raise TypeError("Invalid storage_pool value: %r" % (value,))
+        return parsed
 
 
 class ExordosLocalHyperDriverSpec(LibvirtPoolDriverSpec):
@@ -952,6 +960,11 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
         self.machine = dp_volume.machine
         self.device_type = dp_volume.device_type
         self.status = dp_volume.status
+        # Backfill for a volume that predates storage_pool tracking (no
+        # pinned pool yet, e.g. loaded from an older meta file) - trust
+        # the data plane's own record of where it actually lives.
+        if self.storage_pool is None and dp_volume.storage_pool is not None:
+            self.storage_pool = dp_volume.storage_pool
 
     def _actualize_attachment(self, pool: MetaPool, dp_volume: MachineVolume) -> None:
         """Actualize the attachment of the volume."""
@@ -1129,8 +1142,6 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
                 self.status = VolumeStatus.ERROR.value
                 return
 
-            self.storage_pool = storage_pool.name
-
             dp_volume = MachineVolume(
                 uuid=self.uuid,
                 name=self.name,
@@ -1141,7 +1152,7 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
                 device_type=self.device_type,
                 speed=self.speed,
                 ephemeral=self.ephemeral,
-                storage_pool=self.storage_pool,
+                storage_pool=storage_pool.name,
                 index=self.index,
                 # TODO(akremenetsky): Detect machine without volume name
                 machine=self.machine,
@@ -1149,6 +1160,11 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
             )
             self._create_volume(pool, driver, dp_volume)
             storage_pool.allocate_capacity(self.size)
+            # Only pin the pool on the meta model once creation actually
+            # succeeded - otherwise a failed create would stay locked
+            # onto a possibly-bad pool forever, unable to retry on
+            # another one that may have room.
+            self.storage_pool = storage_pool.name
 
         self._from_dp_volume(dp_volume)
 
@@ -1199,6 +1215,26 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
         dp_volume: MachineVolume = pool.dp_volume_map[self.uuid]
         machine = dp_volume.machine
         unknown_action = True
+
+        # Migrating a volume between storage pools isn't implemented at
+        # the driver level - ignore an incoming storage_pool change
+        # (e.g. a stale/incorrect scheduling decision) and keep acting
+        # on the pool the volume actually lives on, rather than letting
+        # the resize/capacity logic below silently charge a different
+        # pool than the one really holding the data.
+        if (
+            dp_volume.storage_pool is not None
+            and self.storage_pool is not None
+            and self.storage_pool != dp_volume.storage_pool
+        ):
+            LOG.warning(
+                "Ignoring an unsupported storage pool change for volume "
+                "%s (%s -> %s)",
+                self.uuid,
+                dp_volume.storage_pool,
+                self.storage_pool,
+            )
+            self.storage_pool = dp_volume.storage_pool
 
         # A special case for root volumes. If the condition is true, it
         # means the machine failed to be created on previous iteration.
