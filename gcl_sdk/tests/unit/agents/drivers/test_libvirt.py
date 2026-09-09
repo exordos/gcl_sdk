@@ -30,6 +30,7 @@ import libvirt  # noqa: E402
 
 from gcl_sdk.agents.universal.drivers import libvirt as libvirt_driver  # noqa: E402
 from gcl_sdk.agents.universal.drivers import pool as pool_base  # noqa: E402
+from gcl_sdk.infra import constants as ic  # noqa: E402
 
 
 def _local_driver() -> libvirt_driver.LibvirtPoolDriver:
@@ -66,7 +67,10 @@ class TestStoragePoolBackwardCompat:
         driver = _multi_pool_driver("default-pool")
 
         assert driver._storage_pool_names() == ["default-pool"]
-        assert driver._storage_pool_attributes("default-pool") == ("warm", False)
+        assert driver._storage_pool_attributes("default-pool") == (
+            ic.DiskSpeed.WARM.value,
+            False,
+        )
 
         volume = pool_base.MachineVolume(
             uuid=sys_uuid.uuid4(), name="vol", size=1, project_id=sys_uuid.uuid4()
@@ -76,16 +80,26 @@ class TestStoragePoolBackwardCompat:
     def test_new_list_format_keeps_per_pool_attributes(self):
         driver = _multi_pool_driver(
             [
-                {"name": "hot-pool", "speed": "hot", "ephemeral": True},
+                {
+                    "name": "hot-pool",
+                    "speed": ic.DiskSpeed.HOT.value,
+                    "ephemeral": True,
+                },
                 {"name": "cold-pool"},
             ]
         )
 
         assert driver._storage_pool_names() == ["hot-pool", "cold-pool"]
-        assert driver._storage_pool_attributes("hot-pool") == ("hot", True)
+        assert driver._storage_pool_attributes("hot-pool") == (
+            ic.DiskSpeed.HOT.value,
+            True,
+        )
         # Attributes omitted from an entry fall back to the same defaults
         # as the legacy string format.
-        assert driver._storage_pool_attributes("cold-pool") == ("warm", False)
+        assert driver._storage_pool_attributes("cold-pool") == (
+            ic.DiskSpeed.WARM.value,
+            False,
+        )
 
         volume = pool_base.MachineVolume(
             uuid=sys_uuid.uuid4(),
