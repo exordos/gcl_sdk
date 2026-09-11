@@ -582,3 +582,197 @@ def test_resize_with_unknown_actual_pool_does_not_touch_driver():
     assert actual.size == 10
     assert volume.status == "ERROR"
 
+
+class _CapturingCreatePoolDriver(pool_driver.DummyPoolDriver):
+    """DummyPoolDriver that returns the volume it was asked to create."""
+
+    def __init__(self, pool):
+        super().__init__(pool)
+        self.created = None
+
+    def create_volume(self, volume):
+        self.created = volume
+        volume.status = pool_driver.VolumeStatus.ACTIVE.value
+        return volume
+
+
+class _CapturingActionsPoolDriver(pool_driver.DummyPoolDriver):
+    """DummyPoolDriver that records the volume passed to each action."""
+
+    def __init__(self, pool, dp_volume):
+        super().__init__(pool)
+        self._dp_volume = dp_volume
+        self.attached = None
+        self.detached = None
+        self.deleted = None
+        self.resized_to = None
+
+    def attach_volume(self, volume):
+        self.attached = volume
+
+    def detach_volume(self, volume):
+        self.detached = volume
+
+    def delete_volume(self, volume):
+        self.deleted = volume
+
+    def resize_volume(self, volume):
+        self.resized_to = volume
+
+    def get_volume(self, volume):
+        return self._dp_volume
+
+
+class TestStorageLocationPropagation:
+    """`storage_location` (the ost:// address of a remote StorageCluster a
+    volume was scheduled onto) isn't discoverable by a driver the way
+    storage_pool sometimes is - MetaVolume must overlay it onto every
+    dp_volume it hands to a driver, not just at creation time.
+    """
+
+    def test_to_dp_volume_includes_storage_location(self):
+        volume_uuid = sys_uuid.uuid4()
+        meta_volume = pool_driver.MetaVolume(
+            uuid=volume_uuid,
+            pool=sys_uuid.uuid4(),
+            name=str(volume_uuid),
+            size=10,
+            project_id=sys_uuid.uuid4(),
+            storage_pool="default",
+            storage_location="ost://10.0.0.5:7777",
+        )
+
+        dp_volume = meta_volume._to_dp_volume()
+
+        assert dp_volume.storage_location == "ost://10.0.0.5:7777"
+
+    def test_dump_to_dp_new_volume_gets_storage_location(self):
+        storage_pool = pool_driver.ThinStoragePool(
+            name="default", pool_type="rawstor", capacity_usable=100
+        )
+        meta_pool = pool_driver.MetaPool(
+            uuid=sys_uuid.uuid4(), driver_spec=pool_driver.DummyPoolDriverSpec()
+        )
+        meta_pool.storage_pools = [storage_pool]
+        meta_pool.dp_volume_map = {}
+
+        volume_uuid = sys_uuid.uuid4()
+        meta_volume = pool_driver.MetaVolume(
+            uuid=volume_uuid,
+            pool=meta_pool.uuid,
+            name=str(volume_uuid),
+            size=10,
+            project_id=sys_uuid.uuid4(),
+            storage_location="ost://10.0.0.5:7777",
+        )
+
+        driver = _CapturingCreatePoolDriver(meta_pool)
+        with mock.patch.object(
+            pool_driver.MetaPool, "load_driver", return_value=driver
+        ):
+            meta_volume.dump_to_dp(meta_pool)
+
+        assert driver.created.storage_location == "ost://10.0.0.5:7777"
+        assert meta_volume.storage_pool == "default"
+
+    def test_dump_to_dp_reused_volume_overlays_storage_location(self):
+        volume_uuid = sys_uuid.uuid4()
+        dp_volume = pool_driver.MachineVolume(
+            uuid=volume_uuid,
+            name=str(volume_uuid),
+            size=10,
+            project_id=pool_driver.SYSTEM_PROJECT_ID,
+            status=pool_driver.VolumeStatus.ACTIVE.value,
+            storage_pool="default",
+        )
+        meta_pool = pool_driver.MetaPool(
+            uuid=sys_uuid.uuid4(), driver_spec=pool_driver.DummyPoolDriverSpec()
+        )
+        meta_pool.dp_volume_map = {volume_uuid: dp_volume}
+        meta_pool.dp_machine_map = {}
+
+        meta_volume = pool_driver.MetaVolume(
+            uuid=volume_uuid,
+            pool=meta_pool.uuid,
+            name=str(volume_uuid),
+            size=10,
+            project_id=sys_uuid.uuid4(),
+            storage_pool="default",
+            storage_location="ost://10.0.0.5:7777",
+        )
+
+        meta_volume.dump_to_dp(meta_pool)
+
+        assert dp_volume.storage_location == "ost://10.0.0.5:7777"
+
+    def test_update_on_dp_overlays_storage_location_before_resize(self):
+        volume_uuid = sys_uuid.uuid4()
+        dp_volume = pool_driver.MachineVolume(
+            uuid=volume_uuid,
+            name=str(volume_uuid),
+            size=10,
+            project_id=pool_driver.SYSTEM_PROJECT_ID,
+            status=pool_driver.VolumeStatus.ACTIVE.value,
+            storage_pool="default",
+        )
+        storage_pool = pool_driver.ThinStoragePool(
+            name="default", pool_type="rawstor", capacity_usable=100
+        )
+        meta_pool = pool_driver.MetaPool(
+            uuid=sys_uuid.uuid4(), driver_spec=pool_driver.DummyPoolDriverSpec()
+        )
+        meta_pool.storage_pools = [storage_pool]
+        meta_pool.dp_volume_map = {volume_uuid: dp_volume}
+
+        meta_volume = pool_driver.MetaVolume(
+            uuid=volume_uuid,
+            pool=meta_pool.uuid,
+            name=str(volume_uuid),
+            size=20,
+            project_id=sys_uuid.uuid4(),
+            storage_pool="default",
+            storage_location="ost://10.0.0.5:7777",
+        )
+
+        driver = _CapturingActionsPoolDriver(meta_pool, dp_volume)
+        with mock.patch.object(
+            pool_driver.MetaPool, "load_driver", return_value=driver
+        ):
+            meta_volume.update_on_dp(meta_pool)
+
+        assert driver.resized_to.storage_location == "ost://10.0.0.5:7777"
+
+    def test_delete_from_dp_overlays_storage_location(self):
+        volume_uuid = sys_uuid.uuid4()
+        dp_volume = pool_driver.MachineVolume(
+            uuid=volume_uuid,
+            name=str(volume_uuid),
+            size=10,
+            project_id=pool_driver.SYSTEM_PROJECT_ID,
+            status=pool_driver.VolumeStatus.ACTIVE.value,
+            storage_pool="default",
+            machine=sys_uuid.uuid4(),
+        )
+        meta_pool = pool_driver.MetaPool(
+            uuid=sys_uuid.uuid4(), driver_spec=pool_driver.DummyPoolDriverSpec()
+        )
+        meta_pool.dp_volume_map = {volume_uuid: dp_volume}
+
+        meta_volume = pool_driver.MetaVolume(
+            uuid=volume_uuid,
+            pool=meta_pool.uuid,
+            name=str(volume_uuid),
+            size=10,
+            project_id=sys_uuid.uuid4(),
+            storage_pool="default",
+            storage_location="ost://10.0.0.5:7777",
+        )
+
+        driver = _CapturingActionsPoolDriver(meta_pool, dp_volume)
+        with mock.patch.object(
+            pool_driver.MetaPool, "load_driver", return_value=driver
+        ):
+            meta_volume.delete_from_dp(meta_pool)
+
+        assert driver.detached.storage_location == "ost://10.0.0.5:7777"
+        assert driver.deleted.storage_location == "ost://10.0.0.5:7777"
