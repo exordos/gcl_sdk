@@ -283,6 +283,13 @@ class MachineVolume(
     storage_pool = properties.property(
         types.AllowNone(types.String(max_length=255)), default=None
     )
+    # Network address (ost://host:port) of the StorageCluster this volume
+    # was scheduled onto, set by the control plane's scheduler. Unset for
+    # a volume on a local pool - the driver then resolves the address from
+    # its own driver_spec.rawstor_pools by `storage_pool` name instead.
+    storage_location = properties.property(
+        types.AllowNone(types.String(max_length=2048)), default=None
+    )
     status = properties.property(
         types.Enum([s.value for s in VolumeStatus]),
         default=VolumeStatus.NEW.value,
@@ -953,6 +960,16 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
     storage_pool = properties.property(
         types.AllowNone(types.String(max_length=255)), default=None
     )
+    # Network address of the StorageCluster this volume was scheduled
+    # onto by the control plane's scheduler; unset for a local pool. Not
+    # discoverable from the data plane the way storage_pool sometimes is
+    # (probing an actual pool for the object), so unlike storage_pool it's
+    # never backfilled from dp_volume - self is always authoritative and
+    # dp_volume must be overlaid with it before any driver call, see
+    # get_meta_model_fields/dump_to_dp/update_on_dp/delete_from_dp.
+    storage_location = properties.property(
+        types.AllowNone(types.String(max_length=2048)), default=None
+    )
     index = properties.property(
         types.Integer(min_value=0, max_value=4096),
         default=4096,
@@ -1079,6 +1096,7 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
             tier=self.tier,
             ephemeral=self.ephemeral,
             storage_pool=self.storage_pool,
+            storage_location=self.storage_location,
             index=self.index,
             machine=self.machine,
             project_id=self.project_id,
@@ -1131,6 +1149,7 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
             "tier",
             "ephemeral",
             "storage_pool",
+            "storage_location",
             "project_id",
         }
 
@@ -1142,6 +1161,10 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
             # The volume already exists in the data plane
             # Reuse it
             dp_volume = pool.dp_volume_map[self.uuid]
+            # storage_location isn't discoverable by the driver (unlike
+            # storage_pool, it has no physical signature to probe) - self
+            # is always the authority, overlay it before any driver call.
+            dp_volume.storage_location = self.storage_location
         else:
             # Find a storage pool matching this volume's tier/ephemeral
             # request with enough room for it.
@@ -1161,6 +1184,7 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
                 tier=self.tier,
                 ephemeral=self.ephemeral,
                 storage_pool=storage_pool.name,
+                storage_location=self.storage_location,
                 index=self.index,
                 # TODO(akremenetsky): Detect machine without volume name
                 machine=self.machine,
@@ -1211,6 +1235,7 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
 
         driver: AbstractPoolDriver = pool.load_driver()
         dp_volume = pool.dp_volume_map[self.uuid]
+        dp_volume.storage_location = self.storage_location
         self._detach_volume(pool, driver, dp_volume)
         self._delete_volume(pool, driver, dp_volume)
 
@@ -1221,6 +1246,7 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
 
         driver: AbstractPoolDriver = pool.load_driver()
         dp_volume: MachineVolume = pool.dp_volume_map[self.uuid]
+        dp_volume.storage_location = self.storage_location
         machine = dp_volume.machine
         unknown_action = True
 
