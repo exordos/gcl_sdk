@@ -558,6 +558,37 @@ class DummyPoolDriverSpec(AbstractPoolDriverSpec):
     KIND = "dummy"
 
 
+class AbstractStorageClusterDriverSpec(
+    types_dynamic.AbstractKindModel,
+    models.SimpleViewMixin,
+):
+    """Base class for all storage cluster driver specs.
+
+    Kept separate from AbstractPoolDriverSpec - a storage cluster isn't a
+    MachinePool and carries no machine-scheduling fields.
+    """
+
+
+class RawstorStorageClusterDriverSpec(AbstractStorageClusterDriverSpec):
+    KIND = "rawstor"
+
+    # Backing store this cluster's rawstor-ost serves, e.g.
+    # file:///var/lib/rawstor. Informational only - it's configured on
+    # the storage node itself (see `exordos storages init --location`),
+    # never resent to a driver.
+    location = properties.property(types.String(max_length=2048), required=True)
+    # Network address (ost://host:port) other hosts use to reach this
+    # cluster - what the scheduler pushes into a remote-scheduled
+    # volume's `storage_location` (see gcl_sdk.agents.universal.drivers.
+    # exordos_hyper.ExordosLocalHyperDriver._rawstor_address).
+    endpoint = properties.property(types.String(max_length=2048), required=True)
+    speed = properties.property(
+        types.Enum([s.value for s in ic.DiskSpeed]),
+        default=ic.DiskSpeed.HOT.value,
+    )
+    ephemeral = properties.property(types.Boolean(), default=False)
+
+
 class MachinePool(
     models.ModelWithUUID,
     models.ModelWithNameDesc,
