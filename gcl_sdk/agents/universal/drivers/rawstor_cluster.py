@@ -21,7 +21,6 @@ import typing as tp
 import uuid as sys_uuid
 
 import rawstor
-from restalchemy.dm import models
 from restalchemy.dm import properties
 from restalchemy.dm import types
 from restalchemy.dm import types_dynamic
@@ -30,36 +29,15 @@ from gcl_sdk.agents.universal import constants as c
 from gcl_sdk.agents.universal.drivers import meta
 from gcl_sdk.agents.universal.drivers import pool as pool_base
 from gcl_sdk.common import utils
-from gcl_sdk.infra import constants as ic
 
 LOG = logging.getLogger(__name__)
 
-
-class AbstractStorageClusterDriverSpec(
-    types_dynamic.AbstractKindModel,
-    models.SimpleViewMixin,
-):
-    """Base class for all storage cluster driver specs."""
-
-
-class RawstorStorageClusterDriverSpec(AbstractStorageClusterDriverSpec):
-    KIND = "rawstor"
-
-    # Backing store this cluster's rawstor-ost serves, e.g.
-    # file:///var/lib/rawstor. Informational only - it's configured on
-    # the storage node itself (see `exordos storages init --location`),
-    # never resent to a driver.
-    location = properties.property(types.String(max_length=2048), required=True)
-    # Network address (ost://host:port) other hosts use to reach this
-    # cluster - what the scheduler pushes into a remote-scheduled
-    # volume's `storage_location` (see gcl_sdk.agents.universal.drivers.
-    # exordos_hyper.ExordosLocalHyperDriver._rawstor_address).
-    endpoint = properties.property(types.String(max_length=2048), required=True)
-    speed = properties.property(
-        types.Enum([s.value for s in ic.DiskSpeed]),
-        default=ic.DiskSpeed.HOT.value,
-    )
-    ephemeral = properties.property(types.Boolean(), default=False)
+# Re-exported for convenience/backward-compat of existing imports of this
+# module - the driver_spec classes themselves live in pool.py (alongside
+# the other driver specs) so exordos_core can reference them without
+# pulling in the `rawstor` python bindings this module needs.
+AbstractStorageClusterDriverSpec = pool_base.AbstractStorageClusterDriverSpec
+RawstorStorageClusterDriverSpec = pool_base.RawstorStorageClusterDriverSpec
 
 
 class AbstractStorageClusterDriver(abc.ABC):
