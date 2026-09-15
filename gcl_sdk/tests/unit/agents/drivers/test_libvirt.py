@@ -69,7 +69,7 @@ class TestStoragePoolBackwardCompat:
         assert driver._storage_pool_names() == ["default-pool"]
         assert driver._storage_pool_attributes("default-pool") == (
             ic.DiskSpeed.WARM.value,
-            False,
+            True,
         )
 
         volume = pool_base.MachineVolume(
