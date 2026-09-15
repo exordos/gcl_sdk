@@ -287,7 +287,18 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
         for domain, root in domains:
             idx = 0
             for disk in root.findall(".//devices/disk"):
-                if disk.get("device") != "disk" or disk.get("type") != "vhostuser":
+                if disk.get("device") != "disk":
+                    continue
+
+                # idx must track this disk's position among *all* of the
+                # domain's disks (matching the vd* letter _add_volumes_to_
+                # domain gave it from the same enumerate()), not just
+                # rawstor ones - a machine mixing qcow2 and rawstor disks
+                # would otherwise report each rawstor disk's index as its
+                # position among rawstor disks alone, undercounting it by
+                # however many qcow2 disks precede it.
+                if disk.get("type") != "vhostuser":
+                    idx += 1
                     continue
 
                 source = disk.find("source")
@@ -298,6 +309,7 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
                         "Unable to detect rawstor volume for disk %s",
                         ET.tostring(disk),
                     )
+                    idx += 1
                     continue
 
                 result[volume_uuid] = (domain, idx)

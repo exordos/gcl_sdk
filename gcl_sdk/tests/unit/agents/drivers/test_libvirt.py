@@ -414,10 +414,12 @@ class TestVolumeAttachments:
             )
 
         assert "Unable to detect" not in caplog.text
-        # The pool volume is still matched correctly -- and at index 0,
-        # since the vhostuser disk ahead of it in the XML is skipped
-        # rather than counted.
-        assert attachments[volume] == ("fake-domain", 0)
+        # The pool volume is still matched correctly, at index 1: the
+        # vhostuser disk ahead of it in the XML isn't a match (it was
+        # never going to be one of this storage pool's own volumes), but
+        # it still occupies a device letter (vda), so it still counts
+        # toward this disk's position.
+        assert attachments[volume] == ("fake-domain", 1)
 
 
 def test_domain_console_logs_to_file():
