@@ -83,6 +83,40 @@ class TestVolumeUuidFromSocketPath:
         assert driver._uuid_from_socket_path("/run/rawstor/not-a-uuid.sock") is None
 
 
+class TestRawstorAttachments:
+    def test_index_counts_all_disks_not_just_vhostuser_ones(self, tmp_path):
+        # Regression: a machine mixing a qcow2 disk and a rawstor
+        # (vhostuser) disk must report each disk's index as its position
+        # among *all* disks (matching the device letter
+        # _add_volumes_to_domain gave it), not its position among disks
+        # of its own backend alone - the qcow2 disk here occupies vda,
+        # so the vhostuser disk at vdb must be index 1, not 0.
+        driver = _driver(tmp_path)
+        volume_uuid = sys_uuid.uuid4()
+
+        root = ET.fromstring(
+            f"""
+            <domain>
+              <devices>
+                <disk type="file" device="disk">
+                  <source file="/var/lib/libvirt/images/other.qcow2" />
+                  <target dev="vda" bus="virtio" />
+                </disk>
+                <disk type="vhostuser" device="disk">
+                  <source type="unix"
+                          path="/run/rawstor/{volume_uuid}.sock" />
+                  <target dev="vdb" bus="virtio" />
+                </disk>
+              </devices>
+            </domain>
+            """
+        )
+
+        attachments = driver._rawstor_attachments([("fake-domain", root)])
+
+        assert attachments[volume_uuid] == ("fake-domain", 1)
+
+
 def _fake_location_info(monkeypatch, driver, *, used_gb, total_gb, pool_name="rawstor"):
     monkeypatch.setattr(
         driver._location_for(pool_name),
