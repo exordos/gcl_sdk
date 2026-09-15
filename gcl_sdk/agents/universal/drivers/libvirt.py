@@ -995,7 +995,7 @@ class LibvirtPoolDriver(pool_base.AbstractPoolDriver):
         storage_pool = self._spec.storage_pool
         if not isinstance(storage_pool, list):
             # A single implicit pool has fixed default attributes.
-            return ic.DiskSpeed.WARM.value, False
+            return ic.DiskSpeed.WARM.value, True
 
         for entry in storage_pool:
             if entry["name"] == name:
