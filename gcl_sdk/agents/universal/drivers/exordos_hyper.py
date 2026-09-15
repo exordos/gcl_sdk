@@ -221,9 +221,20 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
         if storage_location:
             self._write_remote_location_drop_in(volume_uuid, storage_location)
 
-        subprocess.check_call(
-            ["systemctl", "enable", "--now", self._vhost_unit(volume_uuid)]
-        )
+        unit = self._vhost_unit(volume_uuid)
+        try:
+            subprocess.check_call(["systemctl", "enable", "--now", unit])
+        except subprocess.CalledProcessError as e:
+            # The most common cause by far: rawstor-vhost's package (and
+            # its rawstor-vhost@.service template) is only installed by
+            # `hypervisors init/bootstrap --with-rawstor` - a hypervisor
+            # set up without that flag has librawstor/rawstor-ost (if
+            # anything) but not this, so the unit simply doesn't exist.
+            raise RuntimeError(
+                f"Failed to start {unit} - is the rawstor-vhost package "
+                "installed on this hypervisor? (`hypervisors init` / "
+                "`bootstrap` need --with-rawstor to install it)"
+            ) from e
         self._wait_for_socket(self._socket_path(volume_uuid))
 
     def _wait_for_socket(self, socket_path: str) -> None:
