@@ -126,6 +126,44 @@ class TestPoolAgentDriver:
         assert [r.uuid for r in listed] == [pool_uuid]
 
 
+class TestMetaVolumeCreateVolume:
+    """_create_volume must be idempotent like its _attach_volume/
+    _detach_volume siblings - a retried create hitting an object the
+    previous attempt actually made shouldn't be treated as a failure.
+    """
+
+    def test_treats_already_exists_as_success(self):
+        volume_uuid = sys_uuid.uuid4()
+        project_id = sys_uuid.uuid4()
+        meta_volume = pool_driver.MetaVolume(
+            uuid=volume_uuid,
+            pool=sys_uuid.uuid4(),
+            size=10,
+            project_id=project_id,
+        )
+        dp_volume = pool_driver.MachineVolume(
+            uuid=volume_uuid,
+            size=10,
+            project_id=project_id,
+        )
+        existing = pool_driver.MachineVolume(
+            uuid=volume_uuid,
+            size=10,
+            project_id=project_id,
+            status=pool_driver.VolumeStatus.ACTIVE.value,
+        )
+        driver = mock.Mock()
+        driver.create_volume.side_effect = pool_driver.VolumeAlreadyExistsError(
+            volume=volume_uuid
+        )
+        driver.get_volume.return_value = existing
+
+        meta_volume._create_volume(pool=mock.Mock(), driver=driver, dp_volume=dp_volume)
+
+        driver.get_volume.assert_called_once_with(volume_uuid)
+        assert meta_volume.status == pool_driver.VolumeStatus.ACTIVE.value
+
+
 class TestDummyPoolDriver:
     def test_get_machine_returns_a_machine(self):
         """`status` used to be "running", which is not a MachineStatus, so
