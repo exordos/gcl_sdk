@@ -77,6 +77,7 @@ class RawstorStorageClusterDriver(AbstractStorageClusterDriver):
             name="default",
             pool_type="rawstor",
             capacity_usable=info.total >> 30,  # GB
+            available_actual=(info.total - info.used) >> 30,  # GB
             oversubscription_ratio=1.0,
             speed=self._spec.speed,
             ephemeral=self._spec.ephemeral,

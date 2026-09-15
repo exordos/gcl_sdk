@@ -45,16 +45,28 @@ def _cluster(tmp_path, speed=ic.DiskSpeed.HOT.value, ephemeral=False):
     return rawstor_cluster.MetaStorageCluster(uuid=sys_uuid.uuid4(), driver_spec=spec)
 
 
+class _FakeLocation:
+    def __init__(self, used_gb, total_gb):
+        self._used_gb = used_gb
+        self._total_gb = total_gb
+
+    def info(self):
+        return types.SimpleNamespace(
+            used=self._used_gb << 30, total=self._total_gb << 30
+        )
+
+    def __iter__(self):
+        return iter(())
+
+
 def _fake_location_info(monkeypatch, *, used_gb, total_gb):
+    # __iter__ must live on the class, not an instance attribute (as a
+    # plain SimpleNamespace(__iter__=...) used to try) - Python looks up
+    # dunder methods on the type, so `for x in obj` never saw it there.
     monkeypatch.setattr(
         rawstor_cluster.rawstor,
         "Location",
-        lambda uri: types.SimpleNamespace(
-            info=lambda: types.SimpleNamespace(
-                used=used_gb << 30, total=total_gb << 30
-            ),
-            __iter__=lambda self=None: iter(()),
-        ),
+        lambda uri: _FakeLocation(used_gb, total_gb),
     )
 
 
@@ -80,6 +92,7 @@ class TestRawstorStorageClusterDriver:
         assert storage_pool.name == "default"
         assert storage_pool.pool_type == "rawstor"
         assert storage_pool.capacity_usable == 100
+        assert storage_pool.available_actual == 80
 
     def test_speed_and_ephemeral_come_from_the_driver_spec(self, tmp_path, monkeypatch):
         cluster = _cluster(tmp_path, speed=ic.DiskSpeed.COLD.value, ephemeral=True)
