@@ -1071,7 +1071,18 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
         driver: AbstractPoolDriver,
         dp_volume: MachineVolume,
     ) -> None:
-        dp_volume = driver.create_volume(dp_volume)
+        try:
+            dp_volume = driver.create_volume(dp_volume)
+        except VolumeAlreadyExistsError:
+            # Self-healing, like _attach_volume/_detach_volume below: an
+            # earlier iteration may have created the real object but not
+            # recorded it here (e.g. a sibling resource failed right
+            # after) - pick up its actual state instead of erroring.
+            LOG.warning(
+                "The volume %s already exists, using its current state",
+                self.uuid,
+            )
+            dp_volume = driver.get_volume(dp_volume.uuid)
         self.status = dp_volume.status
         LOG.info("The volume %s created", self.uuid)
 
