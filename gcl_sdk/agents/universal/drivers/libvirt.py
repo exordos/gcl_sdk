@@ -803,28 +803,38 @@ class LibvirtPoolDriver(pool_base.AbstractPoolDriver):
                 if disk.get("device") != "disk":
                     continue
 
-                # `volumes` only ever holds this storage pool's own volumes
+                # idx must track this disk's position among *all* of the
+                # domain's disks (matching the vd* letter _add_volumes_to_
+                # domain gave it from the same enumerate()), not just
+                # file/block ones - a machine mixing qcow2 and rawstor
+                # disks would otherwise report each qcow2 disk's index as
+                # its position among qcow2 disks alone, undercounting it
+                # by however many rawstor disks precede it. `volumes`
+                # only ever holds this storage pool's own volumes
                 # (get_pool_info() etc. populate it via
-                # storagePoolLookupByName().listAllVolumes()) -- a disk of
-                # any other type (e.g. "vhostuser", rawstor's own) was never
-                # going to be one of them, so there's nothing to warn about
-                # here; only "file"/"block" disks are.
+                # storagePoolLookupByName().listAllVolumes()), so a disk
+                # of any other type (e.g. "vhostuser", rawstor's own)
+                # still counts toward idx, just never matches one.
                 if disk.get("type") not in ("file", "block"):
+                    idx += 1
                     continue
 
                 source = disk.find("source")
                 if source is None:
                     LOG.warning("Unable to detect source for %s", ET.tostring(disk))
+                    idx += 1
                     continue
 
                 path = source.get("file") or source.get("dev")
                 if path is None:
                     LOG.warning("Unable to detect path for %s", ET.tostring(disk))
+                    idx += 1
                     continue
 
                 volume = path_map.get(path)
                 if volume is None:
                     LOG.warning("Unable to detect volume for path: %s", path)
+                    idx += 1
                     continue
 
                 result[volume] = (domain, idx)
