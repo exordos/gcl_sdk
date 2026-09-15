@@ -808,10 +808,9 @@ class LibvirtPoolDriver(pool_base.AbstractPoolDriver):
                 idx += 1
                 # `volumes` only ever holds this storage pool's own volumes
                 # (get_pool_info() etc. populate it via
-                # storagePoolLookupByName().listAllVolumes()) -- a disk of
-                # any other type (e.g. "vhostuser", rawstor's own) was never
-                # going to be one of them, so there's nothing to warn about
-                # here; only "file"/"block" disks are.
+                # storagePoolLookupByName().listAllVolumes()), so a disk
+                # of any other type (e.g. "vhostuser", rawstor's own)
+                # still counts toward idx, just never matches one.
                 if disk.get("type") not in ("file", "block"):
                     continue
 
