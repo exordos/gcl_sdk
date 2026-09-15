@@ -225,6 +225,23 @@ class TestVolumeLifecycle:
         # failed vhost stop.
         assert driver.get_volume(volume.uuid).uuid == volume.uuid
 
+    def test_start_vhost_raises_a_clear_error_when_unit_is_missing(
+        self, tmp_path, monkeypatch
+    ):
+        # rawstor-vhost@.service only exists if the rawstor-vhost package
+        # is installed (hypervisors init/bootstrap --with-rawstor) - a
+        # hypervisor set up without that flag must fail with an
+        # actionable hint, not a bare CalledProcessError.
+        driver = _driver(tmp_path)
+
+        def fake_check_call(cmd, *a, **kw):
+            raise subprocess.CalledProcessError(1, cmd)
+
+        monkeypatch.setattr(subprocess, "check_call", fake_check_call)
+
+        with pytest.raises(RuntimeError, match="rawstor-vhost package"):
+            driver._start_vhost(sys_uuid.uuid4())
+
 
 class TestForeignVolumes:
     """A machine can be adopted into this pool with disks that were never
