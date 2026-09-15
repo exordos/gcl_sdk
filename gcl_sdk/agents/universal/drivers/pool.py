@@ -154,6 +154,11 @@ class VolumeNotAttachedError(exceptions.UniversalAgentException):
     machine: sys_uuid.UUID
 
 
+class VolumeResizeNotSupportedError(exceptions.UniversalAgentException):
+    __template__ = "Resizing volume {volume} is not supported by this pool driver."
+    volume: sys_uuid.UUID
+
+
 class PortAlreadyAttachedError(exceptions.UniversalAgentException):
     __template__ = "The port {port} is already attached to machine {machine}."
     port: sys_uuid.UUID
@@ -258,6 +263,13 @@ class MachineVolume(
     # left as-is afterwards (see get_meta_model_fields).
     storage_pool = properties.property(
         types.AllowNone(types.String(max_length=255)), default=None
+    )
+    # Network address (ost://host:port) of the StorageCluster this volume
+    # was scheduled onto, set by the control plane's scheduler. Unset for
+    # a volume on a local pool - the driver then resolves the address from
+    # its own driver_spec.rawstor_pools by `storage_pool` name instead.
+    storage_location = properties.property(
+        types.AllowNone(types.String(max_length=2048)), default=None
     )
     status = properties.property(
         types.Enum([s.value for s in VolumeStatus]),
@@ -504,13 +516,23 @@ class StoragePoolListOrLegacyName(types.TypedList):
         return parsed
 
 
+class RawstorPoolEntry(common_types.SchematicType):
+    __scheme__ = {
+        "name": types.String(max_length=255),
+        "location": types.String(max_length=2048),
+        "speed": types.Enum([s.value for s in ic.DiskSpeed]),
+        "ephemeral": types.Boolean(),
+    }
+    __mandatory__ = {"name", "location"}
+
+
 class ExordosLocalHyperDriverSpec(LibvirtPoolDriverSpec):
     KIND = "exordos_local_hyper"
 
     node = properties.property(types.UUID(), required=True)
 
     # Overrides LibvirtPoolDriverSpec.storage_pool (a single pool name)
-    # with a list of named pools, each independently tagged with
+    # with a list of named qcow2 pools, each independently tagged with
     # speed/ephemeral so the scheduler can place a disk on the right one.
     # A bare pool name string is still accepted for backward compatibility
     # - see StoragePoolListOrLegacyName.
@@ -519,9 +541,52 @@ class ExordosLocalHyperDriverSpec(LibvirtPoolDriverSpec):
         default=list,
     )
 
+    # Named rawstor-backed pools, tagged with speed/ephemeral the same
+    # way as the qcow2 pools above. select_storage_pool (see gcl_sdk's
+    # `select_storage_pool`) sees both kinds side by side and picks
+    # purely by tier/capacity - ExordosLocalHyperDriver then decides
+    # which backend (qcow2 vs rawstor) to use for a given disk by
+    # checking which of these two lists the assigned pool name is in,
+    # not from an explicit per-disk field.
+    rawstor_pools = properties.property(
+        types.TypedList(RawstorPoolEntry()),
+        default=list,
+    )
+
 
 class DummyPoolDriverSpec(AbstractPoolDriverSpec):
     KIND = "dummy"
+
+
+class AbstractStorageClusterDriverSpec(
+    types_dynamic.AbstractKindModel,
+    models.SimpleViewMixin,
+):
+    """Base class for all storage cluster driver specs.
+
+    Kept separate from AbstractPoolDriverSpec - a storage cluster isn't a
+    MachinePool and carries no machine-scheduling fields.
+    """
+
+
+class RawstorStorageClusterDriverSpec(AbstractStorageClusterDriverSpec):
+    KIND = "rawstor"
+
+    # Backing store this cluster's rawstor-ost serves, e.g.
+    # file:///var/lib/rawstor. Informational only - it's configured on
+    # the storage node itself (see `exordos storages init --location`),
+    # never resent to a driver.
+    location = properties.property(types.String(max_length=2048), required=True)
+    # Network address (ost://host:port) other hosts use to reach this
+    # cluster - what the scheduler pushes into a remote-scheduled
+    # volume's `storage_location` (see gcl_sdk.agents.universal.drivers.
+    # exordos_hyper.ExordosLocalHyperDriver._rawstor_address).
+    endpoint = properties.property(types.String(max_length=2048), required=True)
+    speed = properties.property(
+        types.Enum([s.value for s in ic.DiskSpeed]),
+        default=ic.DiskSpeed.HOT.value,
+    )
+    ephemeral = properties.property(types.Boolean(), default=False)
 
 
 class MachinePool(
@@ -942,6 +1007,16 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
     storage_pool = properties.property(
         types.AllowNone(types.String(max_length=255)), default=None
     )
+    # Network address of the StorageCluster this volume was scheduled
+    # onto by the control plane's scheduler; unset for a local pool. Not
+    # discoverable from the data plane the way storage_pool sometimes is
+    # (probing an actual pool for the object), so unlike storage_pool it's
+    # never backfilled from dp_volume - self is always authoritative and
+    # dp_volume must be overlaid with it before any driver call, see
+    # get_meta_model_fields/dump_to_dp/update_on_dp/delete_from_dp.
+    storage_location = properties.property(
+        types.AllowNone(types.String(max_length=2048)), default=None
+    )
     index = properties.property(
         types.Integer(min_value=0, max_value=4096),
         default=4096,
@@ -996,7 +1071,18 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
         driver: AbstractPoolDriver,
         dp_volume: MachineVolume,
     ) -> None:
-        dp_volume = driver.create_volume(dp_volume)
+        try:
+            dp_volume = driver.create_volume(dp_volume)
+        except VolumeAlreadyExistsError:
+            # Self-healing, like _attach_volume/_detach_volume below: an
+            # earlier iteration may have created the real object but not
+            # recorded it here (e.g. a sibling resource failed right
+            # after) - pick up its actual state instead of erroring.
+            LOG.warning(
+                "The volume %s already exists, using its current state",
+                self.uuid,
+            )
+            dp_volume = driver.get_volume(dp_volume.uuid)
         self.status = dp_volume.status
         LOG.info("The volume %s created", self.uuid)
 
@@ -1071,6 +1157,7 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
             speed=self.speed,
             ephemeral=self.ephemeral,
             storage_pool=self.storage_pool,
+            storage_location=self.storage_location,
             index=self.index,
             machine=self.machine,
             project_id=self.project_id,
@@ -1123,6 +1210,7 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
             "speed",
             "ephemeral",
             "storage_pool",
+            "storage_location",
             "project_id",
         }
 
@@ -1134,6 +1222,10 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
             # The volume already exists in the data plane
             # Reuse it
             dp_volume = pool.dp_volume_map[self.uuid]
+            # storage_location isn't discoverable by the driver (unlike
+            # storage_pool, it has no physical signature to probe) - self
+            # is always the authority, overlay it before any driver call.
+            dp_volume.storage_location = self.storage_location
         else:
             # Find a storage pool matching this volume's speed/ephemeral
             # request with enough room for it.
@@ -1153,6 +1245,7 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
                 speed=self.speed,
                 ephemeral=self.ephemeral,
                 storage_pool=storage_pool.name,
+                storage_location=self.storage_location,
                 index=self.index,
                 # TODO(akremenetsky): Detect machine without volume name
                 machine=self.machine,
@@ -1203,6 +1296,7 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
 
         driver: AbstractPoolDriver = pool.load_driver()
         dp_volume = pool.dp_volume_map[self.uuid]
+        dp_volume.storage_location = self.storage_location
         self._detach_volume(pool, driver, dp_volume)
         self._delete_volume(pool, driver, dp_volume)
 
@@ -1213,6 +1307,7 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
 
         driver: AbstractPoolDriver = pool.load_driver()
         dp_volume: MachineVolume = pool.dp_volume_map[self.uuid]
+        dp_volume.storage_location = self.storage_location
         machine = dp_volume.machine
         unknown_action = True
 
@@ -1228,8 +1323,7 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
             and self.storage_pool != dp_volume.storage_pool
         ):
             LOG.warning(
-                "Ignoring an unsupported storage pool change for volume "
-                "%s (%s -> %s)",
+                "Ignoring an unsupported storage pool change for volume %s (%s -> %s)",
                 self.uuid,
                 dp_volume.storage_pool,
                 self.storage_pool,
