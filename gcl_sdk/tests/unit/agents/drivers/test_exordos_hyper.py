@@ -15,7 +15,6 @@
 #    under the License.
 
 import subprocess
-import types
 import uuid as sys_uuid
 from xml.etree import ElementTree as ET
 
@@ -36,18 +35,38 @@ def _driver(
     tmp_path, node=None, storage_pool=None
 ) -> exordos_hyper.ExordosLocalHyperDriver:
     # libvirt's built-in "test" driver simulates a hypervisor in-memory -
-    # no real virtualization or daemon needed. rawstor's "file://" location
-    # is a real, local, daemon-less backend (see pyrawstor/tests).
+    # no real virtualization or daemon needed. This hypervisor has no
+    # rawstor backing store of its own - a rawstor-backed volume is only
+    # ever one scheduled onto a remote StorageCluster, addressed via
+    # `volume.storage_location` (see _rawstor_location below).
     spec = pool_base.ExordosLocalHyperDriverSpec(
         connection_uri="test:///default",
         node=node or sys_uuid.uuid4(),
-        rawstor_pools=[{"name": "rawstor", "location": f"file://{tmp_path}"}],
         storage_pool=storage_pool,
     )
     pool = pool_base.MachinePool(
         uuid=sys_uuid.uuid4(), name="rawstor-pool", driver_spec=spec
     )
     return exordos_hyper.ExordosLocalHyperDriver(pool)
+
+
+def _rawstor_location(tmp_path) -> str:
+    # A real, local, daemon-less rawstor backend (see pyrawstor/tests) -
+    # stands in for the address a remote StorageCluster would carry.
+    return f"file://{tmp_path}"
+
+
+def _redirect_vhost_drop_in(monkeypatch, driver, tmp_path):
+    """Keep the vhost drop-in file under tmp_path, not /etc/systemd/system."""
+    drop_in_root = tmp_path / "drop-ins"
+    monkeypatch.setattr(
+        driver,
+        "_vhost_drop_in_dir",
+        lambda volume_uuid: str(
+            drop_in_root
+            / f"{exordos_hyper.VHOST_UNIT_TEMPLATE.format(volume_uuid)}.service.d"
+        ),
+    )
 
 
 def _no_op_systemctl(monkeypatch):
@@ -66,10 +85,8 @@ class TestVolumeUuidFromSocketPath:
     def test_target_uri(self, tmp_path):
         driver = _driver(tmp_path)
         volume_uuid = sys_uuid.uuid4()
-        location_uri = driver._location_for("rawstor").uri
-        assert driver._uuid_from_socket_path(f"{location_uri}/{volume_uuid}") == (
-            volume_uuid
-        )
+        target_uri = driver._target_uri(volume_uuid, _rawstor_location(tmp_path))
+        assert driver._uuid_from_socket_path(target_uri) == volume_uuid
 
     def test_socket_path(self, tmp_path):
         driver = _driver(tmp_path)
@@ -117,59 +134,17 @@ class TestRawstorAttachments:
         assert attachments[volume_uuid] == ("fake-domain", 1)
 
 
-def _fake_location_info(monkeypatch, driver, *, used_gb, total_gb, pool_name="rawstor"):
-    monkeypatch.setattr(
-        driver._location_for(pool_name),
-        "info",
-        lambda: types.SimpleNamespace(used=used_gb << 30, total=total_gb << 30),
-    )
-
-
-class TestBuildStoragePool:
-    def test_capacity_comes_from_location_info(self, tmp_path, monkeypatch):
-        # rawstor 0.2.4 added Location.info() (used/total bytes for the
-        # backend) - the pool's usable capacity reflects that instead of a
-        # hardcoded placeholder.
-        driver = _driver(tmp_path)
-        _fake_location_info(monkeypatch, driver, used_gb=20, total_gb=100)
-
-        storage_pool = driver._build_storage_pool("rawstor", [])
-
-        assert storage_pool.capacity_usable == 100
-        assert storage_pool.pool_type == "rawstor"
-        assert storage_pool.available == 100
-        assert storage_pool.available_actual == 80
-
-    def test_existing_volumes_reduce_available_capacity(self, tmp_path, monkeypatch):
-        driver = _driver(tmp_path)
-        _fake_location_info(monkeypatch, driver, used_gb=0, total_gb=100)
-        volumes = [
-            pool_base.MachineVolume(
-                uuid=sys_uuid.uuid4(),
-                project_id=sys_uuid.uuid4(),
-                size=10,
-            ),
-            pool_base.MachineVolume(
-                uuid=sys_uuid.uuid4(),
-                project_id=sys_uuid.uuid4(),
-                size=15,
-            ),
-        ]
-
-        storage_pool = driver._build_storage_pool("rawstor", volumes)
-
-        assert storage_pool.available == 100 - 10 - 15
-
-
 class TestVolumeLifecycle:
     def test_create_get_list_delete(self, tmp_path, monkeypatch):
         _no_op_systemctl(monkeypatch)
         driver = _driver(tmp_path)
+        _redirect_vhost_drop_in(monkeypatch, driver, tmp_path)
 
         volume = pool_base.MachineVolume(
             uuid=sys_uuid.uuid4(),
             project_id=sys_uuid.uuid4(),
             size=1,
+            storage_location=_rawstor_location(tmp_path),
         )
 
         created = driver.create_volume(volume)
@@ -180,8 +155,11 @@ class TestVolumeLifecycle:
         assert fetched.size == 1
         assert fetched.machine is None
 
-        listed = driver.list_volumes()
-        assert [v.uuid for v in listed] == [volume.uuid]
+        # list_volumes() only enumerates rawstor volumes attached to a
+        # domain on this hypervisor (it has no way to enumerate a remote
+        # StorageCluster's own inventory) - a created-but-unattached
+        # volume is invisible to it, unlike get_volume() by uuid above.
+        assert driver.list_volumes() == []
 
         driver.delete_volume(created)
 
@@ -191,9 +169,13 @@ class TestVolumeLifecycle:
     def test_create_twice_raises_already_exists(self, tmp_path, monkeypatch):
         _no_op_systemctl(monkeypatch)
         driver = _driver(tmp_path)
+        _redirect_vhost_drop_in(monkeypatch, driver, tmp_path)
 
         volume = pool_base.MachineVolume(
-            uuid=sys_uuid.uuid4(), project_id=sys_uuid.uuid4(), size=1
+            uuid=sys_uuid.uuid4(),
+            project_id=sys_uuid.uuid4(),
+            size=1,
+            storage_location=_rawstor_location(tmp_path),
         )
         driver.create_volume(volume)
 
@@ -209,9 +191,13 @@ class TestVolumeLifecycle:
     def test_delete_missing_volume_is_idempotent(self, tmp_path, monkeypatch):
         _no_op_systemctl(monkeypatch)
         driver = _driver(tmp_path)
+        _redirect_vhost_drop_in(monkeypatch, driver, tmp_path)
 
         volume = pool_base.MachineVolume(
-            uuid=sys_uuid.uuid4(), project_id=sys_uuid.uuid4(), size=1
+            uuid=sys_uuid.uuid4(),
+            project_id=sys_uuid.uuid4(),
+            size=1,
+            storage_location=_rawstor_location(tmp_path),
         )
 
         # Must not raise, even though it was never created.
@@ -223,17 +209,24 @@ class TestVolumeLifecycle:
         # backend process.
         calls = _no_op_systemctl(monkeypatch)
         driver = _driver(tmp_path)
+        _redirect_vhost_drop_in(monkeypatch, driver, tmp_path)
 
         volume = pool_base.MachineVolume(
-            uuid=sys_uuid.uuid4(), project_id=sys_uuid.uuid4(), size=1
+            uuid=sys_uuid.uuid4(),
+            project_id=sys_uuid.uuid4(),
+            size=1,
+            storage_location=_rawstor_location(tmp_path),
         )
         driver.create_volume(volume)
         calls.clear()
 
         driver.delete_volume(volume)
 
+        # create_volume already recorded a drop-in for this volume, so
+        # its removal also triggers a daemon-reload.
         assert calls == [
-            ["systemctl", "disable", "--now", f"rawstor-vhost@{volume.uuid}"]
+            ["systemctl", "disable", "--now", f"rawstor-vhost@{volume.uuid}"],
+            ["systemctl", "daemon-reload"],
         ]
 
     def test_delete_aborts_if_the_vhost_unit_fails_to_stop(self, tmp_path, monkeypatch):
@@ -242,8 +235,12 @@ class TestVolumeLifecycle:
         # it - a real failure to stop must abort the delete instead.
         _no_op_systemctl(monkeypatch)
         driver = _driver(tmp_path)
+        _redirect_vhost_drop_in(monkeypatch, driver, tmp_path)
         volume = pool_base.MachineVolume(
-            uuid=sys_uuid.uuid4(), project_id=sys_uuid.uuid4(), size=1
+            uuid=sys_uuid.uuid4(),
+            project_id=sys_uuid.uuid4(),
+            size=1,
+            storage_location=_rawstor_location(tmp_path),
         )
         driver.create_volume(volume)
 
@@ -383,6 +380,7 @@ class TestCreateMachine:
         # (all of them vhost-user-backed) must get it at create time.
         _no_op_systemctl(monkeypatch)
         driver = _driver(tmp_path)
+        _redirect_vhost_drop_in(monkeypatch, driver, tmp_path)
         monkeypatch.setattr(driver, "_wait_for_socket", lambda socket_path: None)
 
         machine = pool_base.Machine(
@@ -398,6 +396,7 @@ class TestCreateMachine:
             size=1,
             index=0,
             machine=machine.uuid,
+            storage_location=_rawstor_location(tmp_path),
         )
         driver.create_volume(root_vol)
 
@@ -420,6 +419,7 @@ class TestDeleteMachine:
         # orphaned.
         calls = _no_op_systemctl(monkeypatch)
         driver = _driver(tmp_path)
+        _redirect_vhost_drop_in(monkeypatch, driver, tmp_path)
         monkeypatch.setattr(driver, "_wait_for_socket", lambda socket_path: None)
 
         machine = pool_base.Machine(
@@ -435,6 +435,7 @@ class TestDeleteMachine:
             size=1,
             index=0,
             machine=machine.uuid,
+            storage_location=_rawstor_location(tmp_path),
         )
         data_vol = pool_base.MachineVolume(
             uuid=sys_uuid.uuid4(),
@@ -442,6 +443,7 @@ class TestDeleteMachine:
             size=2,
             index=1,
             machine=machine.uuid,
+            storage_location=_rawstor_location(tmp_path),
         )
         for v in (root_vol, data_vol):
             driver.create_volume(v)
@@ -472,7 +474,10 @@ class TestResizeVolume:
     def test_raises_not_supported(self, tmp_path):
         driver = _driver(tmp_path)
         volume = pool_base.MachineVolume(
-            uuid=sys_uuid.uuid4(), project_id=sys_uuid.uuid4(), size=1
+            uuid=sys_uuid.uuid4(),
+            project_id=sys_uuid.uuid4(),
+            size=1,
+            storage_location=_rawstor_location(tmp_path),
         )
 
         with pytest.raises(pool_base.VolumeResizeNotSupportedError):
