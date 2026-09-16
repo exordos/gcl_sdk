@@ -14,7 +14,6 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import functools
 import logging
 import operator
 import os
@@ -31,7 +30,6 @@ import rawstor
 
 from gcl_sdk.agents.universal.drivers import libvirt as libvirt_driver
 from gcl_sdk.agents.universal.drivers import pool as pool_base
-from gcl_sdk.infra import constants as ic
 
 LOG = logging.getLogger(__name__)
 
@@ -45,13 +43,16 @@ SOCKET_WAIT_INTERVAL = 0.1
 
 
 class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
-    """Pool driver for a local hypervisor backed by rawstor volumes.
+    """A hypervisor that can also attach rawstor-backed volumes.
 
-    Machine lifecycle (domains, ports) is unchanged from `LibvirtPoolDriver`.
-    Only volumes differ: instead of qcow2/zvol files in a libvirt storage
-    pool, each volume is a rawstor object exposed to the domain over a
+    Everything else (machine lifecycle, qcow2 volumes, local storage
+    pools) is unchanged from `LibvirtPoolDriver` - the only difference is
+    a volume scheduled onto a remote StorageCluster (`volume.
+    storage_location` set): instead of a qcow2 file in a libvirt storage
+    pool, it's a rawstor object exposed to the domain over a
     vhost-user-blk unix socket served by a per-volume `rawstor-vhost@<uuid>`
-    systemd instance.
+    systemd instance. This hypervisor never runs a rawstor backing store
+    of its own.
     """
 
     def __init__(self, pool: pool_base.MachinePool, dry_run: bool = False):
@@ -59,99 +60,15 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
         if not isinstance(self._spec, pool_base.ExordosLocalHyperDriverSpec):
             raise ValueError(f"Unsupported driver spec kind: {self._spec.KIND!r}")
 
-    @functools.cached_property
-    def _locations(self) -> tp.Dict[str, rawstor.Location]:
-        return {}
-
-    def _rawstor_pool_names(self) -> tp.List[str]:
-        return [entry["name"] for entry in self._spec.rawstor_pools]
-
-    def _rawstor_pool_entry(self, name: str) -> dict:
-        for entry in self._spec.rawstor_pools:
-            if entry["name"] == name:
-                return entry
-        raise ValueError(f"Unknown rawstor pool {name!r}")
-
-    def _location_for(self, name: str) -> rawstor.Location:
-        if name not in self._locations:
-            self._locations[name] = rawstor.Location(
-                self._rawstor_pool_entry(name)["location"]
-            )
-        return self._locations[name]
-
-    def _resolve_rawstor_pool(
-        self, volume: pool_base.MachineVolume, probe: bool = False
-    ) -> tp.Optional[str]:
-        """Name of the rawstor pool `volume` is (or will be) on, or None
-        if it belongs to a qcow2 pool instead.
-
-        Backend choice is derived purely from which named pool a disk was
-        scheduled onto - see ExordosLocalHyperDriverSpec.rawstor_pools -
-        not from an explicit per-disk field.
-
-        If `volume.storage_pool` isn't set (e.g. a pre-existing foreign
-        disk, or a volume built outside the scheduler) and `probe` is
-        set, check whether a rawstor object for it actually exists in any
-        configured rawstor pool instead of guessing - used by operations
-        on a volume that's expected to already exist (attach/detach/
-        delete/resize), as opposed to create_volume, where it can't be.
-        """
-        if volume.storage_pool is not None:
-            if volume.storage_pool in self._rawstor_pool_names():
-                return volume.storage_pool
-            return None
-
-        if probe:
-            rawstor_names = self._rawstor_pool_names()
-            for name in rawstor_names:
-                address = self._rawstor_pool_entry(name)["location"]
-                try:
-                    rawstor.Target(self._target_uri(volume.uuid, address)).spec()
-                except FileNotFoundError:
-                    continue
-                return name
-
-            # Not found as a rawstor object anywhere. If rawstor is the
-            # only backend configured at all, it must belong here anyway
-            # (not created yet, or already deleted/detached) - let the
-            # rawstor-specific logic below handle "doesn't exist" itself,
-            # idempotently, rather than guessing it might be qcow2.
-            if not self._storage_pool_names() and len(rawstor_names) == 1:
-                return rawstor_names[0]
-
-            return None
-
-        # The object doesn't exist yet (create_volume) - only unambiguous
-        # if exactly one pool of either kind is configured, same as
-        # LibvirtPoolDriver's own single-pool fallback.
-        rawstor_names = self._rawstor_pool_names()
-        qcow2_names = self._storage_pool_names()
-        if len(rawstor_names) + len(qcow2_names) == 1:
-            return rawstor_names[0] if rawstor_names else None
-
-        raise ValueError(
-            f"Volume {volume.uuid} has no storage pool assigned and "
-            f"{len(rawstor_names) + len(qcow2_names)} storage pools "
-            f"are configured"
-        )
-
-    def _rawstor_address(
-        self, volume: pool_base.MachineVolume, probe: bool = False
-    ) -> tp.Optional[str]:
+    def _rawstor_address(self, volume: pool_base.MachineVolume) -> tp.Optional[str]:
         """The rawstor Location `volume` lives at, or None if it's qcow2.
 
-        A volume scheduled onto a remote StorageCluster carries its
-        address explicitly on `volume.storage_location` - trust it
-        directly and skip local pool resolution entirely, since the
-        object isn't on any of this driver's own `rawstor_pools`. A
-        local volume is resolved the same way as before, by the name of
-        the matching entry in `self._spec.rawstor_pools`.
+        This hypervisor has no rawstor backing store of its own - a
+        volume is rawstor-backed only when scheduled onto a remote
+        StorageCluster, which carries its address explicitly on
+        `volume.storage_location`.
         """
-        if volume.storage_location:
-            return volume.storage_location
-
-        name = self._resolve_rawstor_pool(volume, probe=probe)
-        return self._rawstor_pool_entry(name)["location"] if name is not None else None
+        return volume.storage_location or None
 
     def _target_uri(self, volume_uuid: sys_uuid.UUID, address: str) -> str:
         return f"{address}/{volume_uuid}"
@@ -186,8 +103,7 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
         (`ost://127.0.0.1:7777`); a volume scheduled onto a remote
         cluster needs it overridden per-instance. The drop-in is also the
         only durable local record of the address - list_pool_resources/
-        get_volume read it back to rediscover such a volume, since it
-        can't be found among this driver's own `rawstor_pools`.
+        get_volume read it back to rediscover such a volume.
         """
         drop_in_dir = self._vhost_drop_in_dir(volume_uuid)
         os.makedirs(drop_in_dir, exist_ok=True)
@@ -317,54 +233,21 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
 
         return result
 
-    def _target_to_volume(
+    def _list_rawstor_volumes(
         self,
-        target: "rawstor.Target",
-        attachments: tp.Dict[sys_uuid.UUID, tp.Tuple[libvirt.virDomain, int]],
-        storage_pool: str,
-    ) -> tp.Optional[pool_base.MachineVolume]:
-        volume_uuid = self._uuid_from_socket_path(target.uri)
-        if volume_uuid is None:
-            LOG.warning("Unable to detect volume uuid for rawstor target %s", target)
-            return None
-
-        try:
-            spec = target.spec()
-        except FileNotFoundError:
-            return None
-
-        domain, idx = attachments.get(volume_uuid, (None, None))
-        machine_uuid = None if domain is None else sys_uuid.UUID(domain.UUIDString())
-
-        return pool_base.MachineVolume(
-            uuid=volume_uuid,
-            machine=machine_uuid,
-            name=str(volume_uuid),
-            project_id=pool_base.SYSTEM_PROJECT_ID,
-            size=spec.size >> 30,  # in GB
-            index=idx if idx is not None else libvirt_driver.MAX_VOLUME_INDEX,
-            status=pool_base.VolumeStatus.ACTIVE.value,
-            storage_pool=storage_pool,
-        )
-
-    def _list_remote_rawstor_volumes(
-        self,
-        attachments: tp.Dict[sys_uuid.UUID, tp.Tuple[libvirt.virDomain, int]],
-        known_uuids: tp.Collection[sys_uuid.UUID],
+        domains: tp.Collection[tp.Tuple[libvirt.virDomain, ET.Element]],
     ) -> tp.List[pool_base.MachineVolume]:
-        """Volumes attached locally but scheduled onto a remote StorageCluster.
+        """Rawstor-backed volumes attached to a domain on this hypervisor.
 
-        Such a volume isn't found by iterating `self._spec.rawstor_pools`
-        (its object lives on another host entirely) - its vhost-user
-        attachment is local (a domain disk, discovered via `attachments`
-        like any other rawstor volume), but its address is only recorded
-        in the per-instance vhost drop-in `_start_vhost` wrote for it.
+        This hypervisor has no rawstor backing store of its own, so every
+        one of these lives on a remote StorageCluster - its vhost-user
+        attachment is local (a domain disk, discovered via `attachments`),
+        but its address is only recorded in the per-instance vhost drop-in
+        `_start_vhost` wrote for it.
         """
+        attachments = self._rawstor_attachments(domains)
         volumes = []
         for volume_uuid, (domain, idx) in attachments.items():
-            if volume_uuid in known_uuids:
-                continue
-
             address = self._read_remote_location(volume_uuid)
             if address is None:
                 continue
@@ -392,45 +275,6 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
 
         return volumes
 
-    def _list_rawstor_volumes(
-        self,
-        domains: tp.Collection[tp.Tuple[libvirt.virDomain, ET.Element]],
-    ) -> tp.List[pool_base.MachineVolume]:
-        attachments = self._rawstor_attachments(domains)
-        volumes = []
-
-        for name in self._rawstor_pool_names():
-            for target in self._location_for(name):
-                volume = self._target_to_volume(target, attachments, storage_pool=name)
-                if volume is not None:
-                    volumes.append(volume)
-
-        known_uuids = {v.uuid for v in volumes}
-        volumes.extend(self._list_remote_rawstor_volumes(attachments, known_uuids))
-
-        return volumes
-
-    def _build_storage_pool(
-        self, name: str, volumes: tp.Collection[pool_base.MachineVolume]
-    ) -> pool_base.ThinStoragePool:
-        entry = self._rawstor_pool_entry(name)
-        info = self._location_for(name).info()
-        storage_pool = pool_base.ThinStoragePool(
-            uuid=sys_uuid.uuid5(self._pool.uuid, name),
-            name=name,
-            capacity_usable=info.total >> 30,  # GB
-            available_actual=(info.total - info.used) >> 30,  # GB
-            pool_type="rawstor",
-            oversubscription_ratio=1.0,
-            speed=entry.get("speed", ic.DiskSpeed.WARM.value),
-            ephemeral=entry.get("ephemeral", False),
-        )
-
-        for volume in volumes:
-            storage_pool.allocate_capacity(volume.size)
-
-        return storage_pool
-
     def _add_volumes_to_domain(
         self,
         domain: "libvirt_driver.XMLLibvirtInstance",
@@ -439,9 +283,7 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
         legacy_machine: bool = False,
     ) -> None:
         volumes = tuple(volumes)
-        rawstor_addresses = {
-            v.uuid: self._rawstor_address(v, probe=True) for v in volumes
-        }
+        rawstor_addresses = {v.uuid: self._rawstor_address(v) for v in volumes}
 
         if any(rawstor_addresses.values()):
             # A rawstor volume is a vhost-user disk (attached now or later
@@ -503,16 +345,8 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
         domains = self._domains_with_xml()
         machines = self._list_machines(domains)
 
-        rawstor_volumes = self._list_rawstor_volumes(domains)
-        volumes_by_pool: tp.Dict[str, tp.List[pool_base.MachineVolume]] = {}
-        for v in rawstor_volumes:
-            volumes_by_pool.setdefault(v.storage_pool, []).append(v)
-
-        storage_pools = [
-            self._build_storage_pool(name, volumes_by_pool.get(name, []))
-            for name in self._rawstor_pool_names()
-        ]
-        volumes = list(rawstor_volumes)
+        volumes = list(self._list_rawstor_volumes(domains))
+        storage_pools = []
 
         if self._storage_pool_names():
             # Some volumes of this pool are qcow2-backed (including any
@@ -547,32 +381,9 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
         domains = self._domains_with_xml()
         attachments = self._rawstor_attachments(domains)
 
-        for name in self._rawstor_pool_names():
-            address = self._rawstor_pool_entry(name)["location"]
-            target = rawstor.Target(self._target_uri(volume, address))
-            try:
-                spec = target.spec()
-            except FileNotFoundError:
-                continue
-
-            domain, idx = attachments.get(volume, (None, None))
-            machine_uuid = (
-                None if domain is None else sys_uuid.UUID(domain.UUIDString())
-            )
-
-            return pool_base.MachineVolume(
-                uuid=volume,
-                machine=machine_uuid,
-                name=str(volume),
-                project_id=pool_base.SYSTEM_PROJECT_ID,
-                size=spec.size >> 30,  # in GB
-                index=idx if idx is not None else libvirt_driver.MAX_VOLUME_INDEX,
-                status=pool_base.VolumeStatus.ACTIVE.value,
-                storage_pool=name,
-            )
-
-        # Not on any local pool - maybe scheduled onto a remote
-        # StorageCluster (see _list_remote_rawstor_volumes).
+        # Rawstor-backed only ever means scheduled onto a remote
+        # StorageCluster (see _list_rawstor_volumes) - this hypervisor has
+        # no rawstor backing store of its own.
         remote_address = self._read_remote_location(volume)
         if remote_address is not None:
             target = rawstor.Target(self._target_uri(volume, remote_address))
@@ -619,13 +430,20 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
         except FileExistsError:
             raise pool_base.VolumeAlreadyExistsError(volume=volume.uuid)
 
+        # Record the address now, not only when the volume gets attached
+        # (_start_vhost): this drop-in is the only durable local record
+        # of it (this hypervisor has no local rawstor store to probe by
+        # uuid), so a volume created but not yet attached to a machine
+        # must still be discoverable by get_volume/list_pool_resources.
+        self._write_remote_location_drop_in(volume.uuid, address)
+
         volume.status = pool_base.VolumeStatus.ACTIVE.value
         LOG.debug("The rawstor volume %s has been created", volume.uuid)
         return volume
 
     @libvirt_driver.dry_run_decorator()
     def delete_volume(self, volume: pool_base.MachineVolume) -> None:
-        address = self._rawstor_address(volume, probe=True)
+        address = self._rawstor_address(volume)
         if address is None:
             return super().delete_volume(volume)
 
@@ -652,7 +470,7 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
         if volume.machine is None:
             raise ValueError("Cannot attach volume without machine")
 
-        if self._rawstor_address(volume, probe=True) is None:
+        if self._rawstor_address(volume) is None:
             return super().attach_volume(volume)
 
         try:
@@ -692,7 +510,7 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
         if volume.machine is None:
             raise ValueError("Cannot detach volume without machine")
 
-        if self._rawstor_address(volume, probe=True) is None:
+        if self._rawstor_address(volume) is None:
             return super().detach_volume(volume)
 
         try:
@@ -724,21 +542,8 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
     @libvirt_driver.dry_run_decorator()
     def resize_volume(self, volume: pool_base.MachineVolume) -> None:
         """Resize the volume."""
-        if self._rawstor_address(volume, probe=True) is None:
+        if self._rawstor_address(volume) is None:
             return super().resize_volume(volume)
 
         # rawstor has no resize API.
         raise pool_base.VolumeResizeNotSupportedError(volume=volume.uuid)
-
-    def list_storage_pools(self) -> tp.List[pool_base.ThinStoragePool]:
-        """List storage pools."""
-        domains = self._domains_with_xml()
-        rawstor_volumes = self._list_rawstor_volumes(domains)
-        volumes_by_pool: tp.Dict[str, tp.List[pool_base.MachineVolume]] = {}
-        for v in rawstor_volumes:
-            volumes_by_pool.setdefault(v.storage_pool, []).append(v)
-
-        return [
-            self._build_storage_pool(name, volumes_by_pool.get(name, []))
-            for name in self._rawstor_pool_names()
-        ]

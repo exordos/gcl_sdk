@@ -265,8 +265,7 @@ class MachineVolume(
     )
     # Network address (ost://host:port) of the StorageCluster this volume
     # was scheduled onto, set by the control plane's scheduler. Unset for
-    # a volume on a local pool - the driver then resolves the address from
-    # its own driver_spec.rawstor_pools by `storage_pool` name instead.
+    # a volume on the hypervisor's own local (qcow2) pool.
     storage_location = properties.property(
         types.AllowNone(types.String(max_length=2048)), default=None
     )
@@ -481,16 +480,6 @@ class StoragePoolEntry(common_types.SchematicType):
         return super().from_simple_type(value)
 
 
-class RawstorPoolEntry(common_types.SchematicType):
-    __scheme__ = {
-        "name": types.String(max_length=255),
-        "location": types.String(max_length=2048),
-        "speed": types.Enum([s.value for s in ic.DiskSpeed]),
-        "ephemeral": types.Boolean(),
-    }
-    __mandatory__ = {"name", "location"}
-
-
 class ExordosLocalHyperDriverSpec(LibvirtPoolDriverSpec):
     KIND = "exordos_local_hyper"
 
@@ -501,18 +490,6 @@ class ExordosLocalHyperDriverSpec(LibvirtPoolDriverSpec):
     # tier/ephemeral so the scheduler can place a disk on the right one.
     storage_pool = properties.property(
         types.TypedList(StoragePoolEntry()),
-        default=list,
-    )
-
-    # Named rawstor-backed pools, tagged with speed/ephemeral the same
-    # way as the qcow2 pools above. select_storage_pool (see gcl_sdk's
-    # `select_storage_pool`) sees both kinds side by side and picks
-    # purely by tier/capacity - ExordosLocalHyperDriver then decides
-    # which backend (qcow2 vs rawstor) to use for a given disk by
-    # checking which of these two lists the assigned pool name is in,
-    # not from an explicit per-disk field.
-    rawstor_pools = properties.property(
-        types.TypedList(RawstorPoolEntry()),
         default=list,
     )
 
