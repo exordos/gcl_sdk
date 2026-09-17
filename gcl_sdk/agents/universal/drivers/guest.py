@@ -20,6 +20,7 @@ import logging
 import os
 import pathlib
 import subprocess
+import typing as tp
 
 from restalchemy.dm import properties
 from restalchemy.dm import types
@@ -36,6 +37,7 @@ GUEST_MACHINE_KIND = "guest_machine"
 EXORDOS_DATA_DIR = pathlib.Path("/persist")
 NETPLAN_DIR = EXORDOS_DATA_DIR / "netplan"
 UPDATE_JSON_PATH = EXORDOS_DATA_DIR / "update.json"
+UPDATE_PRIVATE_KEY_PATH = EXORDOS_DATA_DIR / "private_key"
 SYSTEM_NETPLAN_DIR = pathlib.Path("/etc/netplan")
 GRUB_DEFAULT_PATH = pathlib.Path("/etc/default/grub.d/50-cloudimg-settings.cfg")
 IMAGE_PATH = pathlib.Path(c.WORK_DIR) / "image"
@@ -44,6 +46,7 @@ IMAGE_PATH = pathlib.Path(c.WORK_DIR) / "image"
 class GuestMachineMetaModel(meta.MetaDataPlaneModel):
     """Guest machine meta model."""
 
+    AGENT_PRIVATE_KEY_PATH = pathlib.Path(c.PRIVATE_KEY_PATH)
     GRUB_AUTONOMOUS_ENTRY = "Autonomous update mode"
     GRUB_DEFAULT_TIMEOUT = 5
 
@@ -164,6 +167,32 @@ class GuestMachineMetaModel(meta.MetaDataPlaneModel):
         UPDATE_JSON_PATH.write_text(json.dumps(update_data, indent=2), encoding="utf-8")
         LOG.info("Update info saved to %s", UPDATE_JSON_PATH)
 
+    def _save_private_key(self) -> None:
+        """Persist the node key for the autonomous image updater."""
+        if not self.AGENT_PRIVATE_KEY_PATH.exists():
+            UPDATE_PRIVATE_KEY_PATH.unlink(missing_ok=True)
+            LOG.warning(
+                "Universal agent private key not found at %s; skipping persistence",
+                self.AGENT_PRIVATE_KEY_PATH,
+            )
+            return
+
+        EXORDOS_DATA_DIR.mkdir(parents=True, exist_ok=True)
+        tmp_path = UPDATE_PRIVATE_KEY_PATH.with_suffix(".tmp")
+        with (
+            open(self.AGENT_PRIVATE_KEY_PATH, encoding="utf-8") as source,
+            open(
+                tmp_path,
+                "w",
+                encoding="utf-8",
+                opener=common_utils.rw_owner_opener,
+            ) as target,
+        ):
+            target.write(source.read())
+            os.fchmod(target.fileno(), 0o600)
+        os.replace(tmp_path, UPDATE_PRIVATE_KEY_PATH)
+        LOG.info("Universal agent private key saved for autonomous update")
+
     def _update_grub_default(self) -> None:
         """Update the grub default boot item to 'Autonomous update mode'.
 
@@ -239,6 +268,8 @@ class GuestMachineMetaModel(meta.MetaDataPlaneModel):
             LOG.info("Image change detected: '%s' -> '%s'", orig_image, self.image)
             # - save and convert network settings
             self._save_network_settings()
+            # - preserve the node identity for the freshly flashed root image
+            self._save_private_key()
             # - save the target image
             self._save_target_image()
             # - update the grub default item
@@ -253,8 +284,26 @@ class GuestMachineMetaModel(meta.MetaDataPlaneModel):
 
 class GuestMachineCapabilityDriver(meta.MetaFileStorageAgentDriver):
     GUEST_META_PATH = os.path.join(c.WORK_DIR, "guest_meta.json")
+    universal_agent_config_options = ("private_key_path",)
 
     __model_map__ = {GUEST_MACHINE_KIND: GuestMachineMetaModel}
 
-    def __init__(self, *args, **kwargs) -> None:
+    def __init__(
+        self,
+        *args,
+        private_key_path: str = c.PRIVATE_KEY_PATH,
+        **kwargs,
+    ) -> None:
+        configured_model = tp.cast(
+            type[GuestMachineMetaModel],
+            type(
+                "ConfiguredGuestMachineMetaModel",
+                (GuestMachineMetaModel,),
+                {
+                    "__module__": __name__,
+                    "AGENT_PRIVATE_KEY_PATH": pathlib.Path(private_key_path),
+                },
+            ),
+        )
+        self.__model_map__ = {GUEST_MACHINE_KIND: configured_model}
         super().__init__(*args, meta_file=self.GUEST_META_PATH, **kwargs)

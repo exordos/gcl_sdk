@@ -100,17 +100,18 @@ def load_driver(
     class_: type[driver_base.AbstractCapabilityDriver | driver_base.AbstractFactDriver],
 ) -> driver_base.AbstractCapabilityDriver | driver_base.AbstractFactDriver:
     parser = configparser.ConfigParser()
-    parser.read(cfg.CONF.config_file)
+    parser.read(CONF.config_file)
 
-    if not parser.has_section(class_.__name__):
-        return class_()
+    params = {
+        option: getattr(CONF[DOMAIN], option)
+        for option in class_.universal_agent_config_options
+    }
+    if parser.has_section(class_.__name__):
+        for option in parser.options(class_.__name__):
+            if option in parser.defaults():
+                continue
 
-    params = {}
-    for option in parser.options(class_.__name__):
-        if option in parser.defaults():
-            continue
-
-        params[option] = parser.get(class_.__name__, option)
+            params[option] = parser.get(class_.__name__, option)
 
     return class_(**params)
 
