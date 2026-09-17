@@ -497,6 +497,31 @@ class MetaCoordinatorAgentDriver(MetaFileStorageAgentDriver):
 
         return dependencies
 
+    @staticmethod
+    def _is_moved(
+        kind: str,
+        requirements: dict[str, tp.Any] | None,
+        actual: MetaDataPlaneModel,
+        target: MetaDataPlaneModel,
+    ) -> bool:
+        """Whether the target points to another owner than the actual object.
+
+        Only the relations of the object itself (`kind:attr`, like
+        `pool_machine:pool`) define where the object lives.
+        """
+        for spec in (requirements or {}).values():
+            relation = spec.get("relation")
+            if not relation:
+                continue
+
+            relation_kind, relation_attr = relation.split(":")
+            if relation_kind == kind and getattr(actual, relation_attr) != getattr(
+                target, relation_attr
+            ):
+                return True
+
+        return False
+
     def get(self, resource: models.Resource) -> models.Resource:
         """Find and return a resource by uuid and kind.
 
@@ -594,8 +619,8 @@ class MetaCoordinatorAgentDriver(MetaFileStorageAgentDriver):
 
         requirements = self.__coordinator_map__.get(resource.kind)
 
-        for meta_obj in self._load_from_meta(resource.kind):
-            if meta_obj.uuid == resource.uuid:
+        for actual_obj in self._load_from_meta(resource.kind):
+            if actual_obj.uuid == resource.uuid:
                 break
         else:
             raise driver_exc.ResourceNotFound(resource=resource)
@@ -605,7 +630,17 @@ class MetaCoordinatorAgentDriver(MetaFileStorageAgentDriver):
         # Detect which related entities pass for restoration
         deps = self._get_dependencies(resource.kind, requirements, meta_obj)
 
-        meta_obj.update_on_dp(**deps)
+        if self._is_moved(resource.kind, requirements, actual_obj, meta_obj):
+            # The resource is placed elsewhere now, for instance a machine
+            # rescheduled to another pool. The new place does not have it,
+            # so it cannot be updated there: remove it from the old place
+            # and create it in the new one.
+            LOG.info("Moving resource %s(%s)", resource.uuid, resource.kind)
+            old_deps = self._get_dependencies(resource.kind, requirements, actual_obj)
+            actual_obj.delete_from_dp(**old_deps)
+            meta_obj.dump_to_dp(**deps)
+        else:
+            meta_obj.update_on_dp(**deps)
 
         # The simplest implementation, just recreate.
         self._delete_from_meta(resource.kind, resource.uuid)
