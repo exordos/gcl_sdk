@@ -285,7 +285,7 @@ class MetaFileStorageAgentDriver(base.AbstractCapabilityDriver):
                     obj.uuid,
                 )
             except driver_exc.ResourceNotFound:
-                LOG.error("Resource %s not found on the data plane", obj.uuid)
+                LOG.error("Resource %s %s not found on the data plane", capability, obj.uuid)
 
         return [obj.to_ua_resource(capability) for obj in dp_objects]
 
@@ -545,7 +545,7 @@ class MetaCoordinatorAgentDriver(MetaFileStorageAgentDriver):
                 # dependencies for other kinds.
                 self._coordinator_storage[capability][obj.uuid] = obj
             except driver_exc.ResourceNotFound:
-                LOG.error("Resource %s not found on the data plane", obj.uuid)
+                LOG.error("Resource %s %s not found on the data plane", capability, obj.uuid)
 
         return [obj.to_ua_resource(capability) for obj in dp_objects]
 
