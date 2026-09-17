@@ -131,3 +131,86 @@ class TestMetaCoordinatorDriver:
         drv.delete(res)
 
         assert str(uuid) not in drv._storage["dummy"]["resources"]
+
+
+class DummyPoolModel(meta.MetaCoordinatorDataPlaneModel):
+    def get_meta_model_fields(self) -> set[str] | None:
+        return None
+
+
+class DummyPlacedModel(DummyCoordinatorModel):
+    """A DP model placed in a pool, like a machine or a volume."""
+
+    pool = properties.property(types.AllowNone(types.UUID()), default=None)
+
+    def _log(self, action: str, pool=None) -> None:
+        self.call_log.setdefault(str(self.uuid), []).append(
+            (action, pool.uuid if pool else None)
+        )
+
+    def dump_to_dp(self, pool=None) -> None:
+        self._log("dump_to_dp", pool)
+
+    def restore_from_dp(self, pool=None) -> None:
+        self._log("restore_from_dp", pool)
+
+    def delete_from_dp(self, pool=None) -> None:
+        self._log("delete_from_dp", pool)
+
+    def update_on_dp(self, pool=None) -> None:
+        self._log("update_on_dp", pool)
+
+
+class _PlacedCoordinatorDriver(meta.MetaCoordinatorAgentDriver):
+    __model_map__ = {"pool": DummyPoolModel, "placed": DummyPlacedModel}
+    __coordinator_map__ = {
+        "pool": {},
+        "placed": {"pool": {"kind": "pool", "relation": "placed:pool"}},
+    }
+
+
+class TestMetaCoordinatorDriverPlacement:
+    def _driver(self, tmp_path):
+        drv = _PlacedCoordinatorDriver(meta_file=str(tmp_path / "meta.json"))
+        drv.start()
+        pools = [sys_uuid.uuid4(), sys_uuid.uuid4()]
+        for pool in pools:
+            drv.create(_make_resource("pool", pool, {"uuid": str(pool)}))
+        return drv, pools
+
+    def _placed(self, uuid, pool, foo=1):
+        return _make_resource(
+            "placed", uuid, {"uuid": str(uuid), "pool": str(pool), "foo": foo}
+        )
+
+    def test_update_same_pool_updates_in_place(self, tmp_path):
+        drv, (pool, _) = self._driver(tmp_path)
+        uuid = sys_uuid.uuid4()
+        drv.create(self._placed(uuid, pool))
+
+        drv.update(self._placed(uuid, pool, foo=2))
+
+        assert DummyPlacedModel.call_log[str(uuid)] == [
+            ("dump_to_dp", pool),
+            ("update_on_dp", pool),
+        ]
+
+    def test_update_pool_changed_moves_resource(self, tmp_path):
+        # The control plane placed the resource in another pool: the old
+        # pool no longer knows it under the new placement, so an in-place
+        # update can never succeed. It is removed from the old pool and
+        # created in the new one instead.
+        drv, (old_pool, new_pool) = self._driver(tmp_path)
+        uuid = sys_uuid.uuid4()
+        drv.create(self._placed(uuid, old_pool))
+
+        updated = drv.update(self._placed(uuid, new_pool))
+
+        assert DummyPlacedModel.call_log[str(uuid)] == [
+            ("dump_to_dp", old_pool),
+            ("delete_from_dp", old_pool),
+            ("dump_to_dp", new_pool),
+        ]
+        assert updated.value["pool"] == str(new_pool)
+        stored = drv._storage["placed"]["resources"][str(uuid)]
+        assert stored["pool"] == str(new_pool)
