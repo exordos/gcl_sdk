@@ -15,11 +15,13 @@
 #    under the License.
 from __future__ import annotations
 
+import contextlib
 import grp
 import logging
 import os
 import pwd
 import subprocess
+import tempfile
 
 from restalchemy.dm import properties
 from restalchemy.dm import types
@@ -96,15 +98,6 @@ class Render(meta.MetaDataPlaneModel):
         if self.content is None:
             raise ValueError("Render content is empty")
 
-        # Create the directory if it doesn't exist
-        if not os.path.exists(os.path.dirname(self.path)):
-            os.makedirs(os.path.dirname(self.path))
-
-        # Save the content
-        with open(self.path, "w") as f:
-            f.write(self.content)
-
-        # Set the file mode, owner and group
         mode = int(self.mode, base=8)
 
         try:
@@ -117,8 +110,29 @@ class Render(meta.MetaDataPlaneModel):
         except KeyError:
             raise ValueError(f"Group {self.group} does not exist")
 
-        os.chmod(self.path, mode)
-        os.chown(self.path, owner, group)
+        # Create the directory if it doesn't exist
+        directory = os.path.dirname(self.path)
+        if not os.path.exists(directory):
+            os.makedirs(directory)
+
+        # The content goes to a temporary file with the final mode and owner,
+        # which then replaces the file. It isn't synced: after a crash the
+        # agent renders it again. A reader sees either the previous
+        # file or the whole new one, never a part of it, and a secret is
+        # never readable with a looser mode meanwhile.
+        fd, tmp_path = tempfile.mkstemp(
+            dir=directory, prefix=f".{os.path.basename(self.path)}."
+        )
+        try:
+            with os.fdopen(fd, "w") as f:
+                os.fchmod(f.fileno(), mode)
+                os.fchown(f.fileno(), owner, group)
+                f.write(self.content)
+            os.replace(tmp_path, self.path)
+        except BaseException:
+            with contextlib.suppress(FileNotFoundError):
+                os.remove(tmp_path)
+            raise
 
         self.on_change.on_change()
 
@@ -146,8 +160,7 @@ class Render(meta.MetaDataPlaneModel):
 
     def update_on_dp(self) -> None:
         """Update the resource on the data plane."""
-        # The simplest implementation, just recreate.
-        self.delete_from_dp()
+        # Replaced in place, so the file doesn't disappear meanwhile
         self.dump_to_dp()
 
 
