@@ -277,11 +277,16 @@ class LB(lb_models.LB, meta.MetaDataPlaneModel):
             )
         )
 
+    def _auth_location(self, vhost, route, modifier) -> str:
+        # The route key keeps locations unique when routes share a prefix.
+        prefix = modifier.get("location_prefix") or AUTH_LOCATION_PREFIX
+        return f"{prefix}{self._route_key(vhost, route)}"
+
     def _gen_auth_location(self, vhost, route, modifier) -> str:
         # Internal subrequest target for `auth_request`: the backend decides
         # by status code (2xx allows, 401/403 denies) and never gets the body.
         return f"""
-location = {AUTH_LOCATION_PREFIX}{self._route_key(vhost, route)} {{
+location = {self._auth_location(vhost, route, modifier)} {{
     internal;
     proxy_pass http://{modifier["pool"]}{modifier["path"]};
     proxy_pass_request_body off;
@@ -314,10 +319,7 @@ location = {AUTH_LOCATION_PREFIX}{self._route_key(vhost, route)} {{
                 repl = m["replacement"].replace('"', '\\"')
                 res.append(f'rewrite "{reg}" "{repl}" break;')
             elif m["kind"] == "auth_request":
-                res.append(
-                    f"auth_request {AUTH_LOCATION_PREFIX}"
-                    f"{self._route_key(vhost, route)};"
-                )
+                res.append(f"auth_request {self._auth_location(vhost, route, m)};")
         return res
 
     def _gen_vhosts(self):

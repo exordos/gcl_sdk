@@ -116,6 +116,18 @@ def test_auth_request_points_at_an_internal_backend_location(make_lb):
     assert "proxy_set_header X-Original-Addr $remote_addr;" in auth_loc
 
 
+def test_auth_location_prefix_is_configurable(make_lb):
+    modifier = {**AUTH_MODIFIER, "location_prefix": "/_repo_auth_"}
+    lb = make_lb(_vhost(DAV_ACTION, [modifier]))
+    conf = _render(lb)
+    v = lb.vhosts[0]
+    key = lb._route_key(v, next(iter(v["routes"].values()))["cond"])
+
+    assert f"auth_request /_repo_auth_{key};" in conf
+    assert f"location = /_repo_auth_{key} {{" in conf
+    assert "_exordos_auth_" not in conf
+
+
 def test_no_auth_location_without_the_modifier(make_lb):
     conf = _render(make_lb(_vhost(DAV_ACTION, [])))
 
