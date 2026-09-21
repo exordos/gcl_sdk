@@ -306,6 +306,13 @@ location = {self._auth_location(vhost, route, modifier)} {{
     proxy_set_header X-Original-Addr $remote_addr;
 }}"""
 
+    @staticmethod
+    def _check_dav_methods(route):
+        for a in route["actions"]:
+            unknown = set(a.get("dav_methods") or ()) - DAV_METHODS
+            if unknown:
+                raise ValueError(f"Unsupported dav_methods: {unknown}")
+
     def _gen_modifiers(self, vhost, route, modifiers):
         res = []
         for m in modifiers:
@@ -395,6 +402,28 @@ stream {{
         for r in v["routes"].values():
             c = r["cond"]
 
+            try:
+                self._check_dav_methods(c)
+                mods = "\n    ".join(
+                    m for m in self._gen_modifiers(v, c, c["modifiers"])
+                )
+                auth_locs = [
+                    self._gen_auth_location(v, c, m)
+                    for m in c["modifiers"]
+                    if m["kind"] == "auth_request"
+                ][:1]
+            except ValueError:
+                # Fail only this route closed; raising would stop the render
+                # of every LB sharing the dataplane.
+                # The default root location already denies everything.
+                LOG.exception("Refusing LB route %s %s", c["kind"], c["value"])
+                if c["value"] != "/":
+                    locations.append(f"""
+location {LOCATION_TYPE_MAPPING[c["kind"]]} {c["value"]} {{
+    return 403;
+}}""")
+                continue
+
             actions = []
             for a in c["actions"]:
                 if a["kind"] == "backend":
@@ -416,9 +445,6 @@ alias {os.path.join(a["path"], "")};""")
                     if a.get("dav_methods"):
                         # try_files would divert writes to missing files
                         # into the SPA fallback, so a writable dir is not a SPA.
-                        unknown = set(a["dav_methods"]) - DAV_METHODS
-                        if unknown:
-                            raise ValueError(f"Unsupported dav_methods: {unknown}")
                         actions.append(f"dav_methods {' '.join(a['dav_methods'])};")
                         actions.append("create_full_put_path on;")
                         actions.append("dav_access user:rw group:r all:r;")
@@ -435,7 +461,6 @@ alias {os.path.join(DOWNLOAD_DIR, self._route_key(v, c), "")};"""
                     break
             # Upgrade + Connection headers must be inside location
             acts = "\n    ".join(a for a in actions)
-            mods = "\n    ".join(m for m in self._gen_modifiers(v, c, c["modifiers"]))
             loc = f"""
 location {LOCATION_TYPE_MAPPING[c["kind"]]} {c["value"]} {{
     {acts}
@@ -449,10 +474,7 @@ location {LOCATION_TYPE_MAPPING[c["kind"]]} {c["value"]} {{
                 locations[0] = loc
             else:
                 locations.append(loc)
-            for m in c["modifiers"]:
-                if m["kind"] == "auth_request":
-                    locations.append(self._gen_auth_location(v, c, m))
-                    break
+            locations.extend(auth_locs)
 
         part = (
             f"""\

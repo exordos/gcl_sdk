@@ -156,24 +156,51 @@ def test_a_bad_dav_dir_does_not_stop_the_dump(make_lb, tmp_path):
     lb._ensure_dav_dirs()
 
 
+def _two_routes(action, modifiers):
+    # The route under test plus an unrelated healthy one on the same vhost.
+    v = _vhost(action, modifiers)
+    v["routes"]["healthy"] = {
+        "cond": {
+            "kind": "prefix",
+            "value": "/site/",
+            "actions": [{"kind": "local_dir", "path": "/var/www/site"}],
+            "modifiers": [],
+            "allowed_ips": ["0.0.0.0/0"],
+        }
+    }
+    return v
+
+
 @pytest.mark.parametrize(
-    "action, modifier",
+    "action, modifier, injected",
     [
-        ({**DAV_ACTION, "dav_methods": ["PUT;", "GET"]}, AUTH_MODIFIER),
-        (DAV_ACTION, {**AUTH_MODIFIER, "pool": "backend; deny all"}),
-        (DAV_ACTION, {**AUTH_MODIFIER, "path": "/auth;\ninclude /etc/passwd"}),
-        (DAV_ACTION, {**AUTH_MODIFIER, "location_prefix": "/a b"}),
+        ({**DAV_ACTION, "dav_methods": ["PUT;", "GET"]}, AUTH_MODIFIER, "PUT;"),
+        (DAV_ACTION, {**AUTH_MODIFIER, "pool": "backend; deny all"}, "backend;"),
+        (DAV_ACTION, {**AUTH_MODIFIER, "path": "/a;\ninclude /x"}, "include /x"),
+        (DAV_ACTION, {**AUTH_MODIFIER, "location_prefix": "/a b"}, "/a b"),
+        (DAV_ACTION, {"kind": "future_guard"}, "future_guard"),
     ],
 )
-def test_unsafe_values_are_refused(make_lb, action, modifier):
-    with pytest.raises(ValueError):
-        _render(make_lb(_vhost(action, [modifier])))
+def test_a_bad_route_fails_closed_alone(make_lb, action, modifier, injected):
+    # An agent that dropped an unknown modifier would serve a guarded route
+    # unguarded, and one bad route must not stop the render of the rest.
+    conf = _render(make_lb(_two_routes(action, [modifier])))
+
+    repo = conf.split("location  /repo/ {")[1].split("}")[0]
+    assert repo.split() == ["return", "403;"]
+    assert injected not in conf
+    assert "alias /var/www/site/;" in conf
 
 
-def test_an_unknown_modifier_is_refused_not_dropped(make_lb):
-    # An agent that dropped it would serve a guarded route unguarded.
-    with pytest.raises(ValueError, match="future_guard"):
-        _render(make_lb(_vhost(DAV_ACTION, [{"kind": "future_guard"}])))
+def test_a_bad_root_route_leaves_the_default_deny(make_lb):
+    v = _vhost(DAV_ACTION, [{"kind": "future_guard"}])
+    next(iter(v["routes"].values()))["cond"]["value"] = "/"
+
+    conf = _render(make_lb(v))
+
+    # One root location only, or nginx rejects the whole file.
+    assert conf.count("location / {") == 1
+    assert "return 444;" in conf
 
 
 def _nginx_has_modules():
