@@ -147,7 +147,45 @@ def test_dav_dir_is_created_for_nginx(make_lb, tmp_path, monkeypatch):
     assert chowned == [str(path)]
 
 
-@pytest.mark.skipif(shutil.which("nginx") is None, reason="nginx is not installed")
+def test_a_bad_dav_dir_does_not_stop_the_dump(make_lb, tmp_path):
+    # A file where the dir should be: makedirs raises FileExistsError.
+    path = tmp_path / "repo"
+    path.write_text("")
+    lb = make_lb(_vhost({**DAV_ACTION, "path": str(path)}, []))
+
+    lb._ensure_dav_dirs()
+
+
+@pytest.mark.parametrize(
+    "action, modifier",
+    [
+        ({**DAV_ACTION, "dav_methods": ["PUT;", "GET"]}, AUTH_MODIFIER),
+        (DAV_ACTION, {**AUTH_MODIFIER, "pool": "backend; deny all"}),
+        (DAV_ACTION, {**AUTH_MODIFIER, "path": "/auth;\ninclude /etc/passwd"}),
+        (DAV_ACTION, {**AUTH_MODIFIER, "location_prefix": "/a b"}),
+    ],
+)
+def test_unsafe_values_are_refused(make_lb, action, modifier):
+    with pytest.raises(ValueError):
+        _render(make_lb(_vhost(action, [modifier])))
+
+
+def test_an_unknown_modifier_is_refused_not_dropped(make_lb):
+    # An agent that dropped it would serve a guarded route unguarded.
+    with pytest.raises(ValueError, match="future_guard"):
+        _render(make_lb(_vhost(DAV_ACTION, [{"kind": "future_guard"}])))
+
+
+def _nginx_has_modules():
+    if shutil.which("nginx") is None:
+        return False
+    res = subprocess.run(["nginx", "-V"], capture_output=True, text=True)
+    return all(m in res.stderr for m in ("http_dav_module", "http_auth_request_module"))
+
+
+@pytest.mark.skipif(
+    not _nginx_has_modules(), reason="nginx with dav and auth_request is missing"
+)
 def test_rendered_config_is_accepted_by_nginx(make_lb, tmp_path):
     # `nginx -t` binds the listen port, so stay unprivileged.
     lb = make_lb({**_vhost(DAV_ACTION, [AUTH_MODIFIER]), "port": 18080})

@@ -20,6 +20,7 @@ import glob
 import logging
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import uuid
@@ -71,6 +72,9 @@ ADD_HEADERS_MAPPING = {
     ),
 }
 AUTH_LOCATION_PREFIX = "/_exordos_auth_"
+# These values are rendered unquoted, so only a safe subset is accepted.
+DAV_METHODS = frozenset({"PUT", "DELETE", "MKCOL", "COPY", "MOVE"})
+SAFE_URI_PATH = re.compile(r"^/[A-Za-z0-9._~/-]*$")
 DOWNLOAD_DIR = "/var/www/gc_downloaded/"
 DOWNLOAD_DIR_TMP = "/var/www/gc_downloaded_tmp/"
 
@@ -277,10 +281,16 @@ class LB(lb_models.LB, meta.MetaDataPlaneModel):
             )
         )
 
+    @staticmethod
+    def _safe_uri_path(value: str) -> str:
+        if not SAFE_URI_PATH.match(value):
+            raise ValueError(f"Unsafe URI path: {value!r}")
+        return value
+
     def _auth_location(self, vhost, route, modifier) -> str:
         # The route key keeps locations unique when routes share a prefix.
         prefix = modifier.get("location_prefix") or AUTH_LOCATION_PREFIX
-        return f"{prefix}{self._route_key(vhost, route)}"
+        return f"{self._safe_uri_path(prefix)}{self._route_key(vhost, route)}"
 
     def _gen_auth_location(self, vhost, route, modifier) -> str:
         # Internal subrequest target for `auth_request`: the backend decides
@@ -288,7 +298,7 @@ class LB(lb_models.LB, meta.MetaDataPlaneModel):
         return f"""
 location = {self._auth_location(vhost, route, modifier)} {{
     internal;
-    proxy_pass http://{modifier["pool"]}{modifier["path"]};
+    proxy_pass http://{uuid.UUID(str(modifier["pool"]))}{self._safe_uri_path(modifier["path"])};
     proxy_pass_request_body off;
     proxy_set_header Content-Length "";
     proxy_set_header X-Original-Method $request_method;
@@ -320,6 +330,10 @@ location = {self._auth_location(vhost, route, modifier)} {{
                 res.append(f'rewrite "{reg}" "{repl}" break;')
             elif m["kind"] == "auth_request":
                 res.append(f"auth_request {self._auth_location(vhost, route, m)};")
+            else:
+                # Dropping an unknown modifier may drop a security control
+                # (e.g. auth_request), so refuse to render instead.
+                raise ValueError(f"Unknown LB modifier kind: {m['kind']!r}")
         return res
 
     def _gen_vhosts(self):
@@ -402,6 +416,9 @@ alias {os.path.join(a["path"], "")};""")
                     if a.get("dav_methods"):
                         # try_files would divert writes to missing files
                         # into the SPA fallback, so a writable dir is not a SPA.
+                        unknown = set(a["dav_methods"]) - DAV_METHODS
+                        if unknown:
+                            raise ValueError(f"Unsupported dav_methods: {unknown}")
                         actions.append(f"dav_methods {' '.join(a['dav_methods'])};")
                         actions.append("create_full_put_path on;")
                         actions.append("dav_access user:rw group:r all:r;")
@@ -651,8 +668,13 @@ map $http_upgrade $connection_upgrade {
                 for a in r["cond"]["actions"]:
                     if a["kind"] != "local_dir" or not a.get("dav_methods"):
                         continue
-                    os.makedirs(a["path"], mode=0o755, exist_ok=True)
-                    shutil.chown(a["path"], user=NGINX_USER, group=NGINX_GROUP)
+                    # A bad dir must not keep nginx from reloading for
+                    # every LB on the node; only its own route fails.
+                    try:
+                        os.makedirs(a["path"], mode=0o755, exist_ok=True)
+                        shutil.chown(a["path"], user=NGINX_USER, group=NGINX_GROUP)
+                    except OSError:
+                        LOG.exception("Cannot prepare dav dir %s", a["path"])
 
     def _reload_or_restart_nginx(self):
         try:
