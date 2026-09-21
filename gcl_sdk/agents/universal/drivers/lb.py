@@ -70,6 +70,7 @@ ADD_HEADERS_MAPPING = {
         )
     ),
 }
+AUTH_LOCATION_PREFIX = "/_exordos_auth_"
 DOWNLOAD_DIR = "/var/www/gc_downloaded/"
 DOWNLOAD_DIR_TMP = "/var/www/gc_downloaded_tmp/"
 
@@ -268,6 +269,28 @@ class LB(lb_models.LB, meta.MetaDataPlaneModel):
             """)
         return upstreams
 
+    @staticmethod
+    def _route_key(vhost, route) -> str:
+        return str(
+            uuid.uuid5(
+                uuid.NAMESPACE_URL, f"{vhost['uuid']}{route['kind']}{route['value']}"
+            )
+        )
+
+    def _gen_auth_location(self, vhost, route, modifier) -> str:
+        # Internal subrequest target for `auth_request`: the backend decides
+        # by status code (2xx allows, 401/403 denies) and never gets the body.
+        return f"""
+location = {AUTH_LOCATION_PREFIX}{self._route_key(vhost, route)} {{
+    internal;
+    proxy_pass http://{modifier["pool"]}{modifier["path"]};
+    proxy_pass_request_body off;
+    proxy_set_header Content-Length "";
+    proxy_set_header X-Original-Method $request_method;
+    proxy_set_header X-Original-URI $request_uri;
+    proxy_set_header X-Original-Addr $remote_addr;
+}}"""
+
     def _gen_modifiers(self, vhost, route, modifiers):
         res = []
         for m in modifiers:
@@ -290,6 +313,11 @@ class LB(lb_models.LB, meta.MetaDataPlaneModel):
                 reg = m["regex"].replace('"', '\\"')
                 repl = m["replacement"].replace('"', '\\"')
                 res.append(f'rewrite "{reg}" "{repl}" break;')
+            elif m["kind"] == "auth_request":
+                res.append(
+                    f"auth_request {AUTH_LOCATION_PREFIX}"
+                    f"{self._route_key(vhost, route)};"
+                )
         return res
 
     def _gen_vhosts(self):
@@ -369,13 +397,19 @@ return {a["code"]} {a["url"]}$request_uri;""")
                 elif a["kind"] == "local_dir":
                     actions.append(f"""\
 alias {os.path.join(a["path"], "")};""")
-                    if a.get("is_spa"):
+                    if a.get("dav_methods"):
+                        # try_files would divert writes to missing files
+                        # into the SPA fallback, so a writable dir is not a SPA.
+                        actions.append(f"dav_methods {' '.join(a['dav_methods'])};")
+                        actions.append("create_full_put_path on;")
+                        actions.append("dav_access user:rw group:r all:r;")
+                    elif a.get("is_spa"):
                         actions.append("try_files $uri $uri/ /index.html;")
                     break
                 elif a["kind"] == "local_dir_download":
                     actions.append(
                         f"""\
-alias {os.path.join(DOWNLOAD_DIR, str(uuid.uuid5(uuid.NAMESPACE_URL, f"{v['uuid']}{c['kind']}{c['value']}")), "")};"""
+alias {os.path.join(DOWNLOAD_DIR, self._route_key(v, c), "")};"""
                     )
                     if a.get("is_spa"):
                         actions.append("try_files $uri $uri/ /index.html;")
@@ -396,6 +430,10 @@ location {LOCATION_TYPE_MAPPING[c["kind"]]} {c["value"]} {{
                 locations[0] = loc
             else:
                 locations.append(loc)
+            for m in c["modifiers"]:
+                if m["kind"] == "auth_request":
+                    locations.append(self._gen_auth_location(v, c, m))
+                    break
 
         part = (
             f"""\
@@ -561,14 +599,7 @@ map $http_upgrade $connection_upgrade {
                 for a in c["actions"]:
                     if a["kind"] != "local_dir_download":
                         continue
-                    target_paths[
-                        str(
-                            uuid.uuid5(
-                                uuid.NAMESPACE_URL,
-                                f"{v['uuid']}{c['kind']}{c['value']}",
-                            )
-                        )
-                    ] = a["url"]
+                    target_paths[self._route_key(v, c)] = a["url"]
         return target_paths
 
     def _actualize_downloaded_dirs(self):
@@ -608,6 +639,18 @@ map $http_upgrade $connection_upgrade {
                 self._download_dirs.pop(p, None)
                 return False
         return True
+
+    def _ensure_dav_dirs(self):
+        # nginx writes as www-data, so a writable dir must exist and be its.
+        for v in self._agg_vhosts():
+            if not v["proto"].startswith("http"):
+                continue
+            for r in v["routes"].values():
+                for a in r["cond"]["actions"]:
+                    if a["kind"] != "local_dir" or not a.get("dav_methods"):
+                        continue
+                    os.makedirs(a["path"], mode=0o755, exist_ok=True)
+                    shutil.chown(a["path"], user=NGINX_USER, group=NGINX_GROUP)
 
     def _reload_or_restart_nginx(self):
         try:
@@ -650,6 +693,7 @@ map $http_upgrade $connection_upgrade {
                     pass
 
         self._actualize_downloaded_dirs()
+        self._ensure_dav_dirs()
 
         self._reload_or_restart_nginx()
 
