@@ -407,11 +407,11 @@ stream {{
                 mods = "\n    ".join(
                     m for m in self._gen_modifiers(v, c, c["modifiers"])
                 )
-                auth_locs = [
-                    self._gen_auth_location(v, c, m)
-                    for m in c["modifiers"]
-                    if m["kind"] == "auth_request"
-                ][:1]
+                auth_mods = [m for m in c["modifiers"] if m["kind"] == "auth_request"]
+                # nginx refuses a second auth_request in one location.
+                if len(auth_mods) > 1:
+                    raise ValueError("More than one auth_request modifier")
+                auth_locs = [self._gen_auth_location(v, c, m) for m in auth_mods]
             except ValueError:
                 # Fail only this route closed; raising would stop the render
                 # of every LB sharing the dataplane.

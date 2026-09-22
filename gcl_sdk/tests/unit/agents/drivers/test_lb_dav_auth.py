@@ -192,6 +192,16 @@ def test_a_bad_route_fails_closed_alone(make_lb, action, modifier, injected):
     assert "alias /var/www/site/;" in conf
 
 
+def test_a_second_auth_request_is_refused(make_lb):
+    # nginx rejects a duplicate auth_request, which would fail the whole file.
+    conf = _render(make_lb(_two_routes(DAV_ACTION, [AUTH_MODIFIER, AUTH_MODIFIER])))
+
+    repo = conf.split("location  /repo/ {")[1].split("}")[0]
+    assert repo.split() == ["return", "403;"]
+    assert "auth_request" not in conf
+    assert "alias /var/www/site/;" in conf
+
+
 def test_a_bad_root_route_leaves_the_default_deny(make_lb):
     v = _vhost(DAV_ACTION, [{"kind": "future_guard"}])
     next(iter(v["routes"].values()))["cond"]["value"] = "/"
