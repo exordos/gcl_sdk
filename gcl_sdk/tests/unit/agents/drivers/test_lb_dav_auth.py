@@ -78,8 +78,8 @@ def make_lb(tmp_path, monkeypatch):
 
 
 def _render(lb):
-    _l4, vhosts_l7, _ext = lb._gen_vhosts()
-    return lb._gen_file_content_l7(vhosts_l7)
+    _l4, vhosts_l7, _ext = lb._gen_vhosts(lb._agg_vhosts())
+    return lb._gen_file_content_l7(vhosts_l7, lb._agg_pools())
 
 
 def test_dav_dir_is_writable_and_not_a_spa(make_lb):
@@ -141,7 +141,7 @@ def test_dav_dir_is_created_for_nginx(make_lb, tmp_path, monkeypatch):
     chowned = []
     monkeypatch.setattr(lb_driver.shutil, "chown", lambda p, **kw: chowned.append(p))
 
-    lb._ensure_dav_dirs()
+    lb._ensure_dav_dirs(lb._agg_vhosts())
 
     assert path.is_dir()
     assert chowned == [str(path)]
@@ -153,7 +153,7 @@ def test_a_bad_dav_dir_does_not_stop_the_dump(make_lb, tmp_path):
     path.write_text("")
     lb = make_lb(_vhost({**DAV_ACTION, "path": str(path)}, []))
 
-    lb._ensure_dav_dirs()
+    lb._ensure_dav_dirs(lb._agg_vhosts())
 
 
 def _two_routes(action, modifiers):

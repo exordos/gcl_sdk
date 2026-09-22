@@ -255,9 +255,9 @@ class LB(lb_models.LB, meta.MetaDataPlaneModel):
             pools.update(view.get("backend_pools") or {})
         return pools
 
-    def _gen_backends(self, proto_lvl):
+    def _gen_backends(self, pools, proto_lvl):
         upstreams = []
-        for pid, pool in self._agg_pools().items():
+        for pid, pool in pools.items():
             servers = "\n    ".join(
                 f"server {e['host']}:{e['port']} weight={e['weight']};"
                 for e in pool["endpoints"]
@@ -343,7 +343,7 @@ location = {self._auth_location(vhost, route, modifier)} {{
                 raise ValueError(f"Unknown LB modifier kind: {m['kind']!r}")
         return res
 
-    def _gen_vhosts(self):
+    def _gen_vhosts(self, agg_vhosts):
         vhosts_l4 = []
         vhosts_l7 = []
         ext_sources = {}
@@ -351,7 +351,7 @@ location = {self._auth_location(vhost, route, modifier)} {{
         # catch-all ("_") vhosts aggregated the first (uuid-sorted, so
         # deterministic) wins instead of failing the whole nginx config.
         default_ports = set()
-        for v in self._agg_vhosts():
+        for v in agg_vhosts:
             if len(v["routes"]) == 0:
                 continue
             if v["proto"].startswith("http"):
@@ -386,8 +386,8 @@ proxy_pass {c["actions"][0]["pool"]};
 """
         return ""
 
-    def _gen_file_content_l4(self, vhosts) -> str:
-        backends = "\n".join(b for b in self._gen_backends(proto_lvl="l4"))
+    def _gen_file_content_l4(self, vhosts, pools) -> str:
+        backends = "\n".join(b for b in self._gen_backends(pools, proto_lvl="l4"))
         vhosts = "\n".join(v for v in vhosts)
         return f"""\
 stream {{
@@ -525,8 +525,8 @@ map $http_upgrade $connection_upgrade {
 
 """
 
-    def _gen_file_content_l7(self, vhosts) -> str:
-        backends = "\n".join(b for b in self._gen_backends(proto_lvl="l7"))
+    def _gen_file_content_l7(self, vhosts, pools) -> str:
+        backends = "\n".join(b for b in self._gen_backends(pools, proto_lvl="l7"))
         vhosts = "\n".join(v for v in vhosts)
 
         return f"""\
@@ -625,12 +625,12 @@ map $http_upgrade $connection_upgrade {
         LOG.info("_download_url finish: %s %s", path, url)
         return True
 
-    def _get_target_paths(self):
+    def _get_target_paths(self, agg_vhosts):
         # Aggregated: the orphan-dir cleanup in _actualize_downloaded_dirs
         # removes anything outside this set, so it must span every LB
         # sharing the dataplane, not just self.
         target_paths = {}
-        for v in self._agg_vhosts():
+        for v in agg_vhosts:
             if len(v["routes"]) == 0:
                 continue
             if not v["proto"].startswith("http"):
@@ -643,8 +643,8 @@ map $http_upgrade $connection_upgrade {
                     target_paths[self._route_key(v, c)] = a["url"]
         return target_paths
 
-    def _actualize_downloaded_dirs(self):
-        target_paths = self._get_target_paths()
+    def _actualize_downloaded_dirs(self, agg_vhosts):
+        target_paths = self._get_target_paths(agg_vhosts)
         target_paths_set = set(target_paths.keys())
         # Download new dirs/Update already existing with new link
         for p, u in target_paths.items():
@@ -668,8 +668,8 @@ map $http_upgrade $connection_upgrade {
         for d in actual_ondisk_dirs - target_paths_set:
             self._download_dirs_futures[d] = TPOOL.submit(self._clean_path, d)
 
-    def _validate_downloaded_dirs(self):
-        for p, u in self._get_target_paths().items():
+    def _validate_downloaded_dirs(self, agg_vhosts):
+        for p, u in self._get_target_paths(agg_vhosts).items():
             # If TMP dir exists - it's a signal that we didn't finish our job
             #  before (for ex. when url was updated)
             if (
@@ -681,9 +681,9 @@ map $http_upgrade $connection_upgrade {
                 return False
         return True
 
-    def _ensure_dav_dirs(self):
+    def _ensure_dav_dirs(self, agg_vhosts):
         # nginx writes as www-data, so a writable dir must exist and be its.
-        for v in self._agg_vhosts():
+        for v in agg_vhosts:
             if not v["proto"].startswith("http"):
                 continue
             for r in v["routes"].values():
@@ -705,18 +705,21 @@ map $http_upgrade $connection_upgrade {
             subprocess.check_call(["systemctl", "restart", "nginx"])
 
     def dump_to_dp(self) -> None:
-        vhosts_l4, vhosts_l7, ext_sources = self._gen_vhosts()
+        # One snapshot per cycle, so every step sees the same LB set.
+        agg_vhosts = self._agg_vhosts()
+        agg_pools = self._agg_pools()
+        vhosts_l4, vhosts_l7, ext_sources = self._gen_vhosts(agg_vhosts)
         with open(NGINX_L4_CONFIG_FILE, "w") as f:
-            f.write(self._gen_file_content_l4(vhosts_l4))
+            f.write(self._gen_file_content_l4(vhosts_l4, agg_pools))
 
         with open(NGINX_L7_CONFIG_FILE, "w") as f:
-            f.write(self._gen_file_content_l7(vhosts_l7))
+            f.write(self._gen_file_content_l7(vhosts_l7, agg_pools))
 
         # Aggregated: the not-in-use cleanup below removes any cert file
         # outside actual_keys, so certs of every LB sharing the dataplane
         # must be written/kept, not just self's.
         actual_keys = set()
-        for v in self._agg_vhosts():
+        for v in agg_vhosts:
             if v["proto"] != "https":
                 continue
             crt_name = f"{NGINX_SSL_DIR}{v['uuid']}_exordos.crt"
@@ -738,8 +741,8 @@ map $http_upgrade $connection_upgrade {
                 except OSError:
                     pass
 
-        self._actualize_downloaded_dirs()
-        self._ensure_dav_dirs()
+        self._actualize_downloaded_dirs(agg_vhosts)
+        self._ensure_dav_dirs(agg_vhosts)
 
         self._reload_or_restart_nginx()
 
@@ -797,10 +800,16 @@ map $http_upgrade $connection_upgrade {
         except subprocess.CalledProcessError:
             raise driver_exc.InvalidDataPlaneObjectError(obj={"uuid": str(self.uuid)})
 
-        vhosts_l4, vhosts_l7, ext_sources = self._gen_vhosts()
+        agg_vhosts = self._agg_vhosts()
+        agg_pools = self._agg_pools()
+        vhosts_l4, vhosts_l7, ext_sources = self._gen_vhosts(agg_vhosts)
         # Force file validation
-        self._validate_file(NGINX_L4_CONFIG_FILE, self._gen_file_content_l4(vhosts_l4))
-        self._validate_file(NGINX_L7_CONFIG_FILE, self._gen_file_content_l7(vhosts_l7))
+        self._validate_file(
+            NGINX_L4_CONFIG_FILE, self._gen_file_content_l4(vhosts_l4, agg_pools)
+        )
+        self._validate_file(
+            NGINX_L7_CONFIG_FILE, self._gen_file_content_l7(vhosts_l7, agg_pools)
+        )
         for v in self.vhosts:
             if v["proto"] == "https":
                 self._validate_file(
@@ -841,7 +850,7 @@ map $http_upgrade $connection_upgrade {
                 raise driver_exc.InvalidDataPlaneObjectError(
                     obj={"uuid": str(self.uuid)}
                 )
-        if not self._validate_downloaded_dirs():
+        if not self._validate_downloaded_dirs(agg_vhosts):
             raise driver_exc.InvalidDataPlaneObjectError(obj={"uuid": str(self.uuid)})
 
         for n, e in ext_sources.items():

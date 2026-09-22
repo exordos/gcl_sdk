@@ -103,10 +103,11 @@ def shared_meta(tmp_path, monkeypatch):
 
 
 def _render(lb):
-    vhosts_l4, vhosts_l7, _ext = lb._gen_vhosts()
+    pools = lb._agg_pools()
+    vhosts_l4, vhosts_l7, _ext = lb._gen_vhosts(lb._agg_vhosts())
     return (
-        lb._gen_file_content_l4(vhosts_l4),
-        lb._gen_file_content_l7(vhosts_l7),
+        lb._gen_file_content_l4(vhosts_l4, pools),
+        lb._gen_file_content_l7(vhosts_l7, pools),
     )
 
 
