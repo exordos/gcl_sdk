@@ -378,7 +378,15 @@ class UniversalAgentService(looper_basic.BasicService):
                 caps = self._cap_driver_iteration(driver, payload, collected_payload)
                 processed_capabilities.update(caps)
 
-                if caps != set(driver.get_capabilities()):
+                # Capabilities absent from the payload are skipped, not
+                # failed. The CP returns an empty payload when the hash
+                # matches, so every capability is skipped then. Counting
+                # that as a failure would never save the snapshot, keeping
+                # the hash matched and the data plane never polled again.
+                expected_caps = {
+                    c for c in driver.get_capabilities() if c in payload.capabilities
+                }
+                if caps != expected_caps:
                     collected_payload_all_caps = False
             except Exception:
                 LOG.exception("Error actualizing driver %s", driver.__class__.__name__)
