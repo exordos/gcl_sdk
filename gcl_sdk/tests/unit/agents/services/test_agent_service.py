@@ -415,6 +415,66 @@ class TestReadFailureProtection:
 
         assert payload_path.exists()
 
+    def test_iteration_saves_payload_when_payload_unchanged(self, tmp_path):
+        """The CP answers a matching hash with an empty payload.
+
+        Every capability is skipped then, which is not a failure. The
+        snapshot must be saved so its hash changes and the next iteration
+        gets the full payload and polls the data plane again. Otherwise the
+        hash stays matched forever and data plane changes are never seen.
+        """
+        payload_path = tmp_path / "payload.json"
+
+        resources = [_make_resource(uuid=sys_uuid.uuid4()) for _ in range(3)]
+        last_payload = models.Payload.empty()
+        last_payload.add_caps_resources(resources)
+        last_payload.add_facts_resources(resources)
+        last_payload.save(str(payload_path))
+
+        # What ``UniversalAgent.get_payload`` returns on a hash match
+        unchanged = models.Payload(hash=last_payload.hash, version=last_payload.version)
+
+        driver = MagicMock()
+        driver.get_capabilities.return_value = [KIND]
+
+        orch = MagicMock()
+        orch.agents_get_payload.return_value = unchanged
+
+        agent = _make_service(
+            caps_drivers=[driver], orch_client=orch, payload_path=str(payload_path)
+        )
+        agent._iteration()
+
+        driver.list.assert_not_called()
+        orch.resources_delete.assert_not_called()
+        saved = models.Payload.load(str(payload_path))
+        assert saved.hash != last_payload.hash
+
+    def test_iteration_saves_payload_when_capability_not_in_payload(self, tmp_path):
+        """A driver capability absent from the payload doesn't block saving."""
+        payload_path = tmp_path / "payload.json"
+
+        resources = [_make_resource(uuid=sys_uuid.uuid4()) for _ in range(3)]
+        payload = models.Payload.empty()
+        payload.add_caps_resources(resources)
+        payload.add_facts_resources(resources)
+        payload.calculate_hash()
+
+        driver = MagicMock()
+        driver.get_capabilities.return_value = [KIND, CAPABILITY]
+        driver.list.return_value = resources
+
+        orch = MagicMock()
+        orch.agents_get_payload.return_value = payload
+
+        agent = _make_service(
+            caps_drivers=[driver], orch_client=orch, payload_path=str(payload_path)
+        )
+        agent._iteration()
+
+        driver.list.assert_called_once_with(KIND)
+        assert payload_path.exists()
+
     def test_actualize_facts_skips_unprocessed_deleted_category(self):
         """A category absent from ``processed_capabilities`` is left alone."""
         resource = _make_resource()
