@@ -20,6 +20,9 @@ import types
 from unittest import mock
 import uuid as sys_uuid
 
+import pytest
+
+from gcl_sdk.agents.universal.clients.backend import core
 from gcl_sdk.agents.universal.clients.backend import rest
 
 LB = "11111111-1111-4111-8111-111111111111"
@@ -123,3 +126,13 @@ def test_nested_list_walks_parents():
             uuid=(str(UUID),),
         ),
     ]
+
+
+def test_core_client_needs_a_project_for_nested_collections():
+    with pytest.raises(ValueError, match="lb_vhost"):
+        core.GCRestApiBackendClient(mock.MagicMock(), COLLECTIONS)
+
+    core.GCRestApiBackendClient(
+        mock.MagicMock(), COLLECTIONS, project_id=sys_uuid.uuid4()
+    )
+    core.GCRestApiBackendClient(mock.MagicMock(), {"border": "/v1/network/border/"})

@@ -70,6 +70,12 @@ class GCRestApiBackendClient(rest.RestApiBackendClient):
         self._project_id = project_id
         self._tf_storage = tf_storage
 
+        # Listing a nested kind walks its parent collections; without a
+        # project nothing bounds that walk to the resources handled here.
+        nested = [k for k in collection_map if self._url_fields(k)]
+        if nested and project_id is None:
+            raise ValueError(f"Nested collections require project_id: {nested}")
+
     def _get_filters(self, kind: str) -> dict[str, str | tuple[str]]:
         """Get filters for the kind.
 
