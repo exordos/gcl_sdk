@@ -27,6 +27,8 @@ class AbstractCapabilityDriver(abc.ABC):
     capabilities to the DP.
     """
 
+    universal_agent_config_options: tuple[str, ...] = ()
+
     @abc.abstractmethod
     def get_capabilities(self) -> list[str]:
         """Returns a list of capabilities supported by the driver."""
@@ -120,6 +122,8 @@ class AbstractFactDriver(abc.ABC):
     data plane. The simplest example is gathering network interfaces
     from nodes.
     """
+
+    universal_agent_config_options: tuple[str, ...] = ()
 
     @abc.abstractmethod
     def get_facts(self) -> list[str]:
