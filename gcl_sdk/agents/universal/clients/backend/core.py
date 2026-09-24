@@ -57,7 +57,13 @@ class ResourceProjectMismatch(exceptions.BackendClientException):
 
 
 class GCRestApiBackendClient(rest.RestApiBackendClient):
-    """Exordos Core Rest API backend client."""
+    """Exordos Core Rest API backend client.
+
+    Core leaves a null field out of its answer. A declared top-level field
+    missing from it is put back as None, so a target declaring None matches
+    and a target clearing a field sends the null instead of settling on the
+    stale value.
+    """
 
     def __init__(
         self,
@@ -93,6 +99,17 @@ class GCRestApiBackendClient(rest.RestApiBackendClient):
 
         return {"uuid": tuple(str(u) for u in target_fields[kind])}
 
+    @staticmethod
+    def _with_nulls(
+        value: dict[str, tp.Any], declared: tp.Iterable[str]
+    ) -> dict[str, tp.Any]:
+        # Dotted names (``setter.kind``) point inside a field, not at one.
+        return {**{f: None for f in declared if "." not in f}, **value}
+
+    def get(self, resource: models.Resource) -> dict[str, tp.Any]:
+        """Get the resource value in dictionary format."""
+        return self._with_nulls(super().get(resource), resource.value)
+
     def create(self, resource: models.Resource) -> dict[str, tp.Any]:
         """Creates the resource. Returns the created resource."""
         # Inject mandatory fields
@@ -104,7 +121,7 @@ class GCRestApiBackendClient(rest.RestApiBackendClient):
             if res_project_id and res_project_id != str(self._project_id):
                 raise ResourceProjectMismatch(resource=resource)
 
-        return super().create(resource)
+        return self._with_nulls(super().create(resource), resource.value)
 
     def update(self, resource: models.Resource) -> dict[str, tp.Any]:
         """Update the resource. Returns the updated resource."""
@@ -121,11 +138,19 @@ class GCRestApiBackendClient(rest.RestApiBackendClient):
         finally:
             resource.value = value
 
-        return result
+        return self._with_nulls(result, value)
 
     def list(self, kind: str) -> list[dict[str, tp.Any]]:
         """Lists all resources by kind."""
-        return super().list(kind, **self._get_filters(kind))
+        items = super().list(kind, **self._get_filters(kind))
+        if self._tf_storage is None:
+            return items
+
+        declared = {i.uuid: i.target_fields for i in self._tf_storage.list(kind)}
+        return [
+            self._with_nulls(i, declared.get(sys_uuid.UUID(i["uuid"]), ()))
+            for i in items
+        ]
 
 
 class GCSecretRestApiBackendClient(rest.RestApiBackendClient):

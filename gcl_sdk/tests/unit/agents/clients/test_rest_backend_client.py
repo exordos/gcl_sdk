@@ -136,3 +136,52 @@ def test_core_client_needs_a_project_for_nested_collections():
         mock.MagicMock(), COLLECTIONS, project_id=sys_uuid.uuid4()
     )
     core.GCRestApiBackendClient(mock.MagicMock(), {"border": "/v1/network/border/"})
+
+
+def _core_client(tf_storage=None):
+    http = mock.MagicMock()
+    return (
+        core.GCRestApiBackendClient(
+            http, COLLECTIONS, project_id=sys_uuid.uuid4(), tf_storage=tf_storage
+        ),
+        http,
+    )
+
+
+def test_core_client_puts_back_the_nulls_core_leaves_out():
+    client, http = _core_client()
+    answer = {"uuid": str(UUID), "port": 80}
+    http.get.return_value = http.create.return_value = answer
+    http.update.return_value = answer
+    target = _resource("lb_vhost", uuid=str(UUID), lb=LB, port=80, cert=None)
+
+    expected = {"uuid": str(UUID), "port": 80, "lb": LB, "cert": None}
+    assert client.get(target) == expected
+    assert client.update(target) == expected
+    assert client.create(target) == expected
+
+
+def test_core_client_list_puts_back_declared_nulls_only():
+    storage = mock.MagicMock()
+    storage.list.return_value = [
+        types.SimpleNamespace(
+            uuid=UUID,
+            target_fields={"uuid": None, "port": None, "cert": None},
+        )
+    ]
+    client, http = _core_client(storage)
+    http.filter.side_effect = lambda url, **kw: (
+        [{"uuid": LB}]
+        if url == "/v1/network/lb/"
+        else [{"uuid": str(UUID), "port": 80, "enabled": True}]
+    )
+
+    assert client.list("lb_vhost") == [
+        {"uuid": str(UUID), "port": 80, "enabled": True, "lb": LB, "cert": None}
+    ]
+
+
+def test_core_client_skips_dotted_target_fields():
+    assert core.GCRestApiBackendClient._with_nulls(
+        {"uuid": "u"}, ("uuid", "setter.kind", "name")
+    ) == {"uuid": "u", "name": None}

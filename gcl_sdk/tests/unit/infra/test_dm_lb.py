@@ -58,34 +58,12 @@ def test_vhost_targets_its_lb():
     )
 
     assert vhost.get_resource_kind() == "lb_vhost"
-    assert {"lb", "protocol", "port"} <= set(vhost.get_resource_target_fields())
+    # Declared even while unset, so clearing one is sent to Core.
+    assert {"lb", "protocol", "port", "domains", "cert", "proxy_protocol_from"} <= set(
+        vhost.get_resource_target_fields()
+    )
     assert vhost.protocol == "http"
     assert vhost.external_sources == []
-
-
-def test_vhost_declares_optional_fields_only_when_set():
-    # Core leaves unset ones out of its answer; declared as None they would
-    # never match and the vhost would be updated on every iteration.
-    plain = models.LBVhost(
-        uuid=sys_uuid.uuid4(), name="l4", project_id=PROJECT, lb=LB, protocol="tcp"
-    )
-    assert not {"domains", "cert", "proxy_protocol_from"} & set(
-        plain.get_resource_target_fields()
-    )
-
-    tls = models.LBVhost(
-        uuid=sys_uuid.uuid4(),
-        name="tls",
-        project_id=PROJECT,
-        lb=LB,
-        protocol="https",
-        domains=["repo.example.com"],
-        cert={"kind": "raw", "crt": "c", "key": "k"},
-        proxy_protocol_from="10.0.0.0/8",
-    )
-    assert {"domains", "cert", "proxy_protocol_from"} <= set(
-        tls.get_resource_target_fields()
-    )
 
 
 def test_route_targets_its_lb_and_vhost():

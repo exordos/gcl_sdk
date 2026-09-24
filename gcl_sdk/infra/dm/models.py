@@ -891,27 +891,21 @@ class LBVhost(
         return "lb_vhost"
 
     def get_resource_target_fields(self) -> tp.Collection[str]:
-        """Return the collection of target fields.
-
-        Core leaves an unset optional field out of its answer, so a target
-        declaring it as None never matches and the vhost is updated on every
-        iteration. Such a field is a target field only while it is set.
-        """
-        fields = {
-            "uuid",
-            "name",
-            "lb",
-            "protocol",
-            "port",
-            "external_sources",
-            "project_id",
-        }
-        fields.update(
-            name
-            for name in ("domains", "cert", "proxy_protocol_from")
-            if getattr(self, name) is not None
+        """Return the collection of target fields."""
+        return frozenset(
+            (
+                "uuid",
+                "name",
+                "lb",
+                "protocol",
+                "port",
+                "domains",
+                "cert",
+                "external_sources",
+                "proxy_protocol_from",
+                "project_id",
+            )
         )
-        return frozenset(fields)
 
 
 class LBVhostRoute(
