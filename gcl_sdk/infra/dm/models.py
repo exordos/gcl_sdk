@@ -760,6 +760,239 @@ class Border(
         )
 
 
+class LBTypeCoreKind(types_dynamic.AbstractKindModel, ra_models.SimpleViewMixin):
+    """A VM-based LB the platform provisions itself."""
+
+    KIND = "core"
+
+    cpu = properties.property(ra_types.Integer(min_value=1, max_value=128), default=1)
+    ram = properties.property(
+        ra_types.Integer(min_value=512, max_value=1024**3), default=512
+    )
+    disk_size = properties.property(
+        ra_types.Integer(min_value=10, max_value=1024**3),
+        default=10,
+    )
+    nodes_number = properties.property(
+        ra_types.Integer(min_value=1, max_value=16), default=1
+    )
+
+
+class LBTypeCoreAgentKind(types_dynamic.AbstractKindModel, ra_models.SimpleViewMixin):
+    """An LB run by the core node's own agent."""
+
+    KIND = "core_agent"
+
+
+class LBTypeNodeKind(types_dynamic.AbstractKindModel, ra_models.SimpleViewMixin):
+    """An LB run by an existing compute node of the LB's project.
+
+    The node must ship nginx and the universal agent with LBCapabilityDriver.
+    """
+
+    KIND = "node"
+
+    node = properties.property(ra_types.UUID(), required=True)
+
+
+class LB(
+    ra_models.ModelWithRequiredUUID,
+    ra_models.ModelWithProject,
+    ra_models.ModelWithNameDesc,
+    ra_models.ModelWithTimestamp,
+    ua_models.TargetResourceKindAwareMixin,
+):
+    """Infra view of a Core load balancer.
+
+    Created against Core's ``/v1/network/lb/``. Vhosts, routes and backend
+    pools are separate resources nested under it.
+    """
+
+    __init_resource_status__ = pc.InstanceStatus.NEW.value
+
+    status = properties.property(
+        ra_types.Enum([s.value for s in pc.InstanceStatus]),
+    )
+    type = properties.property(
+        types_dynamic.KindModelSelectorType(
+            types_dynamic.KindModelType(LBTypeCoreKind),
+            types_dynamic.KindModelType(LBTypeCoreAgentKind),
+            types_dynamic.KindModelType(LBTypeNodeKind),
+        ),
+        default=LBTypeCoreKind,
+        required=True,
+    )
+    ipsv4 = properties.property(
+        ra_types.TypedList(ra_types.String(max_length=15)),
+        default=list,
+    )
+
+    @classmethod
+    def get_resource_kind(cls) -> str:
+        """Return the resource kind."""
+        return "lb"
+
+    def get_resource_target_fields(self) -> tp.Collection[str]:
+        """Return the collection of target fields."""
+        return frozenset(
+            (
+                "uuid",
+                "name",
+                "type",
+                "project_id",
+            )
+        )
+
+
+class LBVhost(
+    ra_models.ModelWithRequiredUUID,
+    ra_models.ModelWithProject,
+    ra_models.ModelWithNameDesc,
+    ra_models.ModelWithTimestamp,
+    ua_models.TargetResourceKindAwareMixin,
+):
+    """Infra view of a Core LB vhost.
+
+    Created against Core's ``/v1/network/lb/{lb}/vhosts/``; ``lb`` only
+    addresses the collection and is never sent in the body.
+    """
+
+    __init_resource_status__ = pc.InstanceStatus.NEW.value
+
+    lb = properties.property(ra_types.UUID(), required=True)
+    status = properties.property(
+        ra_types.Enum([s.value for s in pc.InstanceStatus]),
+    )
+    # Read-only in Core: a vhost with another protocol needs a new uuid, an
+    # update of this field is refused and never converges.
+    protocol = properties.property(
+        ra_types.Enum(("http", "https", "tcp", "udp")), default="http"
+    )
+    port = properties.property(
+        ra_types.Integer(min_value=80, max_value=65535), default=80
+    )
+    domains = properties.property(
+        ra_types.AllowNone(
+            ra_types.TypedList(ra_types.String(min_length=1, max_length=255))
+        ),
+        default=None,
+    )
+    # {kind: "raw", crt, key}
+    cert = properties.property(ra_types.AllowNone(ra_types.Dict()), default=None)
+    # [{kind: "ssh_forward", host, port, user, private_key}]
+    external_sources = properties.property(ra_types.List(), default=list)
+    proxy_protocol_from = properties.property(
+        ra_types.AllowNone(ra_types.String(max_length=64)), default=None
+    )
+
+    @classmethod
+    def get_resource_kind(cls) -> str:
+        """Return the resource kind."""
+        return "lb_vhost"
+
+    def get_resource_target_fields(self) -> tp.Collection[str]:
+        """Return the collection of target fields."""
+        return frozenset(
+            (
+                "uuid",
+                "name",
+                "lb",
+                "protocol",
+                "port",
+                "domains",
+                "cert",
+                "external_sources",
+                "proxy_protocol_from",
+                "project_id",
+            )
+        )
+
+
+class LBVhostRoute(
+    ra_models.ModelWithRequiredUUID,
+    ra_models.ModelWithProject,
+    ra_models.ModelWithNameDesc,
+    ra_models.ModelWithTimestamp,
+    ua_models.TargetResourceKindAwareMixin,
+):
+    """Infra view of a Core LB vhost route.
+
+    Created against Core's ``/v1/network/lb/{lb}/vhosts/{vhost}/routes/``;
+    ``lb`` and ``vhost`` only address the collection.
+    """
+
+    __init_resource_status__ = pc.InstanceStatus.NEW.value
+
+    lb = properties.property(ra_types.UUID(), required=True)
+    vhost = properties.property(ra_types.UUID(), required=True)
+    status = properties.property(
+        ra_types.Enum([s.value for s in pc.InstanceStatus]),
+    )
+    # {kind: "prefix"|"exact"|"regex"|"raw", value, actions, modifiers}
+    condition = properties.property(ra_types.Dict(), required=True)
+
+    @classmethod
+    def get_resource_kind(cls) -> str:
+        """Return the resource kind."""
+        return "lb_vhost_route"
+
+    def get_resource_target_fields(self) -> tp.Collection[str]:
+        """Return the collection of target fields."""
+        return frozenset(
+            (
+                "uuid",
+                "name",
+                "lb",
+                "vhost",
+                "condition",
+                "project_id",
+            )
+        )
+
+
+class LBBackendPool(
+    ra_models.ModelWithRequiredUUID,
+    ra_models.ModelWithProject,
+    ra_models.ModelWithNameDesc,
+    ra_models.ModelWithTimestamp,
+    ua_models.TargetResourceKindAwareMixin,
+):
+    """Infra view of a Core LB backend pool.
+
+    Created against Core's ``/v1/network/lb/{lb}/backend_pools/``; ``lb``
+    only addresses the collection. Routes reference it by uuid in
+    ``backend`` actions and ``auth_request`` modifiers.
+    """
+
+    __init_resource_status__ = pc.InstanceStatus.NEW.value
+
+    lb = properties.property(ra_types.UUID(), required=True)
+    status = properties.property(
+        ra_types.Enum([s.value for s in pc.InstanceStatus]),
+    )
+    # [{kind: "host", host, port, weight}]
+    endpoints = properties.property(ra_types.List(), required=True)
+    balance = properties.property(ra_types.Enum(("roundrobin",)), default="roundrobin")
+
+    @classmethod
+    def get_resource_kind(cls) -> str:
+        """Return the resource kind."""
+        return "lb_backendpool"
+
+    def get_resource_target_fields(self) -> tp.Collection[str]:
+        """Return the collection of target fields."""
+        return frozenset(
+            (
+                "uuid",
+                "name",
+                "lb",
+                "endpoints",
+                "balance",
+                "project_id",
+            )
+        )
+
+
 class Profile(
     ua_models.TargetResourceKindAwareMixin,
     ra_models.ModelWithRequiredUUID,
