@@ -103,3 +103,51 @@ def test_storage_singleton_persist_overwrite(tmp_path):
     storage.load()
 
     assert storage == new_data
+
+
+def _record_durability_calls(calls):
+    real_fsync, real_replace = os.fsync, os.replace
+
+    def fsync(fd):
+        calls.append(("fsync", os.path.basename(os.readlink(f"/proc/self/fd/{fd}"))))
+        real_fsync(fd)
+
+    def replace(src, dst):
+        calls.append(("replace", os.path.basename(dst)))
+        real_replace(src, dst)
+
+    return patch("os.fsync", fsync), patch("os.replace", replace)
+
+
+def test_storage_persist_syncs_data_before_rename(tmp_path):
+    meta_file = tmp_path / "durable_meta.json"
+    storage = storage_common.JsonFileStorageSingleton(meta_file)
+    storage["key"] = "value"
+
+    calls = []
+    fsync_patch, replace_patch = _record_durability_calls(calls)
+    with fsync_patch, replace_patch:
+        storage.persist()
+
+    assert calls == [
+        ("fsync", "durable_meta.tmp"),
+        ("replace", "durable_meta.json"),
+    ]
+    assert json.loads(meta_file.read_text()) == {"key": "value"}
+
+
+def test_payload_save_syncs_data_before_rename(tmp_path):
+    from gcl_sdk.agents.universal.dm import models
+
+    payload_file = tmp_path / "payload.json"
+
+    calls = []
+    fsync_patch, replace_patch = _record_durability_calls(calls)
+    with fsync_patch, replace_patch:
+        models.Payload.empty().save(str(payload_file))
+
+    assert calls == [
+        ("fsync", "payload.json.tmp"),
+        ("replace", "payload.json"),
+    ]
+    assert models.Payload.load(str(payload_file)).hash is not None
