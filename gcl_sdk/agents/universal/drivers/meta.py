@@ -23,6 +23,7 @@ from restalchemy.dm import models as ra_models
 from restalchemy.dm import properties
 from restalchemy.dm import types
 
+from gcl_sdk.agents.universal import utils
 from gcl_sdk.agents.universal.dm import models
 from gcl_sdk.agents.universal.drivers import base
 from gcl_sdk.agents.universal.drivers import exceptions as driver_exc
@@ -37,8 +38,9 @@ class MetaDataPlaneModel(ra_models.ModelWithRequiredUUID, models.ResourceMixin):
     Child models should implement methods to work with data plane.
     """
 
-    # Store the resource target fields
-    target_fields = properties.property(types.TypedList(types.String()), default=list)
+    # Store the resource target fields: the key skeleton of the target
+    # value (`utils.value_shape`), or a list of names in older meta files.
+    target_fields = properties.property(types.AnySimpleType(), default=list)
 
     @classmethod
     def from_ua_resource(cls, resource: models.Resource) -> MetaDataPlaneModel:
@@ -64,11 +66,14 @@ class MetaDataPlaneModel(ra_models.ModelWithRequiredUUID, models.ResourceMixin):
         # warning is the rare half of the same split, so it costs nothing to
         # collect and is only sorted when there is something to say.
         known = set(cls.properties.properties)
-        target_fields = []
+        # The shape, not just the names, so the nested fields the data plane
+        # fills in are dropped from the hash as well -- as the direct driver
+        # does.
+        target_fields = {}
         unknown = []
-        for name in resource.value:
+        for name, value in resource.value.items():
             if name in known:
-                target_fields.append(name)
+                target_fields[name] = utils.value_shape(value)
             else:
                 unknown.append(name)
         if unknown:
@@ -84,8 +89,8 @@ class MetaDataPlaneModel(ra_models.ModelWithRequiredUUID, models.ResourceMixin):
             skip_unknown_fields=True, target_fields=target_fields, **resource.value
         )
 
-    def get_resource_target_fields(self) -> list[str]:
-        """Return the list of target fields.
+    def get_resource_target_fields(self) -> models.TargetFields:
+        """Return the target fields.
 
         Refer to the Resource model for more details about target fields.
         """
