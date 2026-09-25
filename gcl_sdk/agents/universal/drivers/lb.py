@@ -20,6 +20,7 @@ import glob
 import logging
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import uuid
@@ -70,6 +71,10 @@ ADD_HEADERS_MAPPING = {
         )
     ),
 }
+AUTH_LOCATION_PREFIX = "/_exordos_auth_"
+# These values are rendered unquoted, so only a safe subset is accepted.
+DAV_METHODS = frozenset({"PUT", "DELETE", "MKCOL", "COPY", "MOVE"})
+SAFE_URI_PATH = re.compile(r"^/[A-Za-z0-9._~/-]*$")
 DOWNLOAD_DIR = "/var/www/gc_downloaded/"
 DOWNLOAD_DIR_TMP = "/var/www/gc_downloaded_tmp/"
 
@@ -250,9 +255,9 @@ class LB(lb_models.LB, meta.MetaDataPlaneModel):
             pools.update(view.get("backend_pools") or {})
         return pools
 
-    def _gen_backends(self, proto_lvl):
+    def _gen_backends(self, pools, proto_lvl):
         upstreams = []
-        for pid, pool in self._agg_pools().items():
+        for pid, pool in pools.items():
             servers = "\n    ".join(
                 f"server {e['host']}:{e['port']} weight={e['weight']};"
                 for e in pool["endpoints"]
@@ -267,6 +272,46 @@ class LB(lb_models.LB, meta.MetaDataPlaneModel):
             }}
             """)
         return upstreams
+
+    @staticmethod
+    def _route_key(vhost, route) -> str:
+        return str(
+            uuid.uuid5(
+                uuid.NAMESPACE_URL, f"{vhost['uuid']}{route['kind']}{route['value']}"
+            )
+        )
+
+    @staticmethod
+    def _safe_uri_path(value: str) -> str:
+        if not SAFE_URI_PATH.match(value):
+            raise ValueError(f"Unsafe URI path: {value!r}")
+        return value
+
+    def _auth_location(self, vhost, route, modifier) -> str:
+        # The route key keeps locations unique when routes share a prefix.
+        prefix = modifier.get("location_prefix") or AUTH_LOCATION_PREFIX
+        return f"{self._safe_uri_path(prefix)}{self._route_key(vhost, route)}"
+
+    def _gen_auth_location(self, vhost, route, modifier) -> str:
+        # Internal subrequest target for `auth_request`: the backend decides
+        # by status code (2xx allows, 401/403 denies) and never gets the body.
+        return f"""
+location = {self._auth_location(vhost, route, modifier)} {{
+    internal;
+    proxy_pass http://{uuid.UUID(str(modifier["pool"]))}{self._safe_uri_path(modifier["path"])};
+    proxy_pass_request_body off;
+    proxy_set_header Content-Length "";
+    proxy_set_header X-Original-Method $request_method;
+    proxy_set_header X-Original-URI $request_uri;
+    proxy_set_header X-Original-Addr $remote_addr;
+}}"""
+
+    @staticmethod
+    def _check_dav_methods(route):
+        for a in route["actions"]:
+            unknown = set(a.get("dav_methods") or ()) - DAV_METHODS
+            if unknown:
+                raise ValueError(f"Unsupported dav_methods: {unknown}")
 
     def _gen_modifiers(self, vhost, route, modifiers):
         res = []
@@ -290,9 +335,15 @@ class LB(lb_models.LB, meta.MetaDataPlaneModel):
                 reg = m["regex"].replace('"', '\\"')
                 repl = m["replacement"].replace('"', '\\"')
                 res.append(f'rewrite "{reg}" "{repl}" break;')
+            elif m["kind"] == "auth_request":
+                res.append(f"auth_request {self._auth_location(vhost, route, m)};")
+            else:
+                # Dropping an unknown modifier may drop a security control
+                # (e.g. auth_request), so refuse to render instead.
+                raise ValueError(f"Unknown LB modifier kind: {m['kind']!r}")
         return res
 
-    def _gen_vhosts(self):
+    def _gen_vhosts(self, agg_vhosts):
         vhosts_l4 = []
         vhosts_l7 = []
         ext_sources = {}
@@ -300,7 +351,7 @@ class LB(lb_models.LB, meta.MetaDataPlaneModel):
         # catch-all ("_") vhosts aggregated the first (uuid-sorted, so
         # deterministic) wins instead of failing the whole nginx config.
         default_ports = set()
-        for v in self._agg_vhosts():
+        for v in agg_vhosts:
             if len(v["routes"]) == 0:
                 continue
             if v["proto"].startswith("http"):
@@ -335,8 +386,8 @@ proxy_pass {c["actions"][0]["pool"]};
 """
         return ""
 
-    def _gen_file_content_l4(self, vhosts) -> str:
-        backends = "\n".join(b for b in self._gen_backends(proto_lvl="l4"))
+    def _gen_file_content_l4(self, vhosts, pools) -> str:
+        backends = "\n".join(b for b in self._gen_backends(pools, proto_lvl="l4"))
         vhosts = "\n".join(v for v in vhosts)
         return f"""\
 stream {{
@@ -350,6 +401,28 @@ stream {{
         locations = [ROOT_LOCATION]
         for r in v["routes"].values():
             c = r["cond"]
+
+            try:
+                self._check_dav_methods(c)
+                mods = "\n    ".join(
+                    m for m in self._gen_modifiers(v, c, c["modifiers"])
+                )
+                auth_mods = [m for m in c["modifiers"] if m["kind"] == "auth_request"]
+                # nginx refuses a second auth_request in one location.
+                if len(auth_mods) > 1:
+                    raise ValueError("More than one auth_request modifier")
+                auth_locs = [self._gen_auth_location(v, c, m) for m in auth_mods]
+            except ValueError:
+                # Fail only this route closed; raising would stop the render
+                # of every LB sharing the dataplane.
+                # The default root location already denies everything.
+                LOG.exception("Refusing LB route %s %s", c["kind"], c["value"])
+                if c["value"] != "/":
+                    locations.append(f"""
+location {LOCATION_TYPE_MAPPING[c["kind"]]} {c["value"]} {{
+    return 403;
+}}""")
+                continue
 
             actions = []
             for a in c["actions"]:
@@ -369,20 +442,25 @@ return {a["code"]} {a["url"]}$request_uri;""")
                 elif a["kind"] == "local_dir":
                     actions.append(f"""\
 alias {os.path.join(a["path"], "")};""")
-                    if a.get("is_spa"):
+                    if a.get("dav_methods"):
+                        # try_files would divert writes to missing files
+                        # into the SPA fallback, so a writable dir is not a SPA.
+                        actions.append(f"dav_methods {' '.join(a['dav_methods'])};")
+                        actions.append("create_full_put_path on;")
+                        actions.append("dav_access user:rw group:r all:r;")
+                    elif a.get("is_spa"):
                         actions.append("try_files $uri $uri/ /index.html;")
                     break
                 elif a["kind"] == "local_dir_download":
                     actions.append(
                         f"""\
-alias {os.path.join(DOWNLOAD_DIR, str(uuid.uuid5(uuid.NAMESPACE_URL, f"{v['uuid']}{c['kind']}{c['value']}")), "")};"""
+alias {os.path.join(DOWNLOAD_DIR, self._route_key(v, c), "")};"""
                     )
                     if a.get("is_spa"):
                         actions.append("try_files $uri $uri/ /index.html;")
                     break
             # Upgrade + Connection headers must be inside location
             acts = "\n    ".join(a for a in actions)
-            mods = "\n    ".join(m for m in self._gen_modifiers(v, c, c["modifiers"]))
             loc = f"""
 location {LOCATION_TYPE_MAPPING[c["kind"]]} {c["value"]} {{
     {acts}
@@ -396,6 +474,7 @@ location {LOCATION_TYPE_MAPPING[c["kind"]]} {c["value"]} {{
                 locations[0] = loc
             else:
                 locations.append(loc)
+            locations.extend(auth_locs)
 
         part = (
             f"""\
@@ -446,8 +525,8 @@ map $http_upgrade $connection_upgrade {
 
 """
 
-    def _gen_file_content_l7(self, vhosts) -> str:
-        backends = "\n".join(b for b in self._gen_backends(proto_lvl="l7"))
+    def _gen_file_content_l7(self, vhosts, pools) -> str:
+        backends = "\n".join(b for b in self._gen_backends(pools, proto_lvl="l7"))
         vhosts = "\n".join(v for v in vhosts)
 
         return f"""\
@@ -546,12 +625,12 @@ map $http_upgrade $connection_upgrade {
         LOG.info("_download_url finish: %s %s", path, url)
         return True
 
-    def _get_target_paths(self):
+    def _get_target_paths(self, agg_vhosts):
         # Aggregated: the orphan-dir cleanup in _actualize_downloaded_dirs
         # removes anything outside this set, so it must span every LB
         # sharing the dataplane, not just self.
         target_paths = {}
-        for v in self._agg_vhosts():
+        for v in agg_vhosts:
             if len(v["routes"]) == 0:
                 continue
             if not v["proto"].startswith("http"):
@@ -561,18 +640,11 @@ map $http_upgrade $connection_upgrade {
                 for a in c["actions"]:
                     if a["kind"] != "local_dir_download":
                         continue
-                    target_paths[
-                        str(
-                            uuid.uuid5(
-                                uuid.NAMESPACE_URL,
-                                f"{v['uuid']}{c['kind']}{c['value']}",
-                            )
-                        )
-                    ] = a["url"]
+                    target_paths[self._route_key(v, c)] = a["url"]
         return target_paths
 
-    def _actualize_downloaded_dirs(self):
-        target_paths = self._get_target_paths()
+    def _actualize_downloaded_dirs(self, agg_vhosts):
+        target_paths = self._get_target_paths(agg_vhosts)
         target_paths_set = set(target_paths.keys())
         # Download new dirs/Update already existing with new link
         for p, u in target_paths.items():
@@ -596,8 +668,8 @@ map $http_upgrade $connection_upgrade {
         for d in actual_ondisk_dirs - target_paths_set:
             self._download_dirs_futures[d] = TPOOL.submit(self._clean_path, d)
 
-    def _validate_downloaded_dirs(self):
-        for p, u in self._get_target_paths().items():
+    def _validate_downloaded_dirs(self, agg_vhosts):
+        for p, u in self._get_target_paths(agg_vhosts).items():
             # If TMP dir exists - it's a signal that we didn't finish our job
             #  before (for ex. when url was updated)
             if (
@@ -609,6 +681,23 @@ map $http_upgrade $connection_upgrade {
                 return False
         return True
 
+    def _ensure_dav_dirs(self, agg_vhosts):
+        # nginx writes as www-data, so a writable dir must exist and be its.
+        for v in agg_vhosts:
+            if not v["proto"].startswith("http"):
+                continue
+            for r in v["routes"].values():
+                for a in r["cond"]["actions"]:
+                    if a["kind"] != "local_dir" or not a.get("dav_methods"):
+                        continue
+                    # A bad dir must not keep nginx from reloading for
+                    # every LB on the node; only its own route fails.
+                    try:
+                        os.makedirs(a["path"], mode=0o755, exist_ok=True)
+                        shutil.chown(a["path"], user=NGINX_USER, group=NGINX_GROUP)
+                    except OSError:
+                        LOG.exception("Cannot prepare dav dir %s", a["path"])
+
     def _reload_or_restart_nginx(self):
         try:
             subprocess.check_call(["systemctl", "reload", "nginx"])
@@ -616,18 +705,21 @@ map $http_upgrade $connection_upgrade {
             subprocess.check_call(["systemctl", "restart", "nginx"])
 
     def dump_to_dp(self) -> None:
-        vhosts_l4, vhosts_l7, ext_sources = self._gen_vhosts()
+        # One snapshot per cycle, so every step sees the same LB set.
+        agg_vhosts = self._agg_vhosts()
+        agg_pools = self._agg_pools()
+        vhosts_l4, vhosts_l7, ext_sources = self._gen_vhosts(agg_vhosts)
         with open(NGINX_L4_CONFIG_FILE, "w") as f:
-            f.write(self._gen_file_content_l4(vhosts_l4))
+            f.write(self._gen_file_content_l4(vhosts_l4, agg_pools))
 
         with open(NGINX_L7_CONFIG_FILE, "w") as f:
-            f.write(self._gen_file_content_l7(vhosts_l7))
+            f.write(self._gen_file_content_l7(vhosts_l7, agg_pools))
 
         # Aggregated: the not-in-use cleanup below removes any cert file
         # outside actual_keys, so certs of every LB sharing the dataplane
         # must be written/kept, not just self's.
         actual_keys = set()
-        for v in self._agg_vhosts():
+        for v in agg_vhosts:
             if v["proto"] != "https":
                 continue
             crt_name = f"{NGINX_SSL_DIR}{v['uuid']}_exordos.crt"
@@ -649,7 +741,8 @@ map $http_upgrade $connection_upgrade {
                 except OSError:
                     pass
 
-        self._actualize_downloaded_dirs()
+        self._actualize_downloaded_dirs(agg_vhosts)
+        self._ensure_dav_dirs(agg_vhosts)
 
         self._reload_or_restart_nginx()
 
@@ -707,10 +800,16 @@ map $http_upgrade $connection_upgrade {
         except subprocess.CalledProcessError:
             raise driver_exc.InvalidDataPlaneObjectError(obj={"uuid": str(self.uuid)})
 
-        vhosts_l4, vhosts_l7, ext_sources = self._gen_vhosts()
+        agg_vhosts = self._agg_vhosts()
+        agg_pools = self._agg_pools()
+        vhosts_l4, vhosts_l7, ext_sources = self._gen_vhosts(agg_vhosts)
         # Force file validation
-        self._validate_file(NGINX_L4_CONFIG_FILE, self._gen_file_content_l4(vhosts_l4))
-        self._validate_file(NGINX_L7_CONFIG_FILE, self._gen_file_content_l7(vhosts_l7))
+        self._validate_file(
+            NGINX_L4_CONFIG_FILE, self._gen_file_content_l4(vhosts_l4, agg_pools)
+        )
+        self._validate_file(
+            NGINX_L7_CONFIG_FILE, self._gen_file_content_l7(vhosts_l7, agg_pools)
+        )
         for v in self.vhosts:
             if v["proto"] == "https":
                 self._validate_file(
@@ -751,7 +850,7 @@ map $http_upgrade $connection_upgrade {
                 raise driver_exc.InvalidDataPlaneObjectError(
                     obj={"uuid": str(self.uuid)}
                 )
-        if not self._validate_downloaded_dirs():
+        if not self._validate_downloaded_dirs(agg_vhosts):
             raise driver_exc.InvalidDataPlaneObjectError(obj={"uuid": str(self.uuid)})
 
         for n, e in ext_sources.items():
