@@ -785,12 +785,13 @@ class ResourceMixin(models.SimpleViewMixin):
         """Get resource uuid."""
         return self.uuid
 
-    def get_resource_target_fields(self) -> tp.Collection[str]:
-        """Return the collection of target fields.
+    def get_resource_target_fields(self) -> TargetFields:
+        """Return the target fields.
 
         Refer to the Resource model for more details about target fields.
         Fields may be plain names or dot separated paths, e.g.
-        ``"setter.kind"``.
+        ``"setter.kind"``, or a mapping -- the key skeleton of the
+        target value (``utils.value_shape``).
         """
         return set()
 
@@ -804,10 +805,12 @@ class ResourceMixin(models.SimpleViewMixin):
         # Need to get only target fields with values to calculate hash
         target_fields = self.get_resource_target_fields()
 
-        if target_fields:
-            target_data = utils.extract_target_value(value, target_fields, strict=False)
-        else:
+        if not target_fields:
             target_data = value
+        elif isinstance(target_fields, tp.Mapping):
+            target_data = utils.project_onto(value, target_fields)
+        else:
+            target_data = utils.extract_target_value(value, target_fields, strict=False)
         return value, target_data
 
     def to_ua_resource(self, kind: str, extract_status: bool = True) -> Resource:
