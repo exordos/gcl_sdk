@@ -223,9 +223,12 @@ class Payload(models.Model, models.SimpleViewMixin):
 
         payload_data = self.dump_to_simple_view()
 
+        # Synced before the rename, like the storage of the agent
         tmp_file = f"{payload_path}.tmp"
         with open(tmp_file, "w", opener=common_utils.rw_owner_opener) as f:
             json.dump(payload_data, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
         os.replace(tmp_file, payload_path)
 
     @classmethod
