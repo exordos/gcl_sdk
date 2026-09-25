@@ -57,10 +57,14 @@ class JsonFileStorageSingleton(dict):
         # Create the directory if it doesn't exist
         os.makedirs(os.path.dirname(self._storage_path), exist_ok=True)
 
-        # Save the new data
+        # Save the new data. It's synced before the rename: otherwise a power
+        # loss may leave the renamed file without its data, full of zeros,
+        # and the agent can't start with it.
         tmp_file = self._storage_path.with_suffix(".tmp")
         with open(tmp_file, "w", opener=utils.rw_owner_opener) as f:
             json.dump(self, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
         os.replace(tmp_file, self._storage_path)
 
     @classmethod
