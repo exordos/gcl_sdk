@@ -410,3 +410,44 @@ def test_a_field_the_agent_lacks_is_named_because_it_will_not_settle(caplog):
         "settled"
     )
     assert "routes" in caplog.text, "the field that blocks convergence is not named"
+
+
+class SpecModel(DummyModel):
+    """A model whose data plane fills in a nested default."""
+
+    spec = properties.property(types.Dict(), default=dict)
+
+    def restore_from_dp(self, coordinator=None) -> None:
+        super().restore_from_dp(coordinator)
+        self.spec = {**self.spec, "weight": 1}
+
+
+class _SpecDriver(meta.MetaFileStorageAgentDriver):
+    __model_map__ = {"dummy": SpecModel}
+
+
+def test_a_nested_default_the_data_plane_fills_in_settles(tmp_path):
+    uuid = sys_uuid.uuid4()
+    target = _make_resource(
+        "dummy", uuid, {"uuid": str(uuid), "spec": {"kind": "foo"}}
+    )
+    drv = _SpecDriver(meta_file=str(tmp_path / "meta.json"))
+    drv.create(target)
+
+    (actual,) = drv.list("dummy")
+
+    assert actual.value["spec"] == {"kind": "foo", "weight": 1}
+    assert actual.hash == target.hash
+
+
+def test_target_fields_of_an_older_meta_file_are_still_read(tmp_path):
+    uuid = sys_uuid.uuid4()
+    target = _make_resource("dummy", uuid, {"uuid": str(uuid), "foo": 7})
+    drv = _Driver(meta_file=str(tmp_path / "meta.json"))
+    drv.create(target)
+    # Meta files written before the shape stored a list of names
+    drv._storage["dummy"]["resources"][str(uuid)]["target_fields"] = ["uuid", "foo"]
+
+    (actual,) = drv.list("dummy")
+
+    assert actual.hash == target.hash
