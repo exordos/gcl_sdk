@@ -86,9 +86,10 @@ class RestCoreCapabilityDriver(direct.DirectAgentDriver):
         project_id: sys_uuid.UUID | None = None,
         agent_work_dir: str = c.WORK_DIR,
         use_project_scope: bool = False,
+        http_client: bazooka.Client | None = None,
         **collection_map,
     ):
-        http = bazooka.Client()
+        http = http_client or bazooka.Client()
         auth_kwargs = {}
         if use_project_scope:
             auth_kwargs["scope"] = base.CoreIamAuthenticator.project_scope(project_id)
@@ -185,11 +186,12 @@ class SecretCapabilityDriver(direct.DirectAgentDriver):
         use_project_scope: bool = False,
         target_fields_filename: str = SECRET_TARGET_FIELDS_FILENAME,
         transformer_map: dict[str, direct.ResourceTransformer] | None = None,
+        http_client: bazooka.Client | None = None,
         **model_specs_raw,
     ):
         model_specs = self._parse_model_specs(model_specs_raw)
 
-        http = bazooka.Client()
+        http = http_client or bazooka.Client()
         auth_kwargs = {}
         if use_project_scope:
             if project_id is None:
