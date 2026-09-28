@@ -351,6 +351,7 @@ location = {self._auth_location(vhost, route, modifier)} {{
         # catch-all ("_") vhosts aggregated the first (uuid-sorted, so
         # deterministic) wins instead of failing the whole nginx config.
         default_ports = set()
+        l7_ports = set()
         for v in agg_vhosts:
             if len(v["routes"]) == 0:
                 continue
@@ -359,6 +360,7 @@ location = {self._auth_location(vhost, route, modifier)} {{
                 if is_default:
                     default_ports.add(v["port"])
                 vhosts_l7.append(self._gen_vhost_l7(v, is_default))
+                l7_ports.add(v["port"])
                 proto = "tcp"
             else:
                 vhosts_l4.append(self._gen_vhost_l4(v))
@@ -370,7 +372,25 @@ location = {self._auth_location(vhost, route, modifier)} {{
                 e["proxy_proto_from"] = v.get("proxy_proto_from")
                 ext_sources[f"{e['host']}_{e['lport']}_{e['lproto']}"] = e
 
+        # Without an explicit default_server nginx hands every unmatched
+        # Host/SNI to the first vhost of the port, i.e. to its backend.
+        for port in sorted(l7_ports - default_ports):
+            vhosts_l7.append(self._gen_fallback_l7(port))
+
         return vhosts_l4, vhosts_l7, ext_sources
+
+    @staticmethod
+    def _gen_fallback_l7(port):
+        # ssl, http2 and proxy_protocol are per socket, so the vhosts' own
+        # listen lines already set them. ssl_reject_handshake lets an ssl
+        # socket's default go without a certificate; on plain http it is inert.
+        return f"""\
+server {{
+listen 0.0.0.0:{port} default_server;
+ssl_reject_handshake on;
+return 444;
+}}
+"""
 
     def _gen_vhost_l4(self, v):
         for r in v["routes"].values():
