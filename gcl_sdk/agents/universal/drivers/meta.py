@@ -286,9 +286,7 @@ class MetaFileStorageAgentDriver(base.AbstractCapabilityDriver):
                 )
             except driver_exc.ResourceNotFound:
                 LOG.error(
-                    "Resource %s %s (name=%s) is in the meta file %s but not "
-                    "on the data plane. It is recreated if the control plane "
-                    "still targets it, otherwise the meta entry is stale.",
+                    "Resource %s %s (name=%s) from %s not found on the data plane",
                     capability,
                     obj.uuid,
                     getattr(obj, "name", None),
@@ -554,9 +552,7 @@ class MetaCoordinatorAgentDriver(MetaFileStorageAgentDriver):
                 self._coordinator_storage[capability][obj.uuid] = obj
             except driver_exc.ResourceNotFound:
                 LOG.error(
-                    "Resource %s %s (name=%s) is in the meta file %s but not "
-                    "on the data plane. It is recreated if the control plane "
-                    "still targets it, otherwise the meta entry is stale.",
+                    "Resource %s %s (name=%s) from %s not found on the data plane",
                     capability,
                     obj.uuid,
                     getattr(obj, "name", None),
