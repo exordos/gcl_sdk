@@ -287,13 +287,17 @@ class MetaFileStorageAgentDriver(base.AbstractCapabilityDriver):
             except driver_exc.ResourceNotFound:
                 LOG.error(
                     "Resource %s %s (name=%s) is in the meta file %s but not "
-                    "on the data plane. It is recreated if the control plane "
-                    "still targets it, otherwise the meta entry is stale.",
+                    "on the data plane. Dropping the meta entry, the agent "
+                    "recreates the resource if the control plane still "
+                    "targets it.",
                     capability,
                     obj.uuid,
                     getattr(obj, "name", None),
                     self._meta_file,
                 )
+                # `create` doesn't need the entry, so dropping it only
+                # affects orphans the control plane no longer targets.
+                self._delete_from_meta(capability, obj.uuid)
 
         return [obj.to_ua_resource(capability) for obj in dp_objects]
 
@@ -555,13 +559,17 @@ class MetaCoordinatorAgentDriver(MetaFileStorageAgentDriver):
             except driver_exc.ResourceNotFound:
                 LOG.error(
                     "Resource %s %s (name=%s) is in the meta file %s but not "
-                    "on the data plane. It is recreated if the control plane "
-                    "still targets it, otherwise the meta entry is stale.",
+                    "on the data plane. Dropping the meta entry, the agent "
+                    "recreates the resource if the control plane still "
+                    "targets it.",
                     capability,
                     obj.uuid,
                     getattr(obj, "name", None),
                     self._meta_file,
                 )
+                # `create` doesn't need the entry, so dropping it only
+                # affects orphans the control plane no longer targets.
+                self._delete_from_meta(capability, obj.uuid)
 
         return [obj.to_ua_resource(capability) for obj in dp_objects]
 

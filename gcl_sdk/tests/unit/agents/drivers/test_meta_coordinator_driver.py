@@ -151,3 +151,23 @@ class TestMetaCoordinatorDriver:
         assert drv.list("dummy") == []
         assert f"Resource dummy {uuid}" in caplog.text
         assert str(meta_file) in caplog.text
+
+    def test_list_drops_meta_entry_missing_on_dp(self, tmp_path):
+        meta_file = tmp_path / "meta.json"
+        drv = _CoordinatorDriver(meta_file=str(meta_file))
+        drv.start()
+
+        uuid = sys_uuid.uuid4()
+        res = _make_resource(
+            "dummy",
+            uuid=uuid,
+            value={"uuid": str(uuid), "foo": 1, "missing_dp": True},
+        )
+        drv.create(res)
+
+        drv.list("dummy")
+        assert str(uuid) not in drv._storage["dummy"]["resources"]
+
+        # The control plane still targets it, so the agent recreates it
+        drv.create(res)
+        assert str(uuid) in drv._storage["dummy"]["resources"]

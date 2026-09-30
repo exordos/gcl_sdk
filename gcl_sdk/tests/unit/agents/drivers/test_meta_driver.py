@@ -194,6 +194,10 @@ class TestMetaDriver:
         assert resources[0].uuid == uuid1
         assert resources[0].kind == "dummy"
 
+        # The orphan entry is dropped from the meta file
+        assert str(uuid1) in drv._storage["dummy"]["resources"]
+        assert str(uuid2) not in drv._storage["dummy"]["resources"]
+
     def test_list_skips_invalid_dp_objects(self, tmp_path):
         meta_file = tmp_path / "meta.json"
         drv = _Driver(meta_file=str(meta_file))
