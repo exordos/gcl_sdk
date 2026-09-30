@@ -599,3 +599,72 @@ class TestReadFailureProtection:
         result = agent._cap_driver_iteration(driver, payload, collected_payload)
 
         assert result == set()
+
+
+class TestTargetFieldsChange:
+    """New target fields change a resource hash while its value stays.
+
+    The data plane already holds the value, so the full hash is the same
+    and only the hash tells the Status API copy is outdated. It must be
+    updated anyway, otherwise the target and actual hashes never match.
+    """
+
+    def _resources(self) -> tuple[models.Resource, models.Resource]:
+        uuid = sys_uuid.uuid4()
+        value = {"uuid": str(uuid), "name": "test", "project_id": "p1"}
+        stale = models.Resource.from_value(
+            value, KIND, target_fields=frozenset(("uuid", "name"))
+        )
+        fresh = models.Resource.from_value(
+            value, KIND, target_fields=frozenset(value.keys())
+        )
+        assert stale.full_hash == fresh.full_hash
+        assert stale.hash != fresh.hash
+        return stale, fresh
+
+    def test_payload_hash_changes_with_fact_hash(self):
+        stale, fresh = self._resources()
+        stale_payload = models.Payload.empty()
+        stale_payload.add_facts_resources([stale])
+        stale_payload.calculate_hash()
+        fresh_payload = models.Payload.empty()
+        fresh_payload.add_facts_resources([fresh])
+        fresh_payload.calculate_hash()
+
+        assert stale_payload != fresh_payload
+
+    def test_actualize_facts_updates_when_only_hash_differs(self):
+        stale, fresh = self._resources()
+        target_facts = {KIND: {"resources": [fresh.dump_to_simple_view()]}}
+        actual_facts = {KIND: {"resources": [stale.dump_to_simple_view()]}}
+
+        orch = MagicMock()
+        agent = _make_service(orch_client=orch)
+
+        agent._actualize_facts(
+            target_facts, actual_facts, processed_capabilities={KIND}
+        )
+
+        orch.resources_update.assert_called_once()
+        assert orch.resources_update.call_args.kwargs["hash"] == fresh.hash
+
+    def test_iteration_reports_new_hash_of_unchanged_value(self):
+        stale, fresh = self._resources()
+        payload = models.Payload.empty()
+        payload.add_caps_resources([fresh])
+        payload.add_facts_resources([stale])
+        payload.calculate_hash()
+
+        driver = MagicMock()
+        driver.get_capabilities.return_value = [KIND]
+        driver.list.return_value = [fresh]
+
+        orch = MagicMock()
+        orch.agents_get_payload.return_value = payload
+
+        agent = _make_service(caps_drivers=[driver], orch_client=orch)
+        agent._iteration()
+
+        driver.update.assert_not_called()
+        orch.resources_update.assert_called_once()
+        assert orch.resources_update.call_args.kwargs["hash"] == fresh.hash
