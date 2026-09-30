@@ -89,6 +89,30 @@ class TestMetaCoordinatorDriver:
         assert "delete_from_dp" in log
         assert str(res.uuid) not in drv._storage["dummy"]["resources"]
 
+    def test_list_lost_and_delete_forget_resource_missing_on_dp(self, tmp_path):
+        meta_file = tmp_path / "meta.json"
+        drv = _CoordinatorDriver(meta_file=str(meta_file))
+        drv.start()
+
+        uuid = sys_uuid.uuid4()
+        lost = _make_resource(
+            "dummy",
+            uuid=uuid,
+            value={"uuid": str(uuid), "foo": 1, "missing_dp": True},
+        )
+        present = _make_resource("dummy")
+        drv.create(lost)
+        drv.create(present)
+
+        # list() is read-only: the lost entry stays in the meta file
+        assert drv.list("dummy") == [present]
+        assert drv.list_lost("dummy") == [lost]
+        assert str(uuid) in drv._storage["dummy"]["resources"]
+
+        # Deleting it doesn't fail although it's gone from the data plane
+        drv.delete(lost)
+        assert str(uuid) not in drv._storage["dummy"]["resources"]
+
     def test_delete_never_created_does_not_raise_or_crash(self, tmp_path):
         meta_file = tmp_path / "meta.json"
         drv = _CoordinatorDriver(meta_file=str(meta_file))
@@ -135,28 +159,4 @@ class TestMetaCoordinatorDriver:
         # object as invalid; the meta entry must still be cleaned up.
         drv.delete(res)
 
-        assert str(uuid) not in drv._storage["dummy"]["resources"]
-
-    def test_list_lost_and_delete_forget_resource_missing_on_dp(self, tmp_path):
-        meta_file = tmp_path / "meta.json"
-        drv = _CoordinatorDriver(meta_file=str(meta_file))
-        drv.start()
-
-        uuid = sys_uuid.uuid4()
-        lost = _make_resource(
-            "dummy",
-            uuid=uuid,
-            value={"uuid": str(uuid), "foo": 1, "missing_dp": True},
-        )
-        present = _make_resource("dummy")
-        drv.create(lost)
-        drv.create(present)
-
-        # list() is read-only: the lost entry stays in the meta file
-        assert drv.list("dummy") == [present]
-        assert drv.list_lost("dummy") == [lost]
-        assert str(uuid) in drv._storage["dummy"]["resources"]
-
-        # Deleting it doesn't fail although it's gone from the data plane
-        drv.delete(lost)
         assert str(uuid) not in drv._storage["dummy"]["resources"]
