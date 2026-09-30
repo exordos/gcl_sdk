@@ -41,6 +41,7 @@ class DummyCoordinatorModel(meta.MetaCoordinatorDataPlaneModel):
 
     foo = properties.property(types.Integer(), default=0)
     invalid_dp = properties.property(types.Boolean(), default=False)
+    missing_dp = properties.property(types.Boolean(), default=False)
 
     def get_meta_model_fields(self) -> set[str] | None:
         return None
@@ -54,6 +55,8 @@ class DummyCoordinatorModel(meta.MetaCoordinatorDataPlaneModel):
     def restore_from_dp(self, **kwargs) -> None:
         if getattr(self, "invalid_dp", False):
             raise driver_exc.InvalidDataPlaneObjectError(obj={"uuid": str(self.uuid)})
+        if self.missing_dp:
+            raise driver_exc.ResourceNotFound(resource=self)
         self._log("restore_from_dp")
 
     def delete_from_dp(self, **kwargs) -> None:
@@ -131,3 +134,20 @@ class TestMetaCoordinatorDriver:
         drv.delete(res)
 
         assert str(uuid) not in drv._storage["dummy"]["resources"]
+
+    def test_list_logs_kind_and_meta_file_for_missing_dp_object(self, tmp_path, caplog):
+        meta_file = tmp_path / "meta.json"
+        drv = _CoordinatorDriver(meta_file=str(meta_file))
+        drv.start()
+
+        uuid = sys_uuid.uuid4()
+        res = _make_resource(
+            "dummy",
+            uuid=uuid,
+            value={"uuid": str(uuid), "foo": 1, "missing_dp": True},
+        )
+        drv.create(res)
+
+        assert drv.list("dummy") == []
+        assert f"Resource dummy {uuid}" in caplog.text
+        assert str(meta_file) in caplog.text
