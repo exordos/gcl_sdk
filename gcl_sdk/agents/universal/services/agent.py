@@ -228,6 +228,20 @@ class UniversalAgentService(looper_basic.BasicService):
                     "Error deleting resource %s with uuid (%s)", capability, r.uuid
                 )
 
+        # Forget resources lost on the data plane that the control plane
+        # no longer targets. Targeted ones are recreated above.
+        for r in driver.list_lost(capability):
+            if r in target_resources:
+                continue
+            try:
+                self._delete_resource(driver, r)
+            except Exception:
+                LOG.exception(
+                    "Error deleting lost resource %s with uuid (%s)",
+                    capability,
+                    r.uuid,
+                )
+
         for r in target_resources.keys() & actual_resources.keys():
             # set does not guarantee which instance will be given on
             # intersection therefore get actual and target resources

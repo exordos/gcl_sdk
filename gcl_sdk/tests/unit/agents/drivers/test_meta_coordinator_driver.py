@@ -41,6 +41,7 @@ class DummyCoordinatorModel(meta.MetaCoordinatorDataPlaneModel):
 
     foo = properties.property(types.Integer(), default=0)
     invalid_dp = properties.property(types.Boolean(), default=False)
+    missing_dp = properties.property(types.Boolean(), default=False)
 
     def get_meta_model_fields(self) -> set[str] | None:
         return None
@@ -54,9 +55,13 @@ class DummyCoordinatorModel(meta.MetaCoordinatorDataPlaneModel):
     def restore_from_dp(self, **kwargs) -> None:
         if getattr(self, "invalid_dp", False):
             raise driver_exc.InvalidDataPlaneObjectError(obj={"uuid": str(self.uuid)})
+        if self.missing_dp:
+            raise driver_exc.ResourceNotFound(resource=self)
         self._log("restore_from_dp")
 
     def delete_from_dp(self, **kwargs) -> None:
+        if self.missing_dp:
+            raise driver_exc.ResourceNotFound(resource=self)
         self._log("delete_from_dp")
 
     def update_on_dp(self, **kwargs) -> None:
@@ -130,4 +135,28 @@ class TestMetaCoordinatorDriver:
         # object as invalid; the meta entry must still be cleaned up.
         drv.delete(res)
 
+        assert str(uuid) not in drv._storage["dummy"]["resources"]
+
+    def test_list_lost_and_delete_forget_resource_missing_on_dp(self, tmp_path):
+        meta_file = tmp_path / "meta.json"
+        drv = _CoordinatorDriver(meta_file=str(meta_file))
+        drv.start()
+
+        uuid = sys_uuid.uuid4()
+        lost = _make_resource(
+            "dummy",
+            uuid=uuid,
+            value={"uuid": str(uuid), "foo": 1, "missing_dp": True},
+        )
+        present = _make_resource("dummy")
+        drv.create(lost)
+        drv.create(present)
+
+        # list() is read-only: the lost entry stays in the meta file
+        assert drv.list("dummy") == [present]
+        assert drv.list_lost("dummy") == [lost]
+        assert str(uuid) in drv._storage["dummy"]["resources"]
+
+        # Deleting it doesn't fail although it's gone from the data plane
+        drv.delete(lost)
         assert str(uuid) not in drv._storage["dummy"]["resources"]

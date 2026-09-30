@@ -191,6 +191,7 @@ class MetaFileStorageAgentDriver(base.AbstractCapabilityDriver):
         self._storage = storage_common.JsonFileStorageSingleton.get_instance(
             self._meta_file
         )
+        self._lost: dict[str, list[models.Resource]] = {}
 
         for cap_name, cap_model in self.__model_map__.items():
             # Check the model map is in the correct format
@@ -228,6 +229,9 @@ class MetaFileStorageAgentDriver(base.AbstractCapabilityDriver):
             LOG.warning("Missing meta storage item for %s(%s)", uuid, kind)
         else:
             LOG.debug("Deleted meta resource %s", uuid)
+
+    def list_lost(self, capability: str) -> list[models.Resource]:
+        return self._lost.get(capability, [])
 
     def _add_to_meta(self, capability: str, meta_object: MetaDataPlaneModel) -> None:
         """Add the resource from the meta file."""
@@ -275,7 +279,8 @@ class MetaFileStorageAgentDriver(base.AbstractCapabilityDriver):
             raise TypeError(f"The resource is not {self.__model_map__.keys()}")
 
         dp_objects = []
-        for obj in self._load_from_meta(capability):
+        meta_objects = self._load_from_meta(capability)
+        for obj in meta_objects:
             try:
                 obj.restore_from_dp()
                 dp_objects.append(obj)
@@ -291,6 +296,13 @@ class MetaFileStorageAgentDriver(base.AbstractCapabilityDriver):
                 )
             except driver_exc.ResourceNotFound:
                 LOG.error("Resource %s %s not found on the data plane", capability, obj.uuid)
+
+        dp_uuids = {obj.uuid for obj in dp_objects}
+        self._lost[capability] = [
+            obj.to_ua_resource(capability)
+            for obj in meta_objects
+            if obj.uuid not in dp_uuids
+        ]
 
         return [obj.to_ua_resource(capability) for obj in dp_objects]
 
@@ -383,7 +395,14 @@ class MetaFileStorageAgentDriver(base.AbstractCapabilityDriver):
         cap_model = self.__model_map__[resource.kind]
         meta_obj = cap_model.from_ua_resource(resource)
 
-        meta_obj.delete_from_dp()
+        try:
+            meta_obj.delete_from_dp()
+        except driver_exc.ResourceNotFound:
+            LOG.warning(
+                "Resource %s %s is already gone from the data plane",
+                resource.kind,
+                resource.uuid,
+            )
         self._delete_from_meta(resource.kind, resource.uuid)
         LOG.debug("Deleted %s resource: %s", resource.kind, resource.uuid)
 
@@ -539,7 +558,8 @@ class MetaCoordinatorAgentDriver(MetaFileStorageAgentDriver):
         requirements = self.__coordinator_map__.get(capability)
 
         dp_objects = []
-        for obj in self._load_from_meta(capability):
+        meta_objects = self._load_from_meta(capability)
+        for obj in meta_objects:
             # Detect which related entities pass for restoration
             deps = self._get_dependencies(capability, requirements, obj)
             try:
@@ -551,6 +571,13 @@ class MetaCoordinatorAgentDriver(MetaFileStorageAgentDriver):
                 self._coordinator_storage[capability][obj.uuid] = obj
             except driver_exc.ResourceNotFound:
                 LOG.error("Resource %s %s not found on the data plane", capability, obj.uuid)
+
+        dp_uuids = {obj.uuid for obj in dp_objects}
+        self._lost[capability] = [
+            obj.to_ua_resource(capability)
+            for obj in meta_objects
+            if obj.uuid not in dp_uuids
+        ]
 
         return [obj.to_ua_resource(capability) for obj in dp_objects]
 
@@ -658,7 +685,14 @@ class MetaCoordinatorAgentDriver(MetaFileStorageAgentDriver):
         # Detect which related entities pass for restoration
         deps = self._get_dependencies(resource.kind, requirements, meta_obj)
 
-        meta_obj.delete_from_dp(**deps)
+        try:
+            meta_obj.delete_from_dp(**deps)
+        except driver_exc.ResourceNotFound:
+            LOG.warning(
+                "Resource %s %s is already gone from the data plane",
+                resource.kind,
+                resource.uuid,
+            )
         self._delete_from_meta(resource.kind, resource.uuid)
 
         # Also remove the object from the coordinator storage
