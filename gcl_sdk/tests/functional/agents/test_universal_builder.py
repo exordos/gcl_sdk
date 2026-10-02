@@ -125,6 +125,26 @@ class TestUniversalBuilderService:
         svc = DummyBuilder(instance_model=conftest.DummyInstance)
         svc._iteration()
 
+    def test_boost_mode(self, dummy_instance_factory: tp.Callable):
+        dummy_instance_factory({"new": 1})
+
+        svc = DummyBuilder(instance_model=conftest.DummyInstance)
+        # Loop iterations are used because the boost iteration counter is
+        # consumed by the service loop (`_loop_iteration`).
+        svc._loop_iteration()
+
+        # The iteration has created a resource - the service is boosted
+        assert svc.is_boosted
+        assert svc.effective_iter_min_period == 0.5
+
+        # No work anymore - the boost expires after
+        # `boost_iterations` (5 by default) boosted iterations
+        for _ in range(4):
+            svc._loop_iteration()
+
+        assert not svc.is_boosted
+        assert svc.effective_iter_min_period == 3
+
     # No derivatives
 
     def test_create_new_instance(self, dummy_instance_factory: tp.Callable):
