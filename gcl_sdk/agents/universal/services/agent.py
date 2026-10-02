@@ -206,6 +206,7 @@ class UniversalAgentService(looper_basic.BasicService):
 
         # Create all new resources
         for r in target_resources.keys() - actual_resources.keys():
+            LOG.info("Creating resource %s %s", capability, r.uuid)
             try:
                 resource = self._create_resource(driver, r)
                 collected_resources.append(resource)
@@ -219,6 +220,7 @@ class UniversalAgentService(looper_basic.BasicService):
 
         # Delete outdated resources
         for r in actual_resources.keys() - target_resources.keys():
+            LOG.info("Deleting resource %s %s", capability, r.uuid)
             try:
                 self._delete_resource(driver, r)
             except Exception:
