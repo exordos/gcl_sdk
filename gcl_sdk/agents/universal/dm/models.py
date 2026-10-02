@@ -110,10 +110,14 @@ class Payload(models.Model, models.SimpleViewMixin):
             hash(cap_resource0.hash),
             hash(cap_resource1.hash),
             ...
-            hash(fact_resource0.full_hash),
-            hash(fact_resource1.full_hash),
+            hash(fact_resource0.hash, fact_resource0.full_hash),
+            hash(fact_resource1.hash, fact_resource1.full_hash),
             ...
         )
+
+    A fact contributes its `hash` too: the target fields of a capability
+    resource may change while its value stays the same, and then only
+    the `hash` of the fact tells the Status API copy is outdated.
 
     """
 
@@ -142,7 +146,7 @@ class Payload(models.Model, models.SimpleViewMixin):
             for resource in self._iter_resource_dicts(self.capabilities)
         ]
         facts_hashes = [
-            resource.get("full_hash", "")
+            f"{resource.get('hash', '')}:{resource.get('full_hash', '')}"
             for resource in self._iter_resource_dicts(self.facts)
         ]
         caps_hashes.sort()

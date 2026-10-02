@@ -312,6 +312,86 @@ class TestUniversalBuilderService:
 
         assert Builder.actualized
 
+    def test_actualize_status_when_only_hash_caught_up(
+        self, dummy_instance_factory: tp.Callable
+    ):
+        """New target fields change the hash of an unchanged value.
+
+        Once the agent reports the new hash, the full hashes of the pair
+        are equal but the target status is still outdated. The pair must
+        be actualized anyway, otherwise the target stays IN_PROGRESS.
+        """
+
+        class Builder(DummyBuilder):
+            actualized = False
+
+            def actualize_outdated_instance(
+                self,
+                current_instance,
+                actual_instance,
+            ) -> None:
+                self.__class__.actualized = True
+
+        instance = dummy_instance_factory({"existing": 1})[0]
+
+        conftest.DummyInstance.objects = mock.MagicMock()
+        conftest.DummyInstance.objects.get_all = mock.MagicMock(return_value=[instance])
+
+        target = ua_models.TargetResource.objects.get_one()
+        actual = ua_models.Resource.from_value(
+            value=instance.dump_to_simple_view(),
+            kind=target.kind,
+        )
+        actual.hash = target.hash
+        actual.status = "ACTIVE"
+        actual.save()
+
+        target.full_hash = actual.full_hash
+        target.status = "IN_PROGRESS"
+        target.update()
+
+        svc = Builder(instance_model=conftest.DummyInstance)
+        svc._iteration()
+
+        target = ua_models.TargetResource.objects.get_one()
+        assert target.status == "ACTIVE"
+        assert Builder.actualized
+
+    def test_skip_actualize_when_status_is_same(
+        self, dummy_instance_factory: tp.Callable
+    ):
+        class Builder(DummyBuilder):
+            actualized = False
+
+            def actualize_outdated_instance(
+                self,
+                current_instance,
+                actual_instance,
+            ) -> None:
+                self.__class__.actualized = True
+
+        instance = dummy_instance_factory({"existing": 1})[0]
+
+        conftest.DummyInstance.objects = mock.MagicMock()
+        conftest.DummyInstance.objects.get_all = mock.MagicMock(return_value=[instance])
+
+        target = ua_models.TargetResource.objects.get_one()
+        actual = ua_models.Resource.from_value(
+            value=instance.dump_to_simple_view(),
+            kind=target.kind,
+        )
+        actual.hash = target.hash
+        actual.status = target.status
+        actual.save()
+
+        target.full_hash = actual.full_hash
+        target.update()
+
+        svc = Builder(instance_model=conftest.DummyInstance)
+        svc._iteration()
+
+        assert not Builder.actualized
+
     def test_skip_create_when_not_ready(self, dummy_instance_factory: tp.Callable):
         class DummyInstanceNotReadyCreate(
             conftest.DummyInstance, ua_models.ReadinessMixin

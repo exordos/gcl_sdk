@@ -291,8 +291,12 @@ class UniversalAgentService(looper_basic.BasicService):
             target_resource = target_resources[uuid]
             actual_resource = actual_resources[uuid]
 
-            # Nothing to do if the resources are the same
-            if target_resource["full_hash"] == actual_resource["full_hash"]:
+            # Nothing to do if the resources are the same. Compare the hash
+            # as well: new target fields change it while the value, and so
+            # the full hash, stays the same.
+            same_value = target_resource["full_hash"] == actual_resource["full_hash"]
+            same_hash = target_resource.get("hash") == actual_resource.get("hash")
+            if same_value and same_hash:
                 continue
 
             # Remove read-only fields
