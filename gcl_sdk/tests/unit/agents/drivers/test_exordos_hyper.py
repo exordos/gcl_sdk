@@ -1,0 +1,484 @@
+#    Copyright 2026 Genesis Corporation.
+#
+#    All Rights Reserved.
+#
+#    Licensed under the Apache License, Version 2.0 (the "License"); you may
+#    not use this file except in compliance with the License. You may obtain
+#    a copy of the License at
+#
+#         http://www.apache.org/licenses/LICENSE-2.0
+#
+#    Unless required by applicable law or agreed to in writing, software
+#    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+#    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+#    License for the specific language governing permissions and limitations
+#    under the License.
+
+import subprocess
+import uuid as sys_uuid
+from xml.etree import ElementTree as ET
+
+import pytest
+
+# The driver imports `libvirt` and `rawstor` python bindings at module
+# level. They ship as optional extras (not installed in every dev/CI
+# environment), so skip this module instead of failing collection.
+pytest.importorskip("libvirt")
+pytest.importorskip("rawstor")
+
+from gcl_sdk.agents.universal.drivers import exordos_hyper  # noqa: E402
+from gcl_sdk.agents.universal.drivers import libvirt as libvirt_driver  # noqa: E402
+from gcl_sdk.agents.universal.drivers import pool as pool_base  # noqa: E402
+
+
+def _driver(
+    tmp_path, node=None, storage_pool=None
+) -> exordos_hyper.ExordosLocalHyperDriver:
+    # libvirt's built-in "test" driver simulates a hypervisor in-memory -
+    # no real virtualization or daemon needed. This hypervisor has no
+    # rawstor backing store of its own - a rawstor-backed volume is only
+    # ever one scheduled onto a remote StorageCluster, addressed via
+    # `volume.storage_location` (see _rawstor_location below).
+    spec = pool_base.ExordosLocalHyperDriverSpec(
+        connection_uri="test:///default",
+        node=node or sys_uuid.uuid4(),
+        storage_pool=storage_pool,
+    )
+    pool = pool_base.MachinePool(
+        uuid=sys_uuid.uuid4(), name="rawstor-pool", driver_spec=spec
+    )
+    return exordos_hyper.ExordosLocalHyperDriver(pool)
+
+
+def _rawstor_location(tmp_path) -> str:
+    # A real, local, daemon-less rawstor backend (see pyrawstor/tests) -
+    # stands in for the address a remote StorageCluster would carry.
+    return f"file://{tmp_path}"
+
+
+def _redirect_vhost_drop_in(monkeypatch, driver, tmp_path):
+    """Keep the vhost drop-in file under tmp_path, not /etc/systemd/system."""
+    drop_in_root = tmp_path / "drop-ins"
+    monkeypatch.setattr(
+        driver,
+        "_vhost_drop_in_dir",
+        lambda volume_uuid: str(
+            drop_in_root
+            / f"{exordos_hyper.VHOST_UNIT_TEMPLATE.format(volume_uuid)}.service.d"
+        ),
+    )
+
+
+def _no_op_systemctl(monkeypatch):
+    """Record systemctl invocations instead of running the real binary."""
+    calls = []
+
+    def fake_check_call(cmd, *a, **kw):
+        calls.append(cmd)
+        return 0
+
+    monkeypatch.setattr(subprocess, "check_call", fake_check_call)
+    return calls
+
+
+class TestVolumeUuidFromSocketPath:
+    def test_target_uri(self, tmp_path):
+        driver = _driver(tmp_path)
+        volume_uuid = sys_uuid.uuid4()
+        target_uri = driver._target_uri(volume_uuid, _rawstor_location(tmp_path))
+        assert driver._uuid_from_socket_path(target_uri) == volume_uuid
+
+    def test_socket_path(self, tmp_path):
+        driver = _driver(tmp_path)
+        volume_uuid = sys_uuid.uuid4()
+        assert driver._uuid_from_socket_path(driver._socket_path(volume_uuid)) == (
+            volume_uuid
+        )
+
+    def test_garbage_returns_none(self, tmp_path):
+        driver = _driver(tmp_path)
+        assert driver._uuid_from_socket_path("/run/rawstor/not-a-uuid.sock") is None
+
+
+class TestRawstorAttachments:
+    def test_index_counts_all_disks_not_just_vhostuser_ones(self, tmp_path):
+        # Regression: a machine mixing a qcow2 disk and a rawstor
+        # (vhostuser) disk must report each disk's index as its position
+        # among *all* disks (matching the device letter
+        # _add_volumes_to_domain gave it), not its position among disks
+        # of its own backend alone - the qcow2 disk here occupies vda,
+        # so the vhostuser disk at vdb must be index 1, not 0.
+        driver = _driver(tmp_path)
+        volume_uuid = sys_uuid.uuid4()
+
+        root = ET.fromstring(
+            f"""
+            <domain>
+              <devices>
+                <disk type="file" device="disk">
+                  <source file="/var/lib/libvirt/images/other.qcow2" />
+                  <target dev="vda" bus="virtio" />
+                </disk>
+                <disk type="vhostuser" device="disk">
+                  <source type="unix"
+                          path="/run/rawstor/{volume_uuid}.sock" />
+                  <target dev="vdb" bus="virtio" />
+                </disk>
+              </devices>
+            </domain>
+            """
+        )
+
+        attachments = driver._rawstor_attachments([("fake-domain", root)])
+
+        assert attachments[volume_uuid] == ("fake-domain", 1)
+
+
+class TestVolumeLifecycle:
+    def test_create_get_list_delete(self, tmp_path, monkeypatch):
+        _no_op_systemctl(monkeypatch)
+        driver = _driver(tmp_path)
+        _redirect_vhost_drop_in(monkeypatch, driver, tmp_path)
+
+        volume = pool_base.MachineVolume(
+            uuid=sys_uuid.uuid4(),
+            project_id=sys_uuid.uuid4(),
+            size=1,
+            storage_location=_rawstor_location(tmp_path),
+        )
+
+        created = driver.create_volume(volume)
+        assert created.status == pool_base.VolumeStatus.ACTIVE.value
+
+        fetched = driver.get_volume(volume.uuid)
+        assert fetched.uuid == volume.uuid
+        assert fetched.size == 1
+        assert fetched.machine is None
+
+        # list_volumes() only enumerates rawstor volumes attached to a
+        # domain on this hypervisor (it has no way to enumerate a remote
+        # StorageCluster's own inventory) - a created-but-unattached
+        # volume is invisible to it, unlike get_volume() by uuid above.
+        assert driver.list_volumes() == []
+
+        driver.delete_volume(created)
+
+        with pytest.raises(pool_base.VolumeNotFoundError):
+            driver.get_volume(volume.uuid)
+
+    def test_create_twice_raises_already_exists(self, tmp_path, monkeypatch):
+        _no_op_systemctl(monkeypatch)
+        driver = _driver(tmp_path)
+        _redirect_vhost_drop_in(monkeypatch, driver, tmp_path)
+
+        volume = pool_base.MachineVolume(
+            uuid=sys_uuid.uuid4(),
+            project_id=sys_uuid.uuid4(),
+            size=1,
+            storage_location=_rawstor_location(tmp_path),
+        )
+        driver.create_volume(volume)
+
+        with pytest.raises(pool_base.VolumeAlreadyExistsError):
+            driver.create_volume(volume)
+
+    def test_get_missing_volume_raises_not_found(self, tmp_path):
+        driver = _driver(tmp_path)
+
+        with pytest.raises(pool_base.VolumeNotFoundError):
+            driver.get_volume(sys_uuid.uuid4())
+
+    def test_delete_missing_volume_is_idempotent(self, tmp_path, monkeypatch):
+        _no_op_systemctl(monkeypatch)
+        driver = _driver(tmp_path)
+        _redirect_vhost_drop_in(monkeypatch, driver, tmp_path)
+
+        volume = pool_base.MachineVolume(
+            uuid=sys_uuid.uuid4(),
+            project_id=sys_uuid.uuid4(),
+            size=1,
+            storage_location=_rawstor_location(tmp_path),
+        )
+
+        # Must not raise, even though it was never created.
+        driver.delete_volume(volume)
+
+    def test_delete_stops_vhost_before_removing_the_object(self, tmp_path, monkeypatch):
+        # rawstor-vhost is an attachment of the volume: deleting the
+        # object without stopping it first would leave a dangling
+        # backend process.
+        calls = _no_op_systemctl(monkeypatch)
+        driver = _driver(tmp_path)
+        _redirect_vhost_drop_in(monkeypatch, driver, tmp_path)
+
+        volume = pool_base.MachineVolume(
+            uuid=sys_uuid.uuid4(),
+            project_id=sys_uuid.uuid4(),
+            size=1,
+            storage_location=_rawstor_location(tmp_path),
+        )
+        driver.create_volume(volume)
+        calls.clear()
+
+        driver.delete_volume(volume)
+
+        # create_volume already recorded a drop-in for this volume, so
+        # its removal also triggers a daemon-reload.
+        assert calls == [
+            ["systemctl", "disable", "--now", f"rawstor-vhost@{volume.uuid}"],
+            ["systemctl", "daemon-reload"],
+        ]
+
+    def test_delete_aborts_if_the_vhost_unit_fails_to_stop(self, tmp_path, monkeypatch):
+        # Regression: a swallowed disable failure used to let delete_volume
+        # remove the object anyway, orphaning a still-enabled unit behind
+        # it - a real failure to stop must abort the delete instead.
+        _no_op_systemctl(monkeypatch)
+        driver = _driver(tmp_path)
+        _redirect_vhost_drop_in(monkeypatch, driver, tmp_path)
+        volume = pool_base.MachineVolume(
+            uuid=sys_uuid.uuid4(),
+            project_id=sys_uuid.uuid4(),
+            size=1,
+            storage_location=_rawstor_location(tmp_path),
+        )
+        driver.create_volume(volume)
+
+        def fake_check_call(cmd, *a, **kw):
+            raise subprocess.CalledProcessError(1, cmd)
+
+        monkeypatch.setattr(subprocess, "check_call", fake_check_call)
+
+        with pytest.raises(subprocess.CalledProcessError):
+            driver.delete_volume(volume)
+
+        # The object must still exist - the delete never got past the
+        # failed vhost stop.
+        assert driver.get_volume(volume.uuid).uuid == volume.uuid
+
+    def test_start_vhost_raises_a_clear_error_when_unit_is_missing(
+        self, tmp_path, monkeypatch
+    ):
+        # rawstor-vhost@.service only exists if the rawstor-vhost package
+        # is installed (hypervisors init/bootstrap --with-rawstor) - a
+        # hypervisor set up without that flag must fail with an
+        # actionable hint, not a bare CalledProcessError.
+        driver = _driver(tmp_path)
+
+        def fake_check_call(cmd, *a, **kw):
+            raise subprocess.CalledProcessError(1, cmd)
+
+        monkeypatch.setattr(subprocess, "check_call", fake_check_call)
+
+        with pytest.raises(RuntimeError, match="rawstor-vhost package"):
+            driver._start_vhost(sys_uuid.uuid4())
+
+
+class TestForeignVolumes:
+    """A machine can be adopted into this pool with disks that were never
+    created by this driver - e.g. the core bootstrap VM, whose qcow2
+    disks are created directly by the CLI before this pool exists. The
+    driver must recognize them as already satisfied rather than trying to
+    create a rawstor volume and vhost-attach it on top of them.
+    """
+
+    def _foreign_machine_and_volume(self, storage_pool_name):
+        # Built through the plain LibvirtPoolDriver - matches how the CLI's
+        # LibvirtInfraDriver.create_stand provisions the bootstrap VM,
+        # entirely independent of this pool/driver.
+        #
+        # The returned driver must be kept alive by the caller: libvirt's
+        # "test:///default" backend only keeps its in-memory state around
+        # while at least one connection to it is open - if `base_driver`
+        # (and its connection) gets garbage collected, the domain/volume
+        # created below disappear before a second driver can find them.
+        base_spec = pool_base.LibvirtPoolDriverSpec(
+            connection_uri="test:///default", storage_pool=storage_pool_name
+        )
+        base_pool = pool_base.MachinePool(
+            uuid=sys_uuid.uuid4(), name="plain-pool", driver_spec=base_spec
+        )
+        base_driver = libvirt_driver.LibvirtPoolDriver(base_pool)
+
+        machine = pool_base.Machine(
+            uuid=sys_uuid.uuid4(),
+            project_id=sys_uuid.uuid4(),
+            name="vm-exordos-core-bootstrap",
+            cores=1,
+            ram=512,
+        )
+        volume_uuid = sys_uuid.uuid4()
+        volume = pool_base.MachineVolume(
+            uuid=volume_uuid,
+            project_id=sys_uuid.uuid4(),
+            size=1,
+            index=0,
+            machine=machine.uuid,
+            name=str(volume_uuid),
+        )
+        volume = base_driver.create_volume(volume)
+        port = pool_base.Port(
+            uuid=sys_uuid.uuid4(),
+            project_id=sys_uuid.uuid4(),
+            mac="52:54:00:11:22:33",
+            source="default",
+            status="ACTIVE",
+        )
+        base_driver.create_machine(machine, [volume], [port])
+
+        return base_driver, machine, volume
+
+    def test_get_volume_recognizes_a_foreign_qcow2_disk(self, tmp_path):
+        base_driver, machine, volume = self._foreign_machine_and_volume(
+            "default-pool"
+        )
+        driver = _driver(tmp_path, storage_pool="default-pool")
+
+        found = driver.get_volume(volume.uuid)
+
+        assert found.machine == machine.uuid
+        assert found.size == volume.size
+        assert base_driver is not None  # keep the connection alive until here
+
+    def test_list_volumes_includes_a_foreign_qcow2_disk(self, tmp_path):
+        base_driver, _, volume = self._foreign_machine_and_volume("default-pool")
+        driver = _driver(tmp_path, storage_pool="default-pool")
+
+        assert volume.uuid in {v.uuid for v in driver.list_volumes()}
+        assert base_driver is not None  # keep the connection alive until here
+
+    def test_attach_volume_is_a_noop_for_an_already_present_foreign_disk(
+        self, tmp_path
+    ):
+        # Regression: attaching would build a vhostuser disk and hotplug
+        # it onto a domain that already has a plain qcow2 disk in that
+        # slot and no shared-memory backing - libvirt then refuses with
+        # "'vhostuser' requires shared memory".
+        base_driver, _, volume = self._foreign_machine_and_volume("default-pool")
+        driver = _driver(tmp_path, storage_pool="default-pool")
+
+        with pytest.raises(pool_base.VolumeAlreadyAttachedError):
+            driver.attach_volume(volume)
+        assert base_driver is not None  # keep the connection alive until here
+
+    def test_without_a_storage_pool_configured_no_foreign_volumes_are_found(
+        self, tmp_path
+    ):
+        # exordos_local_hyper deployments without --with-rawstor's core
+        # bootstrap VM (e.g. `hypervisors init`) never configure
+        # storage_pool - must not crash trying to look one up.
+        driver = _driver(tmp_path)
+
+        assert driver.list_volumes() == []
+
+
+class TestCreateMachine:
+    def test_domain_is_defined_with_shared_memory(self, tmp_path, monkeypatch):
+        # Regression: libvirt refuses to attach a vhostuser disk to a
+        # domain that wasn't defined with shared memory backing, and it
+        # can't be added after the fact - so every machine of this pool
+        # (all of them vhost-user-backed) must get it at create time.
+        _no_op_systemctl(monkeypatch)
+        driver = _driver(tmp_path)
+        _redirect_vhost_drop_in(monkeypatch, driver, tmp_path)
+        monkeypatch.setattr(driver, "_wait_for_socket", lambda socket_path: None)
+
+        machine = pool_base.Machine(
+            uuid=sys_uuid.uuid4(),
+            project_id=sys_uuid.uuid4(),
+            name="vm1",
+            cores=1,
+            ram=512,
+        )
+        root_vol = pool_base.MachineVolume(
+            uuid=sys_uuid.uuid4(),
+            project_id=sys_uuid.uuid4(),
+            size=1,
+            index=0,
+            machine=machine.uuid,
+            storage_location=_rawstor_location(tmp_path),
+        )
+        driver.create_volume(root_vol)
+
+        driver.create_machine(machine, [root_vol], [])
+
+        domain = driver._client.lookupByUUIDString(str(machine.uuid))
+        memory_backing = ET.fromstring(domain.XMLDesc()).find("memoryBacking")
+        assert memory_backing is not None
+        assert memory_backing.find("access").get("mode") == "shared"
+
+
+class TestDeleteMachine:
+    def test_removes_all_volumes_and_stops_their_vhost_units(
+        self, tmp_path, monkeypatch
+    ):
+        # Regression: volume-to-machine attribution is read from the
+        # domain's own XML, so deleting all the machine's volumes must
+        # happen before the domain is undefined - otherwise the volumes
+        # (and their still-running rawstor-vhost units) are silently
+        # orphaned.
+        calls = _no_op_systemctl(monkeypatch)
+        driver = _driver(tmp_path)
+        _redirect_vhost_drop_in(monkeypatch, driver, tmp_path)
+        monkeypatch.setattr(driver, "_wait_for_socket", lambda socket_path: None)
+
+        machine = pool_base.Machine(
+            uuid=sys_uuid.uuid4(),
+            project_id=sys_uuid.uuid4(),
+            name="vm1",
+            cores=1,
+            ram=512,
+        )
+        root_vol = pool_base.MachineVolume(
+            uuid=sys_uuid.uuid4(),
+            project_id=sys_uuid.uuid4(),
+            size=1,
+            index=0,
+            machine=machine.uuid,
+            storage_location=_rawstor_location(tmp_path),
+        )
+        data_vol = pool_base.MachineVolume(
+            uuid=sys_uuid.uuid4(),
+            project_id=sys_uuid.uuid4(),
+            size=2,
+            index=1,
+            machine=machine.uuid,
+            storage_location=_rawstor_location(tmp_path),
+        )
+        for v in (root_vol, data_vol):
+            driver.create_volume(v)
+
+        port = pool_base.Port(
+            uuid=sys_uuid.uuid4(),
+            project_id=sys_uuid.uuid4(),
+            mac="52:54:00:11:22:33",
+            source="default",
+            status="ACTIVE",
+        )
+        driver.create_machine(machine, [root_vol, data_vol], [port])
+        calls.clear()
+
+        driver.delete_machine(machine, delete_volumes=True)
+
+        assert list(driver.list_volumes()) == []
+        stopped_units = {
+            c[-1] for c in calls if c[:3] == ["systemctl", "disable", "--now"]
+        }
+        assert stopped_units == {
+            f"rawstor-vhost@{root_vol.uuid}",
+            f"rawstor-vhost@{data_vol.uuid}",
+        }
+
+
+class TestResizeVolume:
+    def test_raises_not_supported(self, tmp_path):
+        driver = _driver(tmp_path)
+        volume = pool_base.MachineVolume(
+            uuid=sys_uuid.uuid4(),
+            project_id=sys_uuid.uuid4(),
+            size=1,
+            storage_location=_rawstor_location(tmp_path),
+        )
+
+        with pytest.raises(pool_base.VolumeResizeNotSupportedError):
+            driver.resize_volume(volume)

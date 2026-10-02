@@ -161,11 +161,15 @@ BorderAgentCapabilityDriver = "gcl_sdk.agents.universal.drivers.border:BorderAge
 BorderCapabilityDriver = "gcl_sdk.agents.universal.drivers.border:BorderCapabilityDriver"
 PoolAgentDriver = "gcl_sdk.agents.universal.drivers.pool:PoolAgentDriver"
 LocalPoolAgentDriver = "gcl_sdk.agents.universal.drivers.pool:LocalPoolAgentDriver"
+StorageClusterAgentDriver = "gcl_sdk.agents.universal.drivers.rawstor_cluster:StorageClusterAgentDriver"
 
 [project.entry-points."gcl_sdk_machine_pool_driver"]
 dummy = "gcl_sdk.agents.universal.drivers.pool:DummyPoolDriver"
 libvirt = "gcl_sdk.agents.universal.drivers.libvirt:LibvirtPoolDriver"
-exordos_local_hyper = "gcl_sdk.agents.universal.drivers.libvirt:LibvirtPoolDriver"
+exordos_local_hyper = "gcl_sdk.agents.universal.drivers.exordos_hyper:ExordosLocalHyperDriver"
+
+[project.entry-points."gcl_sdk_storage_cluster_driver"]
+rawstor = "gcl_sdk.agents.universal.drivers.rawstor_cluster:RawstorStorageClusterDriver"
 
 [tool.uv]
 package = true
