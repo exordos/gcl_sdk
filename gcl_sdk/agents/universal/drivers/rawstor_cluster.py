@@ -17,7 +17,12 @@ from __future__ import annotations
 
 import abc
 import logging
+import os
+from pathlib import Path
+import subprocess
+import tempfile
 import typing as tp
+from urllib.parse import urlparse
 import uuid as sys_uuid
 
 import rawstor
@@ -38,6 +43,50 @@ LOG = logging.getLogger(__name__)
 # pulling in the `rawstor` python bindings this module needs.
 AbstractStorageClusterDriverSpec = pool_base.AbstractStorageClusterDriverSpec
 RawstorStorageClusterDriverSpec = pool_base.RawstorStorageClusterDriverSpec
+
+
+MDS_CONFIG_DIR = Path("/etc/rawstor-mds")
+MDS_UNIT_DIR = Path("/etc/systemd/system")
+MDS_UNIT_TEMPLATE = """\
+[Unit]
+Description=Rawstor MDS for Exordos storage {uuid}
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=rawstor
+Group=rawstor
+StateDirectory=exordos/exordos_core/rawstor-mds/{uuid}
+ExecStart=/usr/bin/rawstor-mds --bind=0.0.0.0:{port} --db=/var/lib/exordos/exordos_core/rawstor-mds/{uuid}/mds.db --topology=/etc/rawstor-mds/{uuid}.topology
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=always
+RestartSec=5
+RestartPreventExitStatus=66 77
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
+"""
+
+
+def _write_if_changed(path: Path, content: str) -> bool:
+    if path.exists() and path.read_text() == content:
+        return False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as f:
+        temporary = Path(f.name)
+        try:
+            f.write(content)
+            f.flush()
+            os.fchmod(f.fileno(), 0o644)
+            os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)
+    return True
 
 
 class AbstractStorageClusterDriver(abc.ABC):
@@ -67,10 +116,71 @@ class RawstorStorageClusterDriver(AbstractStorageClusterDriver):
         if not isinstance(self._spec, RawstorStorageClusterDriverSpec):
             raise ValueError(f"Unsupported driver spec kind: {self._spec.KIND!r}")
 
+    @property
+    def unit_name(self) -> str:
+        return f"rawstor-mds@{self._cluster.uuid}.service"
+
+    def configure(self) -> None:
+        if not self._spec.ost_endpoint:
+            return
+        mds = urlparse(self._spec.endpoint)
+        ost = urlparse(self._spec.ost_endpoint)
+        if (
+            mds.scheme != "mds"
+            or not mds.hostname
+            or not mds.port
+            or mds.path not in ("", "/")
+            or mds.query
+            or mds.fragment
+        ):
+            raise ValueError("MDS endpoint must be mds://host:port/")
+        if (
+            ost.scheme != "ost"
+            or not ost.hostname
+            or not ost.port
+            or ost.path not in ("", "/")
+            or ost.query
+            or ost.fragment
+            or any(c.isspace() for c in self._spec.ost_endpoint)
+        ):
+            raise ValueError("OST endpoint must be ost://host:port")
+        unit_changed = _write_if_changed(
+            MDS_UNIT_DIR / self.unit_name,
+            MDS_UNIT_TEMPLATE.format(uuid=self._cluster.uuid, port=mds.port),
+        )
+        topology = MDS_CONFIG_DIR / f"{self._cluster.uuid}.topology"
+        previous_topology = topology.read_text() if topology.exists() else None
+        topology_changed = _write_if_changed(
+            topology,
+            f"{self._cluster.uuid} {self._spec.ost_endpoint.rstrip('/')} 1 {self._cluster.uuid}\n",
+        )
+        if unit_changed:
+            subprocess.run(["systemctl", "daemon-reload"], check=True)
+        subprocess.run(["systemctl", "enable", "--now", self.unit_name], check=True)
+        if unit_changed:
+            subprocess.run(["systemctl", "restart", self.unit_name], check=True)
+        elif topology_changed and previous_topology is not None:
+            try:
+                subprocess.run(["systemctl", "reload", self.unit_name], check=True)
+            except subprocess.CalledProcessError:
+                _write_if_changed(topology, previous_topology)
+                raise
+
+    def delete(self) -> None:
+        if not self._spec.ost_endpoint:
+            return
+        subprocess.run(["systemctl", "disable", "--now", self.unit_name], check=True)
+        (MDS_UNIT_DIR / self.unit_name).unlink(missing_ok=True)
+        (MDS_CONFIG_DIR / f"{self._cluster.uuid}.topology").unlink(missing_ok=True)
+        subprocess.run(["systemctl", "daemon-reload"], check=True)
+        # Keep the SQLite index and OST data when unregistering a cluster.
+
     def get_capacity(self) -> tp.List[pool_base.ThinStoragePool]:
         # A single named pool per cluster in this version - see
         # RawstorStorageClusterDriverSpec's speed/ephemeral fields.
-        location = rawstor.Location(self._spec.location)
+        location = rawstor.Location(
+            self._spec.endpoint if self._spec.ost_endpoint else self._spec.location
+        )
         info = location.info()
         storage_pool = pool_base.ThinStoragePool(
             uuid=sys_uuid.uuid5(self._cluster.uuid, "default"),
@@ -126,7 +236,7 @@ class MetaStorageCluster(meta.MetaCoordinatorDataPlaneModel):
 
         The driver is restored from the cache if it is already loaded.
         """
-        driver_key = str(self.driver_spec)
+        driver_key = (self.uuid, str(self.driver_spec))
 
         if driver_key in self.__driver_map__:
             return self.__driver_map__[driver_key]
@@ -148,17 +258,19 @@ class MetaStorageCluster(meta.MetaCoordinatorDataPlaneModel):
     def restore_from_dp(self, **kwargs) -> None:
         """Refresh this cluster's reported capacity."""
         driver = self.load_driver()
+        if isinstance(driver, RawstorStorageClusterDriver):
+            driver.configure()
         self.storage_pools = list(driver.get_capacity())
         self.status = pool_base.MachinePoolStatus.ACTIVE.value
 
     def dump_to_dp(self, **kwargs) -> None:
-        """Configure the cluster.
-
-        There's nothing to configure - the cluster's driver_spec already
-        points at an existing, independently-provisioned rawstor-ost -
-        but capacity still needs to be reported the first time too.
-        """
+        """Configure the core MDS and report its capacity."""
         self.restore_from_dp(**kwargs)
+
+    def delete_from_dp(self, **kwargs) -> None:
+        driver = self.load_driver()
+        if isinstance(driver, RawstorStorageClusterDriver):
+            driver.delete()
 
 
 class StorageClusterAgentDriver(meta.MetaCoordinatorAgentDriver):
