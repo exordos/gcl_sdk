@@ -27,6 +27,17 @@ Key components:
 
 > **For a full overview of components, quick start guides, and advanced usage, visit the [documentation](https://exordos.github.io/gcl_sdk/).**
 
+## Rawstor storage clusters
+
+`StorageClusterAgentDriver` runs on the core and manages one
+`rawstor-mds@<storage-uuid>.service` per storage. A rawstor driver spec contains
+`location` (the OST backing store), `ost_endpoint` (`ost://<storage-ip>:7777`),
+and `endpoint` (`mds://<core-ip>:7776/`). Each MDS has its own SQLite database
+and topology. The driver reports capacity through MDS and restarts a stopped
+MDS during reconciliation. Removing the resource stops the service while
+retaining its data. `ExordosLocalHyperDriver` creates disks through MDS with
+`width=1` and 1 GiB chunks, matching the single OST in each storage topology.
+
 # 🔗 Related projects
 
 - Exordos Core is the main project of the Exordos ecosystem. You can find it [here](https://github.com/exordos/exordos_core).

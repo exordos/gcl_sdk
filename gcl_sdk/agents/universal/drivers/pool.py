@@ -549,16 +549,12 @@ class AbstractStorageClusterDriverSpec(
 class RawstorStorageClusterDriverSpec(AbstractStorageClusterDriverSpec):
     KIND = "rawstor"
 
-    # Backing store this cluster's rawstor-ost serves, e.g.
-    # file:///var/lib/rawstor. Informational only - it's configured on
-    # the storage node itself (see `exordos storages init --location`),
-    # never resent to a driver.
+    # Local backing store configured on the OST host by the CLI.
     location = properties.property(types.String(max_length=2048), required=True)
-    # Network address (ost://host:port) other hosts use to reach this
-    # cluster - what the scheduler pushes into a remote-scheduled
-    # volume's `storage_location` (see gcl_sdk.agents.universal.drivers.
-    # exordos_hyper.ExordosLocalHyperDriver._rawstor_address).
+    # Public MDS location used by hypervisors, e.g. mds://core:7776/.
     endpoint = properties.property(types.String(max_length=2048), required=True)
+    # OST advertised to the core MDS. Empty for legacy direct-OST clusters.
+    ost_endpoint = properties.property(types.String(max_length=2048), default="")
     speed = properties.property(
         types.Enum([s.value for s in ic.DiskSpeed]),
         default=ic.DiskSpeed.HOT.value,
