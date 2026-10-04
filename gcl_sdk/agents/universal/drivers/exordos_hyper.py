@@ -71,7 +71,7 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
         return volume.storage_location or None
 
     def _target_uri(self, volume_uuid: sys_uuid.UUID, address: str) -> str:
-        return f"{address}/{volume_uuid}"
+        return f"{address.removesuffix('/')}/{volume_uuid}"
 
     def _socket_path(self, volume_uuid: sys_uuid.UUID) -> str:
         return f"{SOCKET_DIR}/{volume_uuid}.sock"
@@ -108,7 +108,8 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
         drop_in_dir = self._vhost_drop_in_dir(volume_uuid)
         os.makedirs(drop_in_dir, exist_ok=True)
         with open(self._vhost_drop_in_path(volume_uuid), "w") as f:
-            f.write(f"[Service]\nEnvironment=LOCATION={storage_location}\n")
+            # The package's ExecStart appends /%i to LOCATION.
+            f.write(f"[Service]\nEnvironment=LOCATION={storage_location.removesuffix('/')}\n")
         subprocess.check_call(["systemctl", "daemon-reload"])
 
     def _remove_remote_location_drop_in(self, volume_uuid: sys_uuid.UUID) -> None:
@@ -127,7 +128,10 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
             return None
 
         match = re.search(r"^Environment=LOCATION=(.+)$", content, re.MULTILINE)
-        return match.group(1).strip() if match else None
+        if not match:
+            return None
+        location = match.group(1).strip()
+        return location.rstrip("/") + "/" if location.startswith("mds://") else location
 
     def _start_vhost(
         self,
@@ -426,7 +430,11 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
 
         target = rawstor.Target(self._target_uri(volume.uuid, address))
         try:
-            target.create(size=volume.size << 30)
+            target.create(
+                size=volume.size << 30,
+                width=1,
+                chunk_size=(1 << 30) if address.startswith("mds://") else 0,
+            )
         except FileExistsError:
             raise pool_base.VolumeAlreadyExistsError(volume=volume.uuid)
 
