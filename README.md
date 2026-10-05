@@ -31,8 +31,11 @@ Key components:
 
 `StorageClusterAgentDriver` runs on core and manages a separate
 `rawstor-mds@<cluster-uuid>.service`, persistent SQLite index and topology per
-cluster. Its driver spec carries the MDS `endpoint` and UUID-keyed `nodes`
-and `pools` supplied by the control plane. OST topology paths run from outermost
+cluster. The public `RawstorStorageClusterDriverSpec` contains only the MDS `endpoint`
+(and kind). Core constructs a `RawstorStorageClusterAgentSpec` snapshot with
+UUID-keyed `nodes` and `pools` from their separate resources when delivering the
+cluster to the agent. Legacy singleton fields remain accepted only in old agent
+payloads, not in the public cluster API. OST topology paths run from outermost
 to innermost (`dc/row/rack/server`). Topology edits request an asynchronous
 MDS reload. Unregistering a cluster retains its database.
 
