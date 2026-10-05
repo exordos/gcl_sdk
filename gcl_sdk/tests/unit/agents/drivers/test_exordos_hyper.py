@@ -314,7 +314,7 @@ class TestVolumeLifecycle:
         self, tmp_path, monkeypatch
     ):
         # rawstor-vhost@.service only exists if the rawstor-vhost package
-        # is installed (hypervisors init/bootstrap --with-rawstor) - a
+        # is installed (exordos hypervisors init --with-rawstor) - a
         # hypervisor set up without that flag must fail with an
         # actionable hint, not a bare CalledProcessError.
         driver = _driver(tmp_path)
@@ -416,9 +416,8 @@ class TestForeignVolumes:
     def test_without_a_storage_pool_configured_no_foreign_volumes_are_found(
         self, tmp_path
     ):
-        # exordos_local_hyper deployments without --with-rawstor's core
-        # bootstrap VM (e.g. `hypervisors init`) never configure
-        # storage_pool - must not crash trying to look one up.
+        # A hypervisor without a configured local storage_pool must not
+        # crash trying to discover foreign qcow2 volumes.
         driver = _driver(tmp_path)
 
         assert driver.list_volumes() == []
