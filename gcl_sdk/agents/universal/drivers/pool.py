@@ -270,6 +270,7 @@ class MachineVolume(
     storage_location = properties.property(
         types.AllowNone(types.String(max_length=2048)), default=None
     )
+    storage_policy = properties.property(types.Dict(), default=dict)
     status = properties.property(
         types.Enum([s.value for s in VolumeStatus]),
         default=VolumeStatus.NEW.value,
@@ -339,6 +340,12 @@ class ThinStoragePool(
         types.Float(min_value=0.0), default=1.0
     )
     available_actual = properties.property(types.Integer(min_value=0), default=0)
+    # Rawstor creation policy; ignored by local qcow2 drivers.
+    mirrors = properties.property(types.Integer(min_value=1, max_value=255), default=1)
+    chunk_size = properties.property(types.Integer(min_value=1), default=1 << 30)
+    failure_domain = properties.property(
+        types.Enum(["ost", "server", "rack", "row", "dc"]), default="server"
+    )
 
     @property
     def capacity(self) -> int:
@@ -473,7 +480,7 @@ class StoragePoolListOrLegacyName(types.TypedList):
     here - left untouched, as a plain string - keeps such a control
     plane working: LibvirtPoolDriver's `_storage_pool_*` hooks already
     treat a non-list `storage_pool` as one implicit pool with default
-    (warm, non-ephemeral) attributes.
+    (hot, ephemeral) attributes.
     """
 
     def __init__(self, nested_type):
@@ -550,11 +557,15 @@ class RawstorStorageClusterDriverSpec(AbstractStorageClusterDriverSpec):
     KIND = "rawstor"
 
     # Local backing store configured on the OST host by the CLI.
-    location = properties.property(types.String(max_length=2048), required=True)
+    location = properties.property(types.String(max_length=2048), default="")
     # Public MDS location used by hypervisors, e.g. mds://core:7776/.
     endpoint = properties.property(types.String(max_length=2048), required=True)
     # OST advertised to the core MDS. Empty for legacy direct-OST clusters.
     ost_endpoint = properties.property(types.String(max_length=2048), default="")
+    # Keyed by stable OST/pool UUIDs; supplied by the control plane.
+    nodes = properties.property(types.Dict(), default=dict)
+    pools = properties.property(types.Dict(), default=dict)
+    managed = properties.property(types.Boolean(), default=False)
     speed = properties.property(
         types.Enum([s.value for s in ic.DiskSpeed]),
         default=ic.DiskSpeed.HOT.value,
@@ -990,6 +1001,7 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
     storage_location = properties.property(
         types.AllowNone(types.String(max_length=2048)), default=None
     )
+    storage_policy = properties.property(types.Dict(), default=dict)
     index = properties.property(
         types.Integer(min_value=0, max_value=4096),
         default=4096,
@@ -1131,6 +1143,7 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
             ephemeral=self.ephemeral,
             storage_pool=self.storage_pool,
             storage_location=self.storage_location,
+            storage_policy=self.storage_policy,
             index=self.index,
             machine=self.machine,
             project_id=self.project_id,
@@ -1153,6 +1166,9 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
     def _has_storage_capacity(
         self, pool: MetaPool, size: tp.Optional[int] = None
     ) -> bool:
+        if self.storage_location:
+            # Admission belongs to the remote cluster's scheduler.
+            return True
         if not pool.storage_pools:
             return False
 
@@ -1160,6 +1176,8 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
         return self._find_storage_pool(pool, size) is not None
 
     def _allocate_capacity(self, pool: MetaPool, size: tp.Optional[int] = None) -> None:
+        if self.storage_location:
+            return
         size = size if size is not None else self.size
         storage_pool = self._find_storage_pool(pool, size)
         storage_pool.allocate_capacity(size)
@@ -1184,6 +1202,7 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
             "ephemeral",
             "storage_pool",
             "storage_location",
+            "storage_policy",
             "project_id",
         }
 
@@ -1199,11 +1218,16 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
             # storage_pool, it has no physical signature to probe) - self
             # is always the authority, overlay it before any driver call.
             dp_volume.storage_location = self.storage_location
+            dp_volume.storage_policy = self.storage_policy
         else:
             # Find a storage pool matching this volume's speed/ephemeral
             # request with enough room for it.
-            storage_pool = self._find_storage_pool(pool, self.size)
-            if storage_pool is None:
+            storage_pool = (
+                None
+                if self.storage_location
+                else self._find_storage_pool(pool, self.size)
+            )
+            if storage_pool is None and not self.storage_location:
                 self.status = VolumeStatus.ERROR.value
                 return
 
@@ -1217,20 +1241,25 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
                 device_type=self.device_type,
                 speed=self.speed,
                 ephemeral=self.ephemeral,
-                storage_pool=storage_pool.name,
+                storage_pool=self.storage_pool
+                if self.storage_location
+                else storage_pool.name,
                 storage_location=self.storage_location,
+                storage_policy=self.storage_policy,
                 index=self.index,
                 # TODO(akremenetsky): Detect machine without volume name
                 machine=self.machine,
                 project_id=self.project_id,
             )
             self._create_volume(pool, driver, dp_volume)
-            storage_pool.allocate_capacity(self.size)
+            if storage_pool is not None:
+                storage_pool.allocate_capacity(self.size)
             # Only pin the pool on the meta model once creation actually
             # succeeded - otherwise a failed create would stay locked
             # onto a possibly-bad pool forever, unable to retry on
             # another one that may have room.
-            self.storage_pool = storage_pool.name
+            if storage_pool is not None:
+                self.storage_pool = storage_pool.name
 
         self._from_dp_volume(dp_volume)
 
@@ -1270,6 +1299,7 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
         driver: AbstractPoolDriver = pool.load_driver()
         dp_volume = pool.dp_volume_map[self.uuid]
         dp_volume.storage_location = self.storage_location
+        dp_volume.storage_policy = self.storage_policy
         self._detach_volume(pool, driver, dp_volume)
         self._delete_volume(pool, driver, dp_volume)
 
@@ -1281,6 +1311,7 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
         driver: AbstractPoolDriver = pool.load_driver()
         dp_volume: MachineVolume = pool.dp_volume_map[self.uuid]
         dp_volume.storage_location = self.storage_location
+        dp_volume.storage_policy = self.storage_policy
         machine = dp_volume.machine
         unknown_action = True
 

@@ -1005,13 +1005,13 @@ class LibvirtPoolDriver(pool_base.AbstractPoolDriver):
         storage_pool = self._spec.storage_pool
         if not isinstance(storage_pool, list):
             # A single implicit pool has fixed default attributes.
-            return ic.DiskSpeed.WARM.value, True
+            return ic.DiskSpeed.HOT.value, True
 
         for entry in storage_pool:
             if entry["name"] == name:
                 return (
-                    entry.get("speed", ic.DiskSpeed.WARM.value),
-                    entry.get("ephemeral", False),
+                    entry.get("speed", ic.DiskSpeed.HOT.value),
+                    entry.get("ephemeral", True),
                 )
 
         raise ValueError(f"Unknown storage pool {name!r}")

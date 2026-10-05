@@ -656,6 +656,12 @@ class TestStorageLocationPropagation:
             size=10,
             project_id=sys_uuid.uuid4(),
             storage_location="ost://10.0.0.5:7777",
+            storage_pool="cluster-policy",
+            storage_policy={
+                "mirrors": 2,
+                "failure_domain": "rack",
+                "chunk_size": 1 << 30,
+            },
         )
 
         driver = _CapturingCreatePoolDriver(meta_pool)
@@ -665,7 +671,9 @@ class TestStorageLocationPropagation:
             meta_volume.dump_to_dp(meta_pool)
 
         assert driver.created.storage_location == "ost://10.0.0.5:7777"
-        assert meta_volume.storage_pool == "default"
+        assert meta_volume.storage_pool == "cluster-policy"
+        assert driver.created.storage_policy == meta_volume.storage_policy
+        assert storage_pool.capacity_provisioned == 0
 
     def test_dump_to_dp_reused_volume_overlays_storage_location(self):
         volume_uuid = sys_uuid.uuid4()

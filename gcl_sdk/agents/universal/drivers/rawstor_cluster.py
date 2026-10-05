@@ -17,10 +17,13 @@ from __future__ import annotations
 
 import abc
 import logging
+import math
 import os
 from pathlib import Path
+import sqlite3
 import subprocess
 import tempfile
+import time
 import typing as tp
 from urllib.parse import urlparse
 import uuid as sys_uuid
@@ -33,6 +36,7 @@ from restalchemy.dm import types_dynamic
 from gcl_sdk.agents.universal import constants as c
 from gcl_sdk.agents.universal.drivers import meta
 from gcl_sdk.agents.universal.drivers import pool as pool_base
+from gcl_sdk.agents.universal.drivers import storage_capacity
 from gcl_sdk.common import utils
 
 LOG = logging.getLogger(__name__)
@@ -47,6 +51,7 @@ RawstorStorageClusterDriverSpec = pool_base.RawstorStorageClusterDriverSpec
 
 MDS_CONFIG_DIR = Path("/etc/rawstor-mds")
 MDS_UNIT_DIR = Path("/etc/systemd/system")
+MDS_STATE_DIR = Path("/var/lib/exordos/exordos_core/rawstor-mds")
 MDS_UNIT_TEMPLATE = """\
 [Unit]
 Description=Rawstor MDS for Exordos storage {uuid}
@@ -58,7 +63,7 @@ Type=simple
 User=rawstor
 Group=rawstor
 StateDirectory=exordos/exordos_core/rawstor-mds/{uuid}
-ExecStart=/usr/bin/rawstor-mds --bind=0.0.0.0:{port} --db=/var/lib/exordos/exordos_core/rawstor-mds/{uuid}/mds.db --topology=/etc/rawstor-mds/{uuid}.topology
+ExecStart=/usr/bin/rawstor-mds --bind={bind} --db=/var/lib/exordos/exordos_core/rawstor-mds/{uuid}/mds.db --topology=/etc/rawstor-mds/{uuid}.topology
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=always
 RestartSec=5
@@ -121,38 +126,66 @@ class RawstorStorageClusterDriver(AbstractStorageClusterDriver):
         return f"rawstor-mds@{self._cluster.uuid}.service"
 
     def configure(self) -> None:
-        if not self._spec.ost_endpoint:
+        if not self._spec.endpoint.startswith("mds://"):
             return
         mds = urlparse(self._spec.endpoint)
-        ost = urlparse(self._spec.ost_endpoint)
-        if (
-            mds.scheme != "mds"
-            or not mds.hostname
-            or not mds.port
-            or mds.path not in ("", "/")
-            or mds.query
-            or mds.fragment
-        ):
+        if mds.scheme != "mds" or not mds.hostname or not mds.port:
             raise ValueError("MDS endpoint must be mds://host:port/")
-        if (
-            ost.scheme != "ost"
-            or not ost.hostname
-            or not ost.port
-            or ost.path not in ("", "/")
-            or ost.query
-            or ost.fragment
-            or any(c.isspace() for c in self._spec.ost_endpoint)
-        ):
-            raise ValueError("OST endpoint must be ost://host:port")
+        entries = self._spec.nodes
+        if not entries and self._spec.ost_endpoint:
+            entries = {
+                str(self._cluster.uuid): {
+                    "endpoint": self._spec.ost_endpoint,
+                    "weight": 1,
+                    "failure_domain_path": str(self._cluster.uuid),
+                }
+            }
+        lines = []
+        for node_uuid, node in sorted(entries.items()):
+            sys_uuid.UUID(node_uuid)
+            ost = urlparse(node["endpoint"])
+            path = node["failure_domain_path"]
+            if (
+                ost.scheme != "ost"
+                or not ost.hostname
+                or not ost.port
+                or ost.path not in ("", "/")
+                or ost.query
+                or ost.fragment
+                or ost.username
+                or any(c.isspace() for c in node["endpoint"] + path)
+                or not 1 <= len(path.split("/")) <= 4
+                or any(not part or part in (".", "..") for part in path.split("/"))
+                or not math.isfinite(node["weight"])
+                or node["weight"] <= 0
+            ):
+                raise ValueError("Invalid rawstor OST topology entry")
+            lines.append(
+                f"{node_uuid} {node['endpoint'].rstrip('/')} {node['weight']} {path}\n"
+            )
+        # HUP is asynchronous: reject removal of referenced OSTs before sending it.
+        db = MDS_STATE_DIR / str(self._cluster.uuid) / "mds.db"
+        if db.exists():
+            with sqlite3.connect(f"file:{db}?mode=ro", uri=True) as conn:
+                used = conn.execute(
+                    "SELECT ost_id FROM chunk_map UNION SELECT ost_id FROM snapshot_members"
+                )
+                if any(str(sys_uuid.UUID(bytes=row[0])) not in entries for row in used):
+                    raise ValueError("Cannot remove an OST holding chunks or snapshots")
         unit_changed = _write_if_changed(
             MDS_UNIT_DIR / self.unit_name,
-            MDS_UNIT_TEMPLATE.format(uuid=self._cluster.uuid, port=mds.port),
+            MDS_UNIT_TEMPLATE.format(
+                uuid=self._cluster.uuid,
+                bind=f"[::]:{mds.port}"
+                if ":" in mds.hostname
+                else f"0.0.0.0:{mds.port}",
+            ),
         )
         topology = MDS_CONFIG_DIR / f"{self._cluster.uuid}.topology"
         previous_topology = topology.read_text() if topology.exists() else None
         topology_changed = _write_if_changed(
             topology,
-            f"{self._cluster.uuid} {self._spec.ost_endpoint.rstrip('/')} 1 {self._cluster.uuid}\n",
+            "".join(lines),
         )
         if unit_changed:
             subprocess.run(["systemctl", "daemon-reload"], check=True)
@@ -167,7 +200,7 @@ class RawstorStorageClusterDriver(AbstractStorageClusterDriver):
                 raise
 
     def delete(self) -> None:
-        if not self._spec.ost_endpoint:
+        if not self._spec.endpoint.startswith("mds://"):
             return
         subprocess.run(["systemctl", "disable", "--now", self.unit_name], check=True)
         (MDS_UNIT_DIR / self.unit_name).unlink(missing_ok=True)
@@ -176,31 +209,79 @@ class RawstorStorageClusterDriver(AbstractStorageClusterDriver):
         # Keep the SQLite index and OST data when unregistering a cluster.
 
     def get_capacity(self) -> tp.List[pool_base.ThinStoragePool]:
-        # A single named pool per cluster in this version - see
-        # RawstorStorageClusterDriverSpec's speed/ephemeral fields.
-        location = rawstor.Location(
-            self._spec.endpoint if self._spec.ost_endpoint else self._spec.location
-        )
-        info = location.info()
-        storage_pool = pool_base.ThinStoragePool(
-            uuid=sys_uuid.uuid5(self._cluster.uuid, "default"),
-            name="default",
-            pool_type="rawstor",
-            capacity_usable=info.total >> 30,  # GB
-            available_actual=(info.total - info.used) >> 30,  # GB
-            oversubscription_ratio=1.0,
-            speed=self._spec.speed,
-            ephemeral=self._spec.ephemeral,
-        )
-
-        # capacity_provisioned is derived from real objects at this
-        # location, the same way ExordosLocalHyperDriver computes it for
-        # a local rawstor pool - self-healing every poll cycle rather
-        # than trusting any cumulative counter.
-        for target in location:
-            storage_pool.allocate_capacity(target.spec().size >> 30)
-
-        return [storage_pool]
+        if not (self._spec.managed or self._spec.pools or self._spec.nodes):
+            # Compatibility for previously registered single-OST clusters.
+            location = rawstor.Location(
+                self._spec.endpoint if self._spec.ost_endpoint else self._spec.location
+            )
+            info = location.info()
+            storage_pool = pool_base.ThinStoragePool(
+                uuid=sys_uuid.uuid5(self._cluster.uuid, "default"),
+                name="default",
+                pool_type="rawstor",
+                capacity_usable=info.total >> 30,
+                available_actual=(info.total - info.used) >> 30,
+                speed=self._spec.speed,
+                ephemeral=self._spec.ephemeral,
+            )
+            for target in location:
+                storage_pool.allocate_capacity(target.spec().size >> 30)
+            return [storage_pool]
+        # Read completed MDS objects before sampling OST budgets. A creation
+        # between the samples remains pending, rather than escaping both ledgers.
+        objects = {}
+        if self._spec.nodes:
+            for target in rawstor.Location(self._spec.endpoint):
+                objects[target.uri.rstrip("/").rsplit("/", 1)[-1]] = target.spec().size
+        nodes = []
+        for node_uuid, node in self._spec.nodes.items():
+            location = rawstor.Location(node["endpoint"])
+            try:
+                info = location.info()
+                committed = sum(target.spec().size for target in location)
+                nodes.append(
+                    {
+                        **node,
+                        "uuid": node_uuid,
+                        "total": info.total,
+                        "used": info.used,
+                        "available": max(0, info.total - max(info.used, committed)),
+                    }
+                )
+            except OSError:
+                # Never schedule new data based on stale capacity from an unreachable OST.
+                LOG.exception("Unable to query OST %s", node_uuid)
+                nodes.append(
+                    {**node, "uuid": node_uuid, "total": 0, "used": 0, "available": 0}
+                )
+        self._cluster.capacity_info = {
+            "nodes": nodes,
+            "objects": objects,
+            "reported_at": time.time(),
+            "total": sum(n["total"] for n in nodes),
+            "used": sum(n["used"] for n in nodes),
+            "available": sum(n["available"] for n in nodes),
+        }
+        result = []
+        for pool_uuid, policy in self._spec.pools.items():
+            storage_capacity.validate_policy(policy)
+            available = storage_capacity.available_by_policy(nodes, policy) >> 30
+            result.append(
+                pool_base.ThinStoragePool(
+                    uuid=sys_uuid.UUID(pool_uuid),
+                    name=policy["name"],
+                    pool_type="rawstor",
+                    speed=policy["speed"],
+                    ephemeral=policy["ephemeral"],
+                    mirrors=policy["mirrors"],
+                    chunk_size=policy["chunk_size"],
+                    failure_domain=policy["failure_domain"],
+                    capacity_usable=available,
+                    available_actual=available,
+                    oversubscription_ratio=1.0,
+                )
+            )
+        return result
 
 
 class MetaStorageCluster(meta.MetaCoordinatorDataPlaneModel):
@@ -211,6 +292,8 @@ class MetaStorageCluster(meta.MetaCoordinatorDataPlaneModel):
     """
 
     __driver_map__ = {}
+
+    capacity_info = properties.property(types.Dict(), default=dict)
 
     driver_spec = properties.property(
         types_dynamic.KindModelSelectorType(
@@ -239,7 +322,9 @@ class MetaStorageCluster(meta.MetaCoordinatorDataPlaneModel):
         driver_key = (self.uuid, str(self.driver_spec))
 
         if driver_key in self.__driver_map__:
-            return self.__driver_map__[driver_key]
+            driver = self.__driver_map__[driver_key]
+            driver._cluster = self
+            return driver
 
         driver_kind = self.driver_spec.KIND
         class_ = utils.load_from_entry_point(c.EP_STORAGE_CLUSTER_DRIVERS, driver_kind)

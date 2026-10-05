@@ -50,7 +50,7 @@ class Volume(
     device_type = properties.property(ra_types.String(max_length=64), default="")
     speed = properties.property(
         ra_types.Enum([s.value for s in pc.DiskSpeed]),
-        default=pc.DiskSpeed.WARM.value,
+        default=pc.DiskSpeed.HOT.value,
     )
     ephemeral = properties.property(ra_types.Boolean(), default=True)
     index = properties.property(
@@ -125,7 +125,7 @@ class RootDiskSpec(AbstractDiskSpec):
     )
     speed = properties.property(
         ra_types.Enum([s.value for s in pc.DiskSpeed]),
-        default=pc.DiskSpeed.WARM.value,
+        default=pc.DiskSpeed.HOT.value,
     )
     ephemeral = properties.property(ra_types.Boolean(), default=True)
 

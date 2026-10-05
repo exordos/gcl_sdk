@@ -68,7 +68,7 @@ class TestStoragePoolBackwardCompat:
 
         assert driver._storage_pool_names() == ["default-pool"]
         assert driver._storage_pool_attributes("default-pool") == (
-            ic.DiskSpeed.WARM.value,
+            ic.DiskSpeed.HOT.value,
             True,
         )
 
@@ -97,8 +97,8 @@ class TestStoragePoolBackwardCompat:
         # Attributes omitted from an entry fall back to the same defaults
         # as the legacy string format.
         assert driver._storage_pool_attributes("cold-pool") == (
-            ic.DiskSpeed.WARM.value,
-            False,
+            ic.DiskSpeed.HOT.value,
+            True,
         )
 
         volume = pool_base.MachineVolume(
@@ -142,9 +142,7 @@ class TestGetVolumeStoragePool:
     """
 
     def _driver_with_second_pool(self) -> libvirt_driver.LibvirtPoolDriver:
-        driver = _multi_pool_driver(
-            [{"name": "default-pool"}, {"name": "second-pool"}]
-        )
+        driver = _multi_pool_driver([{"name": "default-pool"}, {"name": "second-pool"}])
         _define_second_pool(driver)
         return driver
 
