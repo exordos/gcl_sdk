@@ -20,7 +20,6 @@ import logging
 import math
 import os
 from pathlib import Path
-import sqlite3
 import subprocess
 import tempfile
 import time
@@ -49,33 +48,11 @@ AbstractStorageClusterDriverSpec = pool_base.AbstractStorageClusterDriverSpec
 RawstorStorageClusterDriverSpec = pool_base.RawstorStorageClusterDriverSpec
 
 
-MDS_CONFIG_DIR = Path("/etc/rawstor-mds")
+MDS_CONFIG_DIR = Path("/etc/rawstor/mds")
 MDS_UNIT_DIR = Path("/etc/systemd/system")
-MDS_STATE_DIR = Path("/var/lib/exordos/exordos_core/rawstor-mds")
-MDS_UNIT_TEMPLATE = """\
-[Unit]
-Description=Rawstor MDS for Exordos storage {uuid}
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=rawstor
-Group=rawstor
-StateDirectory=exordos/exordos_core/rawstor-mds/{uuid}
-ExecStart=/usr/bin/rawstor-mds --bind={bind} --db=/var/lib/exordos/exordos_core/rawstor-mds/{uuid}/mds.db --topology=/etc/rawstor-mds/{uuid}.topology
-ExecReload=/bin/kill -HUP $MAINPID
-Restart=always
-RestartSec=5
-RestartPreventExitStatus=66 77
-ProtectSystem=strict
-ProtectHome=true
-PrivateTmp=true
-NoNewPrivileges=true
-
-[Install]
-WantedBy=multi-user.target
-"""
+MDS_STATE_DIR = Path("/var/lib/rawstor-mds")
+MDS_LEGACY_STATE_DIR = Path("/var/lib/exordos/exordos_core/rawstor-mds")
+MDS_LEGACY_CONFIG_DIR = Path("/etc/rawstor-mds")
 
 
 def _write_if_changed(path: Path, content: str) -> bool:
@@ -163,24 +140,25 @@ class RawstorStorageClusterDriver(AbstractStorageClusterDriver):
             lines.append(
                 f"{node_uuid} {node['endpoint'].rstrip('/')} {node['weight']} {path}\n"
             )
-        # HUP is asynchronous: reject removal of referenced OSTs before sending it.
-        db = MDS_STATE_DIR / str(self._cluster.uuid) / "mds.db"
-        if db.exists():
-            with sqlite3.connect(f"file:{db}?mode=ro", uri=True) as conn:
-                used = conn.execute(
-                    "SELECT ost_id FROM chunk_map UNION SELECT ost_id FROM snapshot_members"
-                )
-                if any(str(sys_uuid.UUID(bytes=row[0])) not in entries for row in used):
-                    raise ValueError("Cannot remove an OST holding chunks or snapshots")
-        unit_changed = _write_if_changed(
-            MDS_UNIT_DIR / self.unit_name,
-            MDS_UNIT_TEMPLATE.format(
-                uuid=self._cluster.uuid,
-                bind=f"[::]:{mds.port}"
-                if ":" in mds.hostname
-                else f"0.0.0.0:{mds.port}",
-            ),
-        )
+        config = MDS_CONFIG_DIR / f"{self._cluster.uuid}.conf"
+        previous_config = config.read_text() if config.exists() else None
+        bind = f"[::]:{mds.port}" if ":" in mds.hostname else f"0.0.0.0:{mds.port}"
+        content = f"BIND_ADDR={bind}\n"
+        legacy_db = MDS_LEGACY_STATE_DIR / str(self._cluster.uuid) / "mds.db"
+        dropin = MDS_UNIT_DIR / f"{self.unit_name}.d" / "exordos.conf"
+        unit_changed = False
+        if legacy_db.exists():
+            # Keep the existing index in place when switching to the package template.
+            content += f"DB_PATH={legacy_db}\n"
+            unit_changed = _write_if_changed(
+                dropin,
+                f"[Service]\nReadWritePaths={legacy_db.parent}\n",
+            )
+        config_changed = _write_if_changed(config, content)
+        legacy_unit = MDS_UNIT_DIR / self.unit_name
+        if legacy_unit.exists():
+            legacy_unit.unlink()
+            unit_changed = True
         topology = MDS_CONFIG_DIR / f"{self._cluster.uuid}.topology"
         previous_topology = topology.read_text() if topology.exists() else None
         topology_changed = _write_if_changed(
@@ -190,7 +168,7 @@ class RawstorStorageClusterDriver(AbstractStorageClusterDriver):
         if unit_changed:
             subprocess.run(["systemctl", "daemon-reload"], check=True)
         subprocess.run(["systemctl", "enable", "--now", self.unit_name], check=True)
-        if unit_changed:
+        if unit_changed or (config_changed and previous_config is not None):
             subprocess.run(["systemctl", "restart", self.unit_name], check=True)
         elif topology_changed and previous_topology is not None:
             try:
@@ -205,6 +183,11 @@ class RawstorStorageClusterDriver(AbstractStorageClusterDriver):
         subprocess.run(["systemctl", "disable", "--now", self.unit_name], check=True)
         (MDS_UNIT_DIR / self.unit_name).unlink(missing_ok=True)
         (MDS_CONFIG_DIR / f"{self._cluster.uuid}.topology").unlink(missing_ok=True)
+        (MDS_CONFIG_DIR / f"{self._cluster.uuid}.conf").unlink(missing_ok=True)
+        (MDS_LEGACY_CONFIG_DIR / f"{self._cluster.uuid}.topology").unlink(
+            missing_ok=True
+        )
+        (MDS_UNIT_DIR / f"{self.unit_name}.d" / "exordos.conf").unlink(missing_ok=True)
         subprocess.run(["systemctl", "daemon-reload"], check=True)
         # Keep the SQLite index and OST data when unregistering a cluster.
 
