@@ -29,14 +29,31 @@ Key components:
 
 ## Rawstor storage clusters
 
-`StorageClusterAgentDriver` runs on the core and manages one
-`rawstor-mds@<storage-uuid>.service` per storage. A rawstor driver spec contains
-`location` (the OST backing store), `ost_endpoint` (`ost://<storage-ip>:7777`),
-and `endpoint` (`mds://<core-ip>:7776/`). Each MDS has its own SQLite database
-and topology. The driver reports capacity through MDS and restarts a stopped
-MDS during reconciliation. Removing the resource stops the service while
-retaining its data. `ExordosLocalHyperDriver` creates disks through MDS with
-`width=1` and 1 GiB chunks, matching the single OST in each storage topology.
+`StorageClusterAgentDriver` runs on core and manages a separate
+`rawstor-mds@<cluster-uuid>.service`, persistent SQLite index and topology per
+cluster. Its driver spec carries the MDS `endpoint` and UUID-keyed `nodes`
+and `pools` supplied by the control plane. OST topology paths run from outermost
+to innermost (`dc/row/rack/server`). Topology edits reload the MDS; removing a
+referenced OST is rejected. Unregistering a cluster retains its database.
+
+Pool policies share physical OST capacity. The driver reports an OST inventory
+and completed MDS objects; `storage_capacity.available_by_policy` derives a
+placement upper bound accounting for mirrors, failure domains and pending disks.
+Pool figures are not additive. Each OST needs a dedicated backing filesystem.
+Unreachable OSTs contribute zero free space. MDS remains the final placement
+authority.
+
+`MachineVolume.storage_policy` preserves the assigned pool UUID, mirrors,
+chunk size and failure domain across reconciliation. `ExordosLocalHyperDriver`
+passes these to `rawstor.Target.create()` directly. This requires bindings from
+[run 37239522275](https://github.com/rawstor/librawstor/actions/runs/37239522275),
+version `99.0.0+0.4e3d1f3`, or a compatible newer build. Rawstor disks do not
+consume the hypervisor's local qcow2 budget. Implicit qcow2 pool attributes and
+new disk requests default to HOT ephemeral; explicit pool attributes override them.
+
+Set `RAWSTOR_TEST_MDS` and `RAWSTOR_TEST_OST` to daemon paths to run the native
+integration in `test_rawstor_cluster.py`. It checks two MDS instances, two OSTs
+per cluster, rack replication, topology reload, removal protection and recovery.
 
 # 🔗 Related projects
 
