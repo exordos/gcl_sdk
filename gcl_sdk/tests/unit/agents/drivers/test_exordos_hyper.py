@@ -153,7 +153,37 @@ class TestVolumeLifecycle:
         monkeypatch.setattr(exordos_hyper.rawstor, "Target", factory)
         created = driver.create_volume(volume)
         factory.assert_called_once_with(f"mds://10.20.0.2:7776/{volume.uuid}")
-        target.create.assert_called_once_with(size=2 << 30, width=1, chunk_size=1 << 30)
+        target.create.assert_called_once_with(
+            size=2 << 30, width=1, chunk_size=1 << 30, failure_domain="server"
+        )
+        assert created.storage_location == "mds://10.20.0.2:7776/"
+        assert driver._read_remote_location(volume.uuid) == "mds://10.20.0.2:7776/"
+        with open(driver._vhost_drop_in_path(volume.uuid)) as f:
+            assert "Environment=LOCATION=mds://10.20.0.2:7776\n" in f.read()
+
+    def test_mds_volume_uses_assigned_pool_policy(self, tmp_path, monkeypatch):
+        _no_op_systemctl(monkeypatch)
+        driver = _driver(tmp_path)
+        _redirect_vhost_drop_in(monkeypatch, driver, tmp_path)
+        volume = pool_base.MachineVolume(
+            uuid=sys_uuid.uuid4(),
+            project_id=sys_uuid.uuid4(),
+            size=2,
+            storage_location="mds://10.20.0.2:7776/",
+            storage_policy={
+                "mirrors": 2,
+                "chunk_size": 64 << 20,
+                "failure_domain": "rack",
+            },
+        )
+        target = MagicMock()
+        factory = MagicMock(return_value=target)
+        monkeypatch.setattr(exordos_hyper.rawstor, "Target", factory)
+        created = driver.create_volume(volume)
+        factory.assert_called_once_with(f"mds://10.20.0.2:7776/{volume.uuid}")
+        target.create.assert_called_once_with(
+            size=2 << 30, width=2, chunk_size=64 << 20, failure_domain="rack"
+        )
         assert created.storage_location == "mds://10.20.0.2:7776/"
         assert driver._read_remote_location(volume.uuid) == "mds://10.20.0.2:7776/"
         with open(driver._vhost_drop_in_path(volume.uuid)) as f:
