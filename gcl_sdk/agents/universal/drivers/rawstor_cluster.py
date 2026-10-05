@@ -134,11 +134,12 @@ class RawstorStorageClusterDriver(AbstractStorageClusterDriver):
                 or not 1 <= len(path.split("/")) <= 4
                 or any(not part or part in (".", "..") for part in path.split("/"))
                 or not math.isfinite(node["weight"])
-                or node["weight"] <= 0
+                or not 1 <= node["weight"] <= (1 << 64) - 1
+                or node["weight"] != int(node["weight"])
             ):
                 raise ValueError("Invalid rawstor OST topology entry")
             lines.append(
-                f"{node_uuid} {node['endpoint'].rstrip('/')} {node['weight']} {path}\n"
+                f"{node_uuid} {node['endpoint'].rstrip('/')} {int(node['weight'])} {path}\n"
             )
         config = MDS_CONFIG_DIR / f"{self._cluster.uuid}.conf"
         previous_config = config.read_text() if config.exists() else None
