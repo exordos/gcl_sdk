@@ -22,22 +22,39 @@ DOMAIN_DEPTH = {"dc": 1, "row": 2, "rack": 3, "server": 4}
 
 
 def validate_ost_configuration(location, bind_address):
-    """Validate backing directory and systemd arguments without specifiers."""
+    """Validate file/ZFS backing and systemd arguments without specifiers."""
     uri = urlparse(location)
     if (
-        not location.startswith("file:///")
-        or uri.scheme != "file"
-        or uri.netloc
-        or uri.query
+        uri.query
         or uri.fragment
-        or not uri.path.startswith("/")
-        or uri.path == "/"
         or any(c.isspace() for c in location)
         or "%" in location
         or any(c in location for c in ('"', "'", "\\", "$"))
         or any(p in (".", "..") for p in uri.path.split("/"))
     ):
-        raise ValueError("OST backing store must be an absolute file:/// directory URI")
+        raise ValueError("Invalid OST backing URI")
+    if uri.scheme == "file":
+        if (
+            not location.startswith("file:///")
+            or uri.netloc
+            or not uri.path.startswith("/")
+            or uri.path == "/"
+        ):
+            raise ValueError(
+                "OST backing store must be an absolute file:/// directory URI"
+            )
+        backing = uri.path
+    elif uri.scheme == "zfs":
+        backing = uri.netloc + uri.path
+        if (
+            not location.startswith("zfs://")
+            or not uri.netloc
+            or not all(c.isascii() and (c.isalnum() or c in "_-/.") for c in backing)
+            or any(not part or part in (".", "..") for part in backing.split("/"))
+        ):
+            raise ValueError("OST ZFS backing must be zfs://POOL[/DATASET]")
+    else:
+        raise ValueError("OST backing scheme must be file or zfs")
     try:
         bind = urlparse("ost://" + bind_address)
         ipaddress.ip_address(bind.hostname)
@@ -55,7 +72,7 @@ def validate_ost_configuration(location, bind_address):
         raise ValueError(
             "OST bind must be an IP address and port (IPv6 in brackets)"
         ) from None
-    return uri.path
+    return backing
 
 
 def domain(node, level):

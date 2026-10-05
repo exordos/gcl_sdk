@@ -226,12 +226,18 @@ class TestCoreMDSLifecycle:
     def _driver(self, tmp_path, monkeypatch, port=7776):
         monkeypatch.setattr(rawstor_cluster, "MDS_CONFIG_DIR", tmp_path / "config")
         monkeypatch.setattr(rawstor_cluster, "MDS_UNIT_DIR", tmp_path / "units")
+        monkeypatch.setattr(
+            rawstor_cluster, "MDS_LEGACY_STATE_DIR", tmp_path / "legacy-state"
+        )
+        monkeypatch.setattr(
+            rawstor_cluster, "MDS_LEGACY_CONFIG_DIR", tmp_path / "legacy-config"
+        )
         cluster = _cluster(tmp_path)
         cluster.driver_spec.endpoint = f"mds://10.20.0.2:{port}/"
         cluster.driver_spec.ost_endpoint = "ost://10.0.0.5:7777"
         return rawstor_cluster.RawstorStorageClusterDriver(cluster)
 
-    def test_configure_creates_isolated_topology_unit_and_persistent_database(
+    def test_configure_creates_isolated_topology_and_instance_config(
         self, tmp_path, monkeypatch
     ):
         driver = self._driver(tmp_path, monkeypatch)
@@ -240,16 +246,54 @@ class TestCoreMDSLifecycle:
         cluster_uuid = driver._cluster.uuid
         topology = (tmp_path / "config" / f"{cluster_uuid}.topology").read_text()
         assert topology == f"{cluster_uuid} ost://10.0.0.5:7777 1 {cluster_uuid}\n"
-        unit = (tmp_path / "units" / driver.unit_name).read_text()
-        assert "--bind=0.0.0.0:7776" in unit
-        assert (
-            f"--db=/var/lib/exordos/exordos_core/rawstor-mds/{cluster_uuid}/mds.db"
-            in unit
-        )
+        config = (tmp_path / "config" / f"{cluster_uuid}.conf").read_text()
+        assert config == "BIND_ADDR=0.0.0.0:7776\n"
+        assert not (tmp_path / "units" / driver.unit_name).exists()
         assert (
             call(["systemctl", "enable", "--now", driver.unit_name], check=True)
             in run.call_args_list
         )
+
+    def test_migrates_generated_unit_without_replacing_existing_database(
+        self, tmp_path, monkeypatch
+    ):
+        driver = self._driver(tmp_path, monkeypatch)
+        cluster_uuid = driver._cluster.uuid
+        db = rawstor_cluster.MDS_LEGACY_STATE_DIR / str(cluster_uuid) / "mds.db"
+        db.parent.mkdir(parents=True)
+        db.write_bytes(b"keep existing database")
+        legacy = rawstor_cluster.MDS_UNIT_DIR / driver.unit_name
+        legacy.parent.mkdir()
+        legacy.write_text("old generated unit")
+        with patch.object(rawstor_cluster.subprocess, "run") as run:
+            driver.configure()
+        assert not legacy.exists()
+        config = (rawstor_cluster.MDS_CONFIG_DIR / f"{cluster_uuid}.conf").read_text()
+        assert f"DB_PATH={db}" in config
+        assert db.read_bytes() == b"keep existing database"
+        assert (
+            f"ReadWritePaths={db.parent}"
+            in (legacy.parent / f"{driver.unit_name}.d" / "exordos.conf").read_text()
+        )
+        assert (
+            call(["systemctl", "restart", driver.unit_name], check=True)
+            in run.call_args_list
+        )
+
+    def test_topology_update_requests_reload_without_inspecting_database_or_logs(
+        self, tmp_path, monkeypatch
+    ):
+        driver = self._driver(tmp_path, monkeypatch)
+        with patch.object(rawstor_cluster.subprocess, "run") as run:
+            driver.configure()
+            run.reset_mock()
+            driver._cluster.driver_spec.ost_endpoint = "ost://10.0.0.6:7778"
+            driver.configure()
+        assert (
+            call(["systemctl", "reload", driver.unit_name], check=True)
+            in run.call_args_list
+        )
+        assert not any("restart" in c.args[0] for c in run.call_args_list)
 
     def test_unchanged_configuration_does_not_restart_mds(self, tmp_path, monkeypatch):
         driver = self._driver(tmp_path, monkeypatch)
@@ -280,7 +324,8 @@ class TestCoreMDSLifecycle:
             second.configure()
         assert first.unit_name != second.unit_name
         assert (
-            "--bind=0.0.0.0:7778" in (tmp_path / "units" / second.unit_name).read_text()
+            "BIND_ADDR=0.0.0.0:7778"
+            in (tmp_path / "config" / f"{second._cluster.uuid}.conf").read_text()
         )
 
     def test_delete_stops_only_this_clusters_mds(self, tmp_path, monkeypatch):
@@ -448,15 +493,6 @@ def test_two_core_mds_instances_create_enumerate_and_recover_disks(
                 )
                 in run.call_args_list
             )
-        deadline = time.monotonic() + 5
-        while "Topology reloaded" not in (tmp_path / f"{first.uuid}.log").read_text():
-            assert time.monotonic() < deadline
-            time.sleep(0.01)
-        original = first.driver_spec.nodes
-        first.driver_spec.nodes = dict(list(original.items())[1:])
-        with pytest.raises(ValueError, match="Cannot remove an OST"):
-            rawstor_cluster.RawstorStorageClusterDriver(first).configure()
-        first.driver_spec.nodes = original
 
         # Stop and restart one MDS with its original SQLite database.
         previous = mds_processes[0]
