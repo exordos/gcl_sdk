@@ -45,7 +45,7 @@ LOG = logging.getLogger(__name__)
 # the other driver specs) so exordos_core can reference them without
 # pulling in the `rawstor` python bindings this module needs.
 AbstractStorageClusterDriverSpec = pool_base.AbstractStorageClusterDriverSpec
-RawstorStorageClusterDriverSpec = pool_base.RawstorStorageClusterDriverSpec
+RawstorStorageClusterDriverSpec = pool_base.RawstorStorageClusterAgentSpec
 
 
 MDS_CONFIG_DIR = Path("/etc/rawstor/mds")
