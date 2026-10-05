@@ -554,7 +554,14 @@ class AbstractStorageClusterDriverSpec(
 
 
 class RawstorStorageClusterDriverSpec(AbstractStorageClusterDriverSpec):
+    """Public cluster configuration; topology and policies are separate resources."""
+
     KIND = "rawstor"
+    endpoint = properties.property(types.String(max_length=2048), required=True)
+
+
+class RawstorStorageClusterAgentSpec(RawstorStorageClusterDriverSpec):
+    """Agent snapshot, including legacy fields accepted from older payloads."""
 
     # Local backing store configured on the OST host by the CLI.
     location = properties.property(types.String(max_length=2048), default="")
