@@ -149,13 +149,12 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
         except subprocess.CalledProcessError as e:
             # The most common cause by far: rawstor-vhost's package (and
             # its rawstor-vhost@.service template) is only installed by
-            # `hypervisors init/bootstrap --with-rawstor` - a hypervisor
-            # set up without that flag has librawstor/rawstor-ost (if
-            # anything) but not this, so the unit simply doesn't exist.
+            # `exordos hypervisors init --with-rawstor`. Initializing an OST
+            # separately does not install the vhost service template.
             raise RuntimeError(
                 f"Failed to start {unit} - is the rawstor-vhost package "
-                "installed on this hypervisor? (`hypervisors init` / "
-                "`bootstrap` need --with-rawstor to install it)"
+                "installed on this hypervisor? Run "
+                "`exordos hypervisors init --with-rawstor` to install it."
             ) from e
         self._wait_for_socket(self._socket_path(volume_uuid))
 
