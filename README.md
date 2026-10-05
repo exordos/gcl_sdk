@@ -33,14 +33,15 @@ Key components:
 `rawstor-mds@<cluster-uuid>.service`, persistent SQLite index and topology per
 cluster. Its driver spec carries the MDS `endpoint` and UUID-keyed `nodes`
 and `pools` supplied by the control plane. OST topology paths run from outermost
-to innermost (`dc/row/rack/server`). Topology edits reload the MDS; removing a
-referenced OST is rejected. Unregistering a cluster retains its database.
+to innermost (`dc/row/rack/server`). Topology edits request an asynchronous
+MDS reload. Unregistering a cluster retains its database.
 
 `StorageNodeAgentDriver` manages OST units and backing directories on storage
 hosts. Core sends `storage_node` resources to the selected agent and admits them
 into MDS topology only after the advertised OST endpoint responds. Updates
-reconcile service configuration; deletion stops the unit after MDS acknowledges
-removal and retains backing data. Agent metadata is separate from hypervisor pools.
+reconcile service configuration; deletion stops the unit after the MDS agent
+reports the requested topology update and retains backing data. Agent metadata
+is separate from hypervisor pools.
 
 Pool policies share physical OST capacity. The driver reports an OST inventory
 and completed MDS objects; `storage_capacity.available_by_policy` derives a
@@ -52,14 +53,16 @@ authority.
 `MachineVolume.storage_policy` preserves the assigned pool UUID, mirrors,
 chunk size and failure domain across reconciliation. `ExordosLocalHyperDriver`
 passes these to `rawstor.Target.create()` directly. This requires bindings from
-[run 37239522275](https://github.com/rawstor/librawstor/actions/runs/37239522275),
-version `99.0.0+0.4e3d1f3`, or a compatible newer build. Rawstor disks do not
+[run 37329790134](https://github.com/rawstor/librawstor/actions/runs/37329790134),
+version `99.0.0+0.fe3340e`, or a compatible newer build. Rawstor disks do not
 consume the hypervisor's local qcow2 budget. Implicit qcow2 pool attributes and
 new disk requests default to HOT ephemeral; explicit pool attributes override them.
 
 Set `RAWSTOR_TEST_MDS` and `RAWSTOR_TEST_OST` to daemon paths to run the native
 integration in `test_rawstor_cluster.py`. It checks two MDS instances, two OSTs
-per cluster, rack replication, topology reload, removal protection and recovery.
+per cluster, rack replication, topology reload and recovery. Set
+`RAWSTOR_TEST_ZFS_LOCATION` to an isolated test dataset and run the native node
+test as root to exercise zvol creation and snapshots through an OST.
 
 # 🔗 Related projects
 
@@ -74,3 +77,12 @@ Contributing to the project is highly appreciated! However, some rules should be
 - Changes should include not only new functionality or bug fixes, but also tests for the new code.
 - After the changes are completed and **tested**, a Pull Request should be created with a clear description of the new functionality. And add one of the project maintainers as a reviewer.
 - Changes can be merged only after receiving an approve from one of the project maintainers.
+
+The rawstor drivers use the packaged `rawstor-ost@.service` and
+`rawstor-mds@.service` templates, configured under `/etc/rawstor/ost` and
+`/etc/rawstor/mds`. They replace legacy Exordos-generated instance units while
+preserving OST data and existing MDS databases. Topology updates request
+`systemctl reload`; no synchronous acknowledgement or journal parsing is used.
+OSTs accept native `zfs://POOL/DATASET` backing on a pre-provisioned dataset;
+these instances use a root service drop-in for zvol management. File-backed
+OSTs continue to run as `rawstor`. Deletion removes only service configuration.
