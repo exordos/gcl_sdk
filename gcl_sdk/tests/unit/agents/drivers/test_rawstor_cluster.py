@@ -280,6 +280,38 @@ class TestCoreMDSLifecycle:
             in run.call_args_list
         )
 
+    @pytest.mark.parametrize("weight", [1.0, 2.0])
+    def test_topology_serializes_integral_legacy_weights_without_decimal_point(
+        self, tmp_path, monkeypatch, weight
+    ):
+        driver = self._driver(tmp_path, monkeypatch)
+        node_uuid = str(driver._cluster.uuid)
+        driver._cluster.driver_spec.nodes = {
+            node_uuid: {
+                "endpoint": "ost://10.0.0.5:7777",
+                "weight": weight,
+                "failure_domain_path": "dc/server",
+            }
+        }
+        with patch.object(rawstor_cluster.subprocess, "run"):
+            driver.configure()
+        assert (tmp_path / "config" / f"{node_uuid}.topology").read_text() == (
+            f"{node_uuid} ost://10.0.0.5:7777 {int(weight)} dc/server\n"
+        )
+
+    @pytest.mark.parametrize("weight", [0, 1.5, float("inf"), 1 << 64])
+    def test_topology_rejects_invalid_weights(self, tmp_path, monkeypatch, weight):
+        driver = self._driver(tmp_path, monkeypatch)
+        driver._cluster.driver_spec.nodes = {
+            str(driver._cluster.uuid): {
+                "endpoint": "ost://10.0.0.5:7777",
+                "weight": weight,
+                "failure_domain_path": "server",
+            }
+        }
+        with pytest.raises(ValueError):
+            driver.configure()
+
     def test_topology_update_requests_reload_without_inspecting_database_or_logs(
         self, tmp_path, monkeypatch
     ):
@@ -435,7 +467,7 @@ def test_two_core_mds_instances_create_enumerate_and_recover_disks(
                 )
                 nodes[str(sys_uuid.uuid4())] = {
                     "endpoint": f"ost://127.0.0.1:{ost_port}",
-                    "weight": 1,
+                    "weight": 1.0,
                     "failure_domain_path": f"dc/row/rack{member}/server{member}",
                 }
             cluster.driver_spec.nodes = nodes
