@@ -36,6 +36,12 @@ and `pools` supplied by the control plane. OST topology paths run from outermost
 to innermost (`dc/row/rack/server`). Topology edits reload the MDS; removing a
 referenced OST is rejected. Unregistering a cluster retains its database.
 
+`StorageNodeAgentDriver` manages OST units and backing directories on storage
+hosts. Core sends `storage_node` resources to the selected agent and admits them
+into MDS topology only after the advertised OST endpoint responds. Updates
+reconcile service configuration; deletion stops the unit after MDS acknowledges
+removal and retains backing data. Agent metadata is separate from hypervisor pools.
+
 Pool policies share physical OST capacity. The driver reports an OST inventory
 and completed MDS objects; `storage_capacity.available_by_policy` derives a
 placement upper bound accounting for mirrors, failure domains and pending disks.

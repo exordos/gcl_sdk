@@ -15,7 +15,47 @@
 #    under the License.
 """Shared rawstor admission budget, in bytes (pool figures are not additive)."""
 
+import ipaddress
+from urllib.parse import urlparse
+
 DOMAIN_DEPTH = {"dc": 1, "row": 2, "rack": 3, "server": 4}
+
+
+def validate_ost_configuration(location, bind_address):
+    """Validate backing directory and systemd arguments without specifiers."""
+    uri = urlparse(location)
+    if (
+        not location.startswith("file:///")
+        or uri.scheme != "file"
+        or uri.netloc
+        or uri.query
+        or uri.fragment
+        or not uri.path.startswith("/")
+        or uri.path == "/"
+        or any(c.isspace() for c in location)
+        or "%" in location
+        or any(c in location for c in ('"', "'", "\\", "$"))
+        or any(p in (".", "..") for p in uri.path.split("/"))
+    ):
+        raise ValueError("OST backing store must be an absolute file:/// directory URI")
+    try:
+        bind = urlparse("ost://" + bind_address)
+        ipaddress.ip_address(bind.hostname)
+        if (
+            not bind.port
+            or bind.path
+            or bind.query
+            or bind.fragment
+            or bind.username
+            or any(c.isspace() for c in bind_address)
+            or "%" in bind_address
+        ):
+            raise ValueError()
+    except (ValueError, TypeError):
+        raise ValueError(
+            "OST bind must be an IP address and port (IPv6 in brackets)"
+        ) from None
+    return uri.path
 
 
 def domain(node, level):
