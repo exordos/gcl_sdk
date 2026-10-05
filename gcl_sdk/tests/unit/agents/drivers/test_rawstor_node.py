@@ -52,6 +52,7 @@ def node(tmp_path, monkeypatch):
     from gcl_sdk.agents.universal.drivers import rawstor_node
 
     monkeypatch.setattr(rawstor_node, "OST_UNIT_DIR", tmp_path / "units")
+    monkeypatch.setattr(rawstor_node, "OST_CONFIG_DIR", tmp_path / "config")
     model = rawstor_node.MetaStorageNode(
         uuid=uuid4(),
         cluster=uuid4(),
@@ -72,8 +73,9 @@ def test_reconcile_starts_ost_and_checks_advertised_endpoint(node):
         assert model.status == "ACTIVE"
         location.assert_called_once_with(model.endpoint)
         location.return_value.info.assert_called_once()
-        unit = (module.OST_UNIT_DIR / model.unit_name).read_text()
-        assert f"--bind=0.0.0.0:7777 {model.location}" in unit
+        config = (module.OST_CONFIG_DIR / f"{model.uuid}.conf").read_text()
+        assert f"BIND_ADDR=0.0.0.0:7777\nLOCATION={model.location}\n" == config
+        assert not (module.OST_UNIT_DIR / model.unit_name).exists()
         commands = [c.args[0] for c in run.call_args_list]
         assert ["systemctl", "enable", "--now", model.unit_name] in commands
         run.reset_mock()
@@ -126,12 +128,13 @@ def test_update_restarts_changed_bind_and_delete_preserves_backing_data(node):
         ]
         model.delete_from_dp()
     assert not (module.OST_UNIT_DIR / model.unit_name).exists()
+    assert not (module.OST_CONFIG_DIR / f"{model.uuid}.conf").exists()
     assert data.read_text() == "keep"
 
 
-def test_native_ost_launch_from_reconciled_unit(node, monkeypatch, tmp_path):
+@pytest.mark.parametrize("backing", ["file", "zfs"])
+def test_native_ost_launch_from_reconciled_config(node, monkeypatch, tmp_path, backing):
     import os
-    import shlex
     import socket
     import time
 
@@ -139,6 +142,11 @@ def test_native_ost_launch_from_reconciled_unit(node, monkeypatch, tmp_path):
     if not binary:
         pytest.skip("Set RAWSTOR_TEST_OST to run the native OST lifecycle")
     model, module = node
+    if backing == "zfs":
+        location = os.environ.get("RAWSTOR_TEST_ZFS_LOCATION")
+        if not location:
+            pytest.skip("Set RAWSTOR_TEST_ZFS_LOCATION to an isolated test dataset")
+        model.location = location
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
@@ -146,23 +154,33 @@ def test_native_ost_launch_from_reconciled_unit(node, monkeypatch, tmp_path):
     model.endpoint = f"ost://127.0.0.1:{port}"
     processes = []
     log = (tmp_path / "ost.log").open("w")
+    real_run = subprocess.run
 
     def system_command(args, **kwargs):
-        if args[0] == "install":
+        if args[0] == "zfs":
+            return real_run(args, **kwargs)
+        elif args[0] == "install":
             from pathlib import Path
 
             Path(args[-1]).mkdir(exist_ok=True)
         elif args[1] == "enable" and not processes:
-            unit = (module.OST_UNIT_DIR / model.unit_name).read_text()
-            command = next(
-                line.removeprefix("ExecStart=")
-                for line in unit.splitlines()
-                if line.startswith("ExecStart=")
+            config = dict(
+                line.split("=", 1)
+                for line in (module.OST_CONFIG_DIR / f"{model.uuid}.conf")
+                .read_text()
+                .splitlines()
             )
-            # Keep the test daemon small; use the unit's real bind and backing URI.
-            argv = shlex.split(command)
-            argv[0] = binary
-            argv[1:1] = ["--workers", "1", "--queue-size", "256"]
+            # Use the same bind and backing URI consumed by the packaged template.
+            argv = [
+                binary,
+                "--bind",
+                config["BIND_ADDR"],
+                "--workers",
+                "1",
+                "--queue-size",
+                "256",
+                config["LOCATION"],
+            ]
             processes.append(
                 subprocess.Popen(argv, stdout=log, stderr=subprocess.STDOUT)
             )
@@ -186,6 +204,13 @@ def test_native_ost_launch_from_reconciled_unit(node, monkeypatch, tmp_path):
         import rawstor
 
         assert rawstor.Location(model.endpoint).info().total > 0
+        if backing == "zfs":
+            target = rawstor.Location(model.endpoint).create(size=8 << 20, width=1)
+            assert target.spec().size == 8 << 20
+            snapshot = target.create_version()
+            assert snapshot.spec().size == 8 << 20
+            snapshot.remove()
+            target.remove()
         model.delete_from_dp()
         assert processes[0].poll() is not None
         assert not (module.OST_UNIT_DIR / model.unit_name).exists()
@@ -211,3 +236,71 @@ def test_agent_delete_does_not_contact_or_restart_an_unreachable_ost(node, tmp_p
     location.assert_not_called()
     commands = [call.args[0] for call in run.call_args_list]
     assert not any("enable" in command or "restart" in command for command in commands)
+
+
+@pytest.mark.parametrize(
+    "location,expected",
+    [
+        ("zfs://tank", "tank"),
+        ("zfs://tank/ost1", "tank/ost1"),
+        ("zfs://pool_1/rawstor/ost-1", "pool_1/rawstor/ost-1"),
+    ],
+)
+def test_ost_configuration_accepts_zfs(location, expected):
+    assert (
+        storage_capacity.validate_ost_configuration(location, "0.0.0.0:7777")
+        == expected
+    )
+
+
+@pytest.mark.parametrize(
+    "location",
+    [
+        "ZFS://tank/ost",
+        "zfs:///tank",
+        "zfs://tank/../ost",
+        "zfs://tank/ost/",
+        "zfs://tank//ost",
+        "zfs://user@tank/ost",
+        "zfs://tank/ost@snapshot",
+        "zfs://tank/ost%20one",
+    ],
+)
+def test_ost_configuration_rejects_invalid_zfs(location):
+    with pytest.raises(ValueError):
+        storage_capacity.validate_ost_configuration(location, "0.0.0.0:7777")
+
+
+def test_zfs_reconcile_uses_existing_dataset_and_privileged_template_dropin(node):
+    model, module = node
+    model.location = "zfs://tank/ost1"
+    with patch.object(module.subprocess, "run") as run, patch("rawstor.Location"):
+        model.dump_to_dp()
+        commands = [call.args[0] for call in run.call_args_list]
+        assert ["zfs", "list", "-H", "-o", "name", "tank/ost1"] in commands
+        assert not any(
+            command[0] == "install" or "create" in command for command in commands
+        )
+        dropin = (
+            module.OST_UNIT_DIR / f"{model.unit_name}.d" / "exordos.conf"
+        ).read_text()
+        assert "User=root" in dropin and "Group=root" in dropin
+        assert not (module.OST_UNIT_DIR / model.unit_name).exists()
+        run.reset_mock()
+        model.delete_from_dp()
+        assert not any(
+            command.args[0][0] in ("zfs", "zpool") for command in run.call_args_list
+        )
+
+
+def test_reconcile_replaces_legacy_generated_unit(node):
+    model, module = node
+    module.OST_UNIT_DIR.mkdir()
+    legacy = module.OST_UNIT_DIR / model.unit_name
+    legacy.write_text("old generated unit")
+    with patch.object(module.subprocess, "run") as run, patch("rawstor.Location"):
+        model.restore_from_dp()
+        assert ["systemctl", "daemon-reload"] in [
+            call.args[0] for call in run.call_args_list
+        ]
+    assert not legacy.exists()
