@@ -109,7 +109,9 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
         os.makedirs(drop_in_dir, exist_ok=True)
         with open(self._vhost_drop_in_path(volume_uuid), "w") as f:
             # The package's ExecStart appends /%i to LOCATION.
-            f.write(f"[Service]\nEnvironment=LOCATION={storage_location.removesuffix('/')}\n")
+            f.write(
+                f"[Service]\nEnvironment=LOCATION={storage_location.removesuffix('/')}\n"
+            )
         subprocess.check_call(["systemctl", "daemon-reload"])
 
     def _remove_remote_location_drop_in(self, volume_uuid: sys_uuid.UUID) -> None:
@@ -430,10 +432,17 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
 
         target = rawstor.Target(self._target_uri(volume.uuid, address))
         try:
+            policy = volume.storage_policy
+            placement = {}
+            if address.startswith("mds://"):
+                placement["failure_domain"] = policy.get("failure_domain", "server")
             target.create(
                 size=volume.size << 30,
-                width=1,
-                chunk_size=(1 << 30) if address.startswith("mds://") else 0,
+                width=policy.get("mirrors", 1),
+                chunk_size=policy.get("chunk_size", 1 << 30)
+                if address.startswith("mds://")
+                else 0,
+                **placement,
             )
         except FileExistsError:
             raise pool_base.VolumeAlreadyExistsError(volume=volume.uuid)
