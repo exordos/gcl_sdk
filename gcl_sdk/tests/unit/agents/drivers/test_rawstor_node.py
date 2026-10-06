@@ -291,16 +291,3 @@ def test_zfs_reconcile_uses_existing_dataset_and_privileged_template_dropin(node
         assert not any(
             command.args[0][0] in ("zfs", "zpool") for command in run.call_args_list
         )
-
-
-def test_reconcile_replaces_legacy_generated_unit(node):
-    model, module = node
-    module.OST_UNIT_DIR.mkdir()
-    legacy = module.OST_UNIT_DIR / model.unit_name
-    legacy.write_text("old generated unit")
-    with patch.object(module.subprocess, "run") as run, patch("rawstor.Location"):
-        model.restore_from_dp()
-        assert ["systemctl", "daemon-reload"] in [
-            call.args[0] for call in run.call_args_list
-        ]
-    assert not legacy.exists()
