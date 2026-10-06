@@ -79,6 +79,38 @@ class TestActualizeCapability:
         assert result == []
         service._delete_resource.assert_called_once_with(driver, actual_resource)
 
+    def test_deletes_lost_resources_no_longer_targeted(self):
+        lost = _make_resource()
+        driver = MagicMock()
+        driver.list.return_value = []
+        driver.list_lost.return_value = [lost]
+
+        service = MagicMock()
+
+        result = UniversalAgentService._actualize_capability(
+            service, driver, CAPABILITY, []
+        )
+
+        assert result == []
+        service._delete_resource.assert_called_once_with(driver, lost)
+
+    def test_recreates_lost_resources_still_targeted(self):
+        target = _make_resource()
+        driver = MagicMock()
+        driver.list.return_value = []
+        driver.list_lost.return_value = [target]
+
+        service = MagicMock()
+        service._create_resource.return_value = target
+
+        result = UniversalAgentService._actualize_capability(
+            service, driver, CAPABILITY, [target]
+        )
+
+        assert result == [target]
+        service._create_resource.assert_called_once_with(driver, target)
+        service._delete_resource.assert_not_called()
+
     def test_skips_unchanged_resources(self):
         uuid = sys_uuid.uuid4()
         value = {"uuid": str(uuid), "name": "test"}
