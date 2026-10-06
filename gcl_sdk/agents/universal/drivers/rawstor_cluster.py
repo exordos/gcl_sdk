@@ -16,10 +16,12 @@
 from __future__ import annotations
 
 import abc
+import ipaddress
 import logging
 import math
 import os
 from pathlib import Path
+import socket
 import subprocess
 import tempfile
 import time
@@ -143,7 +145,16 @@ class RawstorStorageClusterDriver(AbstractStorageClusterDriver):
             )
         config = MDS_CONFIG_DIR / f"{self._cluster.uuid}.conf"
         previous_config = config.read_text() if config.exists() else None
-        bind = f"[::]:{mds.port}" if ":" in mds.hostname else f"0.0.0.0:{mds.port}"
+        try:
+            address = ipaddress.ip_address(mds.hostname)
+        except ValueError:
+            address = ipaddress.ip_address(
+                socket.getaddrinfo(mds.hostname, mds.port, type=socket.SOCK_STREAM)[0][
+                    4
+                ][0]
+            )
+        host = f"[{address}]" if address.version == 6 else str(address)
+        bind = f"{host}:{mds.port}"
         content = f"BIND_ADDR={bind}\n"
         legacy_db = MDS_LEGACY_STATE_DIR / str(self._cluster.uuid) / "mds.db"
         dropin = MDS_UNIT_DIR / f"{self.unit_name}.d" / "exordos.conf"
