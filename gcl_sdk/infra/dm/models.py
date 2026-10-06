@@ -784,15 +784,15 @@ class LBTypeCoreAgentKind(types_dynamic.AbstractKindModel, ra_models.SimpleViewM
     KIND = "core_agent"
 
 
-class LBTypeNodeKind(types_dynamic.AbstractKindModel, ra_models.SimpleViewMixin):
+class LBTypeExternalNodeKind(types_dynamic.AbstractKindModel, ra_models.SimpleViewMixin):
     """An LB run by an existing compute node of the LB's project.
 
     The node must ship nginx and the universal agent with LBCapabilityDriver.
     """
 
-    KIND = "node"
+    KIND = "external_node"
 
-    node = properties.property(ra_types.UUID(), required=True)
+    external_node = properties.property(ra_types.UUID(), required=True)
 
 
 class LB(
@@ -817,7 +817,7 @@ class LB(
         types_dynamic.KindModelSelectorType(
             types_dynamic.KindModelType(LBTypeCoreKind),
             types_dynamic.KindModelType(LBTypeCoreAgentKind),
-            types_dynamic.KindModelType(LBTypeNodeKind),
+            types_dynamic.KindModelType(LBTypeExternalNodeKind),
         ),
         default=LBTypeCoreKind,
         required=True,
