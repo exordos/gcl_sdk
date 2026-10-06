@@ -42,6 +42,12 @@ LOG = logging.getLogger(__name__)
 
 
 core_agent_opts = [
+    cfg.FloatOpt(
+        "iter_min_period",
+        default=3.0,
+        min=0.0,
+        help="Minimum interval in seconds between agent iteration starts.",
+    ),
     cfg.StrOpt(
         "uuid",
         default=None,
@@ -216,7 +222,7 @@ def main():
         caps_drivers=caps_drivers,
         facts_drivers=facts_drivers,
         payload_path=CONF[DOMAIN].payload_path,
-        iter_min_period=3,
+        iter_min_period=CONF[DOMAIN].iter_min_period,
         verify_node_on_register=CONF[DOMAIN].verify_node_on_register,
     )
 
