@@ -247,7 +247,7 @@ class TestCoreMDSLifecycle:
         topology = (tmp_path / "config" / f"{cluster_uuid}.topology").read_text()
         assert topology == f"{cluster_uuid} ost://10.0.0.5:7777 1 {cluster_uuid}\n"
         config = (tmp_path / "config" / f"{cluster_uuid}.conf").read_text()
-        assert config == "BIND_ADDR=0.0.0.0:7776\n"
+        assert config == "BIND_ADDR=10.20.0.2:7776\n"
         assert not (tmp_path / "units" / driver.unit_name).exists()
         assert (
             call(["systemctl", "enable", "--now", driver.unit_name], check=True)
@@ -356,9 +356,32 @@ class TestCoreMDSLifecycle:
             second.configure()
         assert first.unit_name != second.unit_name
         assert (
-            "BIND_ADDR=0.0.0.0:7778"
+            "BIND_ADDR=10.20.0.2:7778"
             in (tmp_path / "config" / f"{second._cluster.uuid}.conf").read_text()
         )
+
+    @pytest.mark.parametrize("address", ["10.20.0.2", "2001:db8::2"])
+    def test_hostname_endpoint_is_resolved_for_bind(
+        self, tmp_path, monkeypatch, address
+    ):
+        driver = self._driver(tmp_path, monkeypatch)
+        driver._cluster.driver_spec.endpoint = "mds://core.example:7776/"
+        with (
+            patch.object(rawstor_cluster.subprocess, "run"),
+            patch.object(
+                rawstor_cluster.socket,
+                "getaddrinfo",
+                return_value=[(None, None, None, "", (address, 7776))],
+            ) as resolve,
+        ):
+            driver.configure()
+        resolve.assert_called_once_with(
+            "core.example", 7776, type=rawstor_cluster.socket.SOCK_STREAM
+        )
+        host = f"[{address}]" if ":" in address else address
+        config = tmp_path / "config" / f"{driver._cluster.uuid}.conf"
+        assert config.read_text() == f"BIND_ADDR={host}:7776\n"
+        assert driver._cluster.driver_spec.endpoint == "mds://core.example:7776/"
 
     def test_delete_stops_only_this_clusters_mds(self, tmp_path, monkeypatch):
         driver = self._driver(tmp_path, monkeypatch)
