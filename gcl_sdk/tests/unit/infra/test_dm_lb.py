@@ -28,7 +28,7 @@ def test_lb_on_node():
         uuid=LB,
         name="realm-lb",
         project_id=PROJECT,
-        type=models.LBTypeNodeKind(node=node),
+        type=models.LBTypeExternalNodeKind(external_node=node),
     )
 
     assert lb.get_resource_kind() == "lb"
@@ -38,7 +38,10 @@ def test_lb_on_node():
         "type",
         "project_id",
     }
-    assert lb.dump_to_simple_view()["type"] == {"kind": "node", "node": str(node)}
+    assert lb.dump_to_simple_view()["type"] == {
+        "kind": "external_node",
+        "external_node": str(node),
+    }
 
 
 def test_lb_defaults_to_core_vm():
