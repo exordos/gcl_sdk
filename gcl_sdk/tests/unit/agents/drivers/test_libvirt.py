@@ -318,6 +318,7 @@ class TestVhostuserDisk:
         disk = ET.fromstring(xml)
 
         assert disk.get("type") == "vhostuser"
+        assert disk.find("driver").get("queues") == "4"
         assert disk.get("device") == "disk"
         assert disk.find("driver").get("name") == "qemu"
 
