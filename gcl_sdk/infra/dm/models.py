@@ -50,9 +50,9 @@ class Volume(
     device_type = properties.property(ra_types.String(max_length=64), default="")
     speed = properties.property(
         ra_types.Enum([s.value for s in pc.DiskSpeed]),
-        default=pc.DiskSpeed.WARM.value,
+        default=pc.DiskSpeed.HOT.value,
     )
-    ephemeral = properties.property(ra_types.Boolean(), default=False)
+    ephemeral = properties.property(ra_types.Boolean(), default=True)
     index = properties.property(
         ra_types.Integer(min_value=0, max_value=4096), default=4096
     )
@@ -125,9 +125,9 @@ class RootDiskSpec(AbstractDiskSpec):
     )
     speed = properties.property(
         ra_types.Enum([s.value for s in pc.DiskSpeed]),
-        default=pc.DiskSpeed.WARM.value,
+        default=pc.DiskSpeed.HOT.value,
     )
-    ephemeral = properties.property(ra_types.Boolean(), default=False)
+    ephemeral = properties.property(ra_types.Boolean(), default=True)
 
     def volumes(
         self, node: Node, project_id: sys_uuid.UUID | None = None
@@ -272,8 +272,8 @@ class DisksSpec(AbstractDiskSpec):
             size=int(root["size"]),
             image=root["image"],
             index=0,
-            speed=root.get("speed", pc.DiskSpeed.WARM.value),
-            ephemeral=root.get("ephemeral", False),
+            speed=root.get("speed", pc.DiskSpeed.HOT.value),
+            ephemeral=root.get("ephemeral", True),
             project_id=project_id or node.project_id,
             status=pc.VolumeStatus.NEW.value,
         )
@@ -294,8 +294,8 @@ class DisksSpec(AbstractDiskSpec):
                 size=int(disk["size"]),
                 image=disk.get("image"),
                 index=idx + 1,
-                speed=disk.get("speed", pc.DiskSpeed.WARM.value),
-                ephemeral=disk.get("ephemeral", False),
+                speed=disk.get("speed", pc.DiskSpeed.HOT.value),
+                ephemeral=disk.get("ephemeral", True),
                 project_id=project_id or node.project_id,
                 status=pc.VolumeStatus.NEW.value,
             )
