@@ -125,6 +125,33 @@ def load_filters() -> dict[str, dict[str, dm_filters.AbstractClause]]:
     return filters
 
 
+def load_model_parents() -> dict[str, tuple[str, str]]:
+    """Load child relationship and parent kind mappings from config.
+
+    Example:
+    [model_parents]
+    em_core_network_lb_vhosts = parent,em_core_network_lb
+
+    Returns: {"em_core_network_lb_vhosts": ("parent", "em_core_network_lb")}
+    """
+    model_parents = {}
+    for child_kind, parent_spec in ua_utils.cfg_load_section_map(
+        CONF.config_file, "model_parents"
+    ).items():
+        parent_field, separator, parent_kind = parent_spec.partition(",")
+        parent_field = parent_field.strip()
+        parent_kind = parent_kind.strip()
+        if not separator or not parent_field or not parent_kind:
+            raise ValueError(
+                f"Invalid model parent mapping for {child_kind!r}: "
+                f"{parent_spec!r}; expected '<field>,<parent_kind>'."
+            )
+        model_parents[child_kind] = (parent_field, parent_kind)
+
+    LOG.info("Loaded model parent mappings: %s", model_parents)
+    return model_parents
+
+
 def load_transformers(
     kinds: tuple[str, ...],
 ) -> dict[str, direct.ResourceTransformer]:
@@ -173,13 +200,29 @@ def main():
     # Prepare filters
     filters = load_filters()
 
+    # Prepare parent relationships
+    model_parents = load_model_parents()
+    for child_kind, (_, parent_kind) in model_parents.items():
+        if child_kind not in models:
+            raise ValueError(
+                f"Parent mapping configured for unknown model kind {child_kind!r}."
+            )
+        if parent_kind not in models:
+            raise ValueError(
+                f"Unknown parent model kind {parent_kind!r} "
+                f"configured for {child_kind!r}."
+            )
+
     # Prepare model specs
     specs = []
     for kind, model in models.items():
+        parent_field, parent_kind = model_parents.get(kind, ("parent", None))
         spec = db_back.ModelSpec(
             kind=kind,
             model=model,
             filters=filters.get(kind),
+            parent_field=parent_field,
+            parent_kind=parent_kind,
         )
         specs.append(spec)
 
