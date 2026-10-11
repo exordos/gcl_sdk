@@ -154,6 +154,26 @@ def _proxy_ports(config: dict) -> set:
     return ports
 
 
+def _nf_destination_matches(config: dict) -> list[str]:
+    # Older target resources did not carry an address selector.
+    if "destinations" not in config:
+        return [""]
+    values = config.get("destinations")
+    if not isinstance(values, (list, tuple)):
+        return []
+    addresses = set()
+    for value in values:
+        if not isinstance(value, str):
+            continue
+        try:
+            address = ipaddress.ip_address(value)
+        except (ValueError, TypeError):
+            continue
+        if address.version == 4:
+            addresses.add(str(address))
+    return ["nw_dst=%s," % address for address in sorted(addresses)]
+
+
 def ensure_port_nf_intercepts(
     kinds: dict,
     guest_ofport: int,
@@ -187,15 +207,14 @@ def ensure_port_nf_intercepts(
     if "dhcp" in kinds:
         unguarded.append(("udp", 67))
     if "dns" in kinds:
-        wanted += [("udp", 53), ("tcp", 53)]
+        wanted += [("udp", 53, kinds["dns"]), ("tcp", 53, kinds["dns"])]
     if "proxy" in kinds:
-        # Platform ports (iPXE ROM asks the boot API at the DHCP address;
-        # the agent asks core APIs by name) claimed by port, whatever address
-        # the guest targets. Door ports ride on the port's descriptor so they
-        # are part of what its target hashes over. Sorted: a set's order
-        # would make every apply look like a change.
+        # Only the responder's addresses are claimed: another guest can
+        # serve these same ports (e.g. a nested realm's own control plane).
+        # Door ports and destination selectors ride in the port's descriptor
+        # so changing them triggers a reapply.
         wanted += [
-            ("tcp", platform)
+            ("tcp", platform, kinds["proxy"])
             for platform in sorted(
                 _proxy_ports(kinds.get("proxy") or {}) | set(base.PLATFORM_PORTS)
             )
@@ -231,25 +250,27 @@ def ensure_port_nf_intercepts(
                 nf_ofport,
             )
         )
-    for proto, port in wanted:
+    for proto, port, config in wanted:
         # Rewrite dl_dst: otherwise a frame for the gateway MAC reaches a
         # namespace socket only if the interface is promiscuous.
         for guard in guards:
-            lines.append(
-                "flow add cookie=%s,priority=%d,%s%s,in_port=%s,tp_dst=%d,"
-                "actions=%smod_dl_dst:%s,output:%d"
-                % (
-                    cookie,
-                    _NF_INTERCEPT_PRIORITY,
-                    guard,
-                    proto,
-                    guest_ofport,
-                    port,
-                    commit,
-                    base.METADATA_MAC,
-                    nf_ofport,
+            for destination in _nf_destination_matches(config):
+                lines.append(
+                    "flow add cookie=%s,priority=%d,%s%s,in_port=%s,%stp_dst=%d,"
+                    "actions=%smod_dl_dst:%s,output:%d"
+                    % (
+                        cookie,
+                        _NF_INTERCEPT_PRIORITY,
+                        guard,
+                        proto,
+                        guest_ofport,
+                        destination,
+                        port,
+                        commit,
+                        base.METADATA_MAC,
+                        nf_ofport,
+                    )
                 )
-            )
     if wanted or unguarded or "proxy" in kinds:
         lines.append(
             "flow add cookie=%s,priority=%d,in_port=%d,dl_dst=%s,"
@@ -322,7 +343,8 @@ def cut_revoked_sessions(port_uuid, zone: int, rules, guest_ip=None) -> None:
     previous = known.get(key)
     if previous == wanted:
         return
-    revoked = [json.loads(r) for r in previous or [] if r not in set(wanted)]
+    wanted_set = set(wanted)
+    revoked = [json.loads(r) for r in previous or [] if r not in wanted_set]
     for rule in revoked:
         ct_tuple = _revocation_tuple(rule, guest_ip)
         if ct_tuple is None:

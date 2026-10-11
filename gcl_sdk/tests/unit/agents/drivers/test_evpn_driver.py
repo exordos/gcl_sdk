@@ -15,7 +15,9 @@
 #    under the License.
 
 import json
+import contextlib
 import os
+from pathlib import Path
 import subprocess
 from unittest import mock
 import uuid as sys_uuid
@@ -28,6 +30,7 @@ from gcl_sdk.agents.universal.drivers import evpn_proxy
 from gcl_sdk.agents.universal.drivers import evpn_records
 from gcl_sdk.agents.universal.drivers import exceptions as driver_exc
 from gcl_sdk.agents.universal.drivers.evpn import base
+from gcl_sdk.agents.universal.drivers.evpn import driver as evpn_driver
 from gcl_sdk.agents.universal.drivers.evpn import fabric
 from gcl_sdk.agents.universal.drivers.evpn import flows as evpn_flows
 from gcl_sdk.agents.universal.drivers.evpn import hostns
@@ -59,7 +62,252 @@ def _port(**kwargs):
 
 def _dp(**facts):
     """A snapshot of the host: these facts, every other one unknown."""
+    if facts.get("cookies") is not None:
+        facts["cookies"] = {
+            int(cookie, 16) if isinstance(cookie, str) else cookie
+            for cookie in facts["cookies"]
+        }
     return {**state.dp_defaults(), **facts}
+
+
+@contextlib.contextmanager
+def _agent_cycle():
+    agent = object.__new__(evpn.EvpnAgentCapabilityDriver)
+    agent._storage = mock.Mock()
+    with mock.patch.object(state, "snapshot_dataplane", side_effect=_dp):
+        agent.start()
+        try:
+            yield
+        finally:
+            agent.finalize()
+
+
+def test_revoked_rules_build_membership_set_once(dirs):
+    previous = [{"proto": "tcp", "port": port} for port in range(80, 84)]
+    Path(base.SG_RULES_PATH).write_text(
+        json.dumps({"guest": evpn_flows._canonical_rules(previous)})
+    )
+    with (
+        mock.patch.object(evpn_flows, "set", wraps=set, create=True) as sets,
+        mock.patch.object(sh, "appctl"),
+    ):
+        evpn_flows.cut_revoked_sessions("guest", 42, previous[:1], "10.42.0.7")
+        sets.assert_called_once()
+
+
+def test_nf_shared_port_and_route_are_prepared_once_per_cycle(dirs):
+    calls = []
+    with mock.patch.object(sh, "run", side_effect=_two_bridge_run(calls=calls)):
+        for _ in range(2):
+            with _agent_cycle():
+                for guest in range(4):
+                    assert hostns.ensure_vni_nf_port(7) == 1001
+                    hostns.ensure_guest_neighbour(
+                        7, "10.42.0.%d" % (guest + 1), "52:54:00:aa:bb:cc"
+                    )
+    assert sum("add-port" in cmd and hostns.nf_port(7) in cmd for cmd in calls) == 2
+    assert sum(cmd[-2:] == ["rule", "show"] for cmd in calls) == 2
+    assert sum("neigh" in cmd and "replace" in cmd for cmd in calls) == 8
+
+
+def test_nf_port_cache_retries_failed_setup_and_discards_collected_vni(dirs):
+    calls = []
+    with (
+        mock.patch.object(sh, "run", side_effect=_two_bridge_run(calls=calls)),
+        mock.patch.object(hostns, "ensure_metadata_route_rule") as metadata,
+    ):
+        with _agent_cycle():
+            metadata.side_effect = subprocess.CalledProcessError(1, "ip rule")
+            with pytest.raises(subprocess.CalledProcessError):
+                hostns.ensure_vni_nf_port(7)
+            assert 7 not in hostns._NF_PORTS
+            metadata.side_effect = None
+            hostns.ensure_vni_nf_port(7)
+            hostns.ensure_vni_nf_port(7)
+            hostns.gc_vni(7)
+            assert 7 not in hostns._NF_PORTS
+            hostns.ensure_vni_nf_port(7)
+        assert sum("add-port" in cmd and hostns.nf_port(7) in cmd for cmd in calls) == 3
+        assert hostns._NF_PORTS is None
+
+
+def test_failed_responder_apply_invalidates_healthy_restore_cache(dirs):
+    Path(base.NF_UNIT_PATH).write_text("unit")
+    with (
+        mock.patch.object(nf, "render_nf_unit", return_value="unit"),
+        mock.patch.object(sh, "write_if_changed", return_value=True),
+        mock.patch.object(sh, "run") as run,
+    ):
+        with _agent_cycle():
+            assert nf.missing_nf_responder() == []
+            run.side_effect = [None, None, subprocess.CalledProcessError(1, "restart")]
+            with pytest.raises(subprocess.CalledProcessError):
+                nf.ensure_nf_responder()
+            assert "nf responder" in nf.missing_nf_responder()
+            run.side_effect = None
+            nf.ensure_nf_responder()
+            assert nf.missing_nf_responder() == []
+
+
+def test_responder_restore_shares_unit_reads_and_refreshes_after_repair(dirs):
+    Path(base.NF_UNIT_PATH).write_text("unit")
+    with (
+        mock.patch.object(nf, "render_nf_unit", return_value="unit") as render,
+        mock.patch.object(sh, "run"),
+        mock.patch.object(sh, "try_run"),
+    ):
+        for _ in range(2):
+            with _agent_cycle():
+                for _ in range(4):
+                    assert nf.missing_nf_responder() == []
+        assert render.call_count == 2
+        with _agent_cycle():
+            nf.teardown_nf_responder()
+            assert nf.missing_nf_responder()
+            nf.ensure_nf_responder()
+            assert nf.missing_nf_responder() == []
+
+
+def test_vni_occupancy_reads_client_records_once_and_tracks_changes(dirs):
+    ports = [_port(vni=10001), _port(vni=10002)]
+    for port in ports:
+        sh.write_atomic(port._client_conf_path, json.dumps({"vni": port.vni}))
+    load = json.load
+    reads = []
+
+    def counted_load(stream):
+        if str(stream.name).startswith(base.CLIENT_CONF_DIR):
+            reads.append(stream.name)
+        return load(stream)
+
+    with (
+        mock.patch.object(json, "load", side_effect=counted_load),
+        mock.patch.object(sh, "run", side_effect=_two_bridge_run()),
+    ):
+        with _agent_cycle():
+            for _ in range(4):
+                assert hostns.vni_in_use(10001, "other")
+                assert not hostns.vni_in_use(10001, ports[0].uuid)
+            assert len(reads) == 2
+            ports[0].delete_from_dp()
+            assert not hostns.vni_in_use(10001, "other")
+            ports[0].vni = 10002
+            ports[0].dump_to_dp()
+            assert hostns.vni_in_use(10002, ports[1].uuid)
+
+
+def test_cookie_lookup_uses_numeric_set_without_scanning(monkeypatch):
+    class Cookies(set):
+        def __iter__(self):
+            raise AssertionError("cookie lookup scanned all flows")
+
+    monkeypatch.setattr(state, "_DP_SNAPSHOT", {**_dp(), "cookies": Cookies({42})})
+    assert state.has_cookie("0x000000000000002a")
+    assert not state.has_cookie("0x000000000000002b")
+    monkeypatch.setattr(state, "_DP_SNAPSHOT", _dp(cookies=None))
+    assert state.has_cookie("0x2a")
+
+
+def test_nf_responder_is_ensured_once_per_cycle(dirs):
+    agent = object.__new__(evpn.EvpnAgentCapabilityDriver)
+    agent._storage = mock.Mock()
+    with (
+        mock.patch.object(state, "snapshot_dataplane", side_effect=_dp),
+        mock.patch.object(nf, "render_nf_unit", return_value="unit") as render,
+        mock.patch.object(sh, "run") as run,
+    ):
+        for _ in range(2):
+            agent.start()
+            try:
+                for _ in range(4):
+                    nf.ensure_nf_responder()
+            finally:
+                agent.finalize()
+        assert render.call_count == 2
+        assert (
+            run.call_args_list.count(
+                mock.call([base.SYSTEMCTL_BIN, "enable", "--now", base.NF_SERVICE])
+            )
+            == 2
+        )
+        nf.ensure_nf_responder()
+        nf.ensure_nf_responder()
+        assert render.call_count == 4
+
+
+@pytest.mark.parametrize("failed_command", [0, 1, 2])
+def test_failed_nf_unit_apply_is_retried_in_next_cycle(dirs, failed_command):
+    agent = object.__new__(evpn.EvpnAgentCapabilityDriver)
+    agent._storage = mock.Mock()
+    with (
+        mock.patch.object(state, "snapshot_dataplane", side_effect=_dp),
+        mock.patch.object(nf, "render_nf_unit", return_value="unit"),
+        mock.patch.object(sh, "run") as run,
+    ):
+        agent.start()
+        try:
+            run.side_effect = [None] * failed_command + [
+                subprocess.CalledProcessError(1, "systemctl")
+            ]
+            with pytest.raises(subprocess.CalledProcessError):
+                nf.ensure_nf_responder()
+        finally:
+            agent.finalize()
+        run.reset_mock(side_effect=True)
+        agent.start()
+        try:
+            nf.ensure_nf_responder()
+            nf.ensure_nf_responder()
+            assert run.call_args_list == [
+                mock.call([base.SYSTEMCTL_BIN, "daemon-reload"]),
+                mock.call([base.SYSTEMCTL_BIN, "enable", "--now", base.NF_SERVICE]),
+                mock.call([base.SYSTEMCTL_BIN, "restart", base.NF_SERVICE]),
+            ]
+        finally:
+            agent.finalize()
+
+
+@pytest.mark.parametrize("action", ["teardown", "failed_restart"])
+def test_nf_responder_can_be_repaired_again_in_same_cycle(dirs, action):
+    agent = object.__new__(evpn.EvpnAgentCapabilityDriver)
+    agent._storage = mock.Mock()
+    with (
+        mock.patch.object(state, "snapshot_dataplane", side_effect=_dp),
+        mock.patch.object(nf, "render_nf_unit", return_value="unit"),
+        mock.patch.object(sh, "run") as run,
+        mock.patch.object(sh, "try_run"),
+    ):
+        agent.start()
+        try:
+            if action == "teardown":
+                nf.ensure_nf_responder()
+                nf.teardown_nf_responder()
+            else:
+                run.side_effect = [
+                    None,
+                    None,
+                    subprocess.CalledProcessError(1, "restart"),
+                ]
+                with pytest.raises(subprocess.CalledProcessError):
+                    nf.ensure_nf_responder()
+                run.side_effect = None
+            nf.ensure_nf_responder()
+            nf.ensure_nf_responder()
+            assert (
+                run.call_args_list.count(
+                    mock.call([base.SYSTEMCTL_BIN, "enable", "--now", base.NF_SERVICE])
+                )
+                == 2
+            )
+            if action == "failed_restart":
+                assert (
+                    run.call_args_list.count(
+                        mock.call([base.SYSTEMCTL_BIN, "restart", base.NF_SERVICE])
+                    )
+                    == 2
+                )
+        finally:
+            agent.finalize()
 
 
 def _host(**kwargs):
@@ -86,6 +334,7 @@ def _rr(**kwargs):
 def dirs(monkeypatch, tmp_path):
     monkeypatch.setattr(base, "CLIENT_CONF_DIR", str(tmp_path / "vm_conf"))
     monkeypatch.setattr(base, "NF_RECORDS_DIR", str(tmp_path / "nf"))
+    monkeypatch.setattr(base, "EGRESS_RECORDS_DIR", str(tmp_path / "egress"))
     monkeypatch.setattr(base, "GOBGP_CONF_FILE", str(tmp_path / "gobgp.conf"))
     monkeypatch.setattr(base, "GOBGP_PARTS_DIR", str(tmp_path / "gobgp.d"))
     monkeypatch.setattr(base, "VLAN_MAP_PATH", str(tmp_path / "vlan_map.json"))
@@ -101,6 +350,8 @@ def dirs(monkeypatch, tmp_path):
     # reaches out to the machine running the tests — and never reports
     # missing what it could not read there.
     monkeypatch.setattr(state, "_DP_SNAPSHOT", state.dp_defaults())
+    monkeypatch.setattr(nf, "_RESPONDER_READY", None)
+    monkeypatch.setattr(nf, "_RESPONDER_UNIT_PENDING", False)
     # The egress guard is asserted once per VNI per iteration; a test is an
     # iteration of its own.
     hostns._GUARDED_VNIS.clear()
@@ -137,6 +388,8 @@ def _two_bridge_run(guest_port="vethg", patch_ofport="1001", calls=None, bundles
             calls.append(cmd)
         if "netns" in cmd and "exec" in cmd and "rule" in cmd and "show" in cmd:
             return ""  # a fresh namespace has only the three default rules
+        if "-json" in cmd and "link" in cmd and cmd[-1].startswith("gw"):
+            return json.dumps([{"ifname": cmd[-1], "flags": ["UP"]}])
         if "netns" in cmd and "exec" in cmd and "show" in cmd:
             # A freshly created port is in the root namespace, so asking the
             # VNI's namespace about it fails — which is what makes the
@@ -724,6 +977,7 @@ def test_one_session_is_enough_when_there_is_more_than_one_to_lose():
     session carries the whole RIB and knows it is gone."""
     one = _host(rr_addresses=["10.77.0.10"])
     assert "fail_static = True" in one._render_connector_conf("10.77.0.11")
+    assert "restrict_tunnel_sources = True" in one._render_connector_conf("10.77.0.11")
     assert "fail_static_min_peers = 0" in one._render_connector_conf("10.77.0.11")
 
     two = _host(rr_addresses=["10.77.0.10", "10.77.0.20"])
@@ -1051,9 +1305,9 @@ def test_service_states_survive_a_nonzero_exit(dirs):
 
 def test_driver_capabilities():
     with (
-        mock.patch.object(evpn.os, "makedirs"),
+        mock.patch.object(evpn_driver.os, "makedirs"),
         mock.patch.object(
-            evpn.meta.storage_common.JsonFileStorageSingleton,
+            evpn_driver.meta.storage_common.JsonFileStorageSingleton,
             "get_instance",
             return_value={},
         ),
@@ -1160,9 +1414,15 @@ def test_egress_gc_only_after_last_vni_port(dirs):
     # another guest of the same VNI still present
     sibling = dirs / "vm_conf" / "sibling.json"
     sibling.write_text(json.dumps({"vni": port.vni}))
+    sibling_gateway = hostns.egress_port_path(port.vni, "sibling")
+    sh.write_atomic(sibling_gateway, json.dumps(port.dhcp))
 
     dels = []
-    with mock.patch.object(sh, "run", side_effect=lambda c: dels.append(c) or ""):
+    with (
+        mock.patch.object(sh, "run", side_effect=lambda c: dels.append(c) or ""),
+        mock.patch.object(hostns, "egress_leg_plugged", return_value=True),
+        mock.patch.object(hostns, "link_in_ns", return_value={"flags": ["UP"]}),
+    ):
         port.delete_from_dp()
     ns = hostns.vni_ns(port.vni)
     assert not any(c[:3] == ["ip", "netns", "del"] for c in dels)
@@ -1170,6 +1430,7 @@ def test_egress_gc_only_after_last_vni_port(dirs):
 
     # last one out tears the namespace down
     sibling.unlink()
+    sh.remove(sibling_gateway)
     dels = []
     with mock.patch.object(sh, "run", side_effect=lambda c: dels.append(c) or ""):
         port.delete_from_dp()
@@ -1714,6 +1975,39 @@ def _healthy_dp(port, vlan, **facts):
             hostns.lookup_local_vlan(hostns.nf_vlan_key(port.vni)),
         )
     return _dp_with(port, **defaults)
+
+
+def test_port_checks_share_vlan_and_fip_reads_within_a_cycle(dirs):
+    ports = [_port(nfs=[], security_rules=[], port_security=False) for _ in range(3)]
+    agent = object.__new__(evpn.EvpnAgentCapabilityDriver)
+    agent._storage = mock.Mock()
+    vlan_map = {str(port.uuid): index + 1 for index, port in enumerate(ports)}
+    Path(base.VLAN_MAP_PATH).write_text(json.dumps(vlan_map))
+    rules = "\n".join(
+        "-A PREROUTING --comment %s -j DNAT" % hostns.fip_tag(port.uuid)
+        for port in ports
+    )
+    with (
+        mock.patch.object(state, "snapshot_dataplane", side_effect=_dp),
+        mock.patch.object(hostns, "_vlan_map", wraps=hostns._vlan_map) as vlans,
+        mock.patch.object(hostns, "fip_rules", return_value=rules) as nat,
+        mock.patch.object(
+            hostns, "proxied_fips", return_value={"203.0.113.7": "eth0"}
+        ) as arp,
+    ):
+        for _ in range(2):
+            agent.start()
+            try:
+                for port in ports:
+                    port.fips = [{"public": "203.0.113.7"}]
+                    assert port._missing_on_dp() == ["client config"]
+            finally:
+                agent.finalize()
+            assert state._DP_SNAPSHOT is None
+
+        assert vlans.call_count == 2
+        assert nat.call_count == 2
+        assert arp.call_count == 2
 
 
 def test_a_port_whose_flows_were_wiped_reports_itself_missing(dirs):
@@ -2672,10 +2966,10 @@ def test_the_last_guest_takes_the_responder_with_it(dirs):
     (records / "10001").mkdir(parents=True)
     (records / "10001" / "nf-dhcp.json").write_text("{}")
     (records / "10001" / "nf-dns.json").write_text("{}")
-    assert nf.served_guests() == []
+    assert not nf.has_served_guests()
 
     (records / "10001" / "abc.json").write_text("{}")
-    assert nf.served_guests() == ["abc.json"]
+    assert nf.has_served_guests()
 
 
 def _addr_show(addresses):
@@ -2989,6 +3283,7 @@ def test_snapshot_distinguishes_dhcp_from_unguarded_platform_flows(suffix):
     ):
         snapshot = state.snapshot_dataplane()
     assert snapshot["unprotected_nf"] == {"0x2"}
+    assert snapshot["cookies"] == {1, 2, 3}
 
 
 @pytest.mark.parametrize("input_guard", [False, True])
@@ -3054,3 +3349,343 @@ def test_existing_nf_unit_without_delegation_is_reconciled(tmp_path):
         assert nf.missing_nf_responder() == ["nf responder credentials"]
         unit.write_text("signed responder unit")
         assert nf.missing_nf_responder() == []
+
+
+@pytest.mark.parametrize("confirmed", [False, True])
+def test_disabled_port_ack_requires_observed_withdrawal(dirs, confirmed):
+    port = _port(enabled=False, retired_fips=["192.168.1.50"])
+    with (
+        mock.patch.object(port, "delete_from_dp"),
+        mock.patch.object(hostns, "lookup_local_vlan", return_value=None),
+        mock.patch.object(sh, "ofctl", return_value=""),
+        mock.patch.object(hostns, "fip_withdrawal_confirmed", return_value=confirmed),
+    ):
+        if confirmed:
+            port._apply()
+            assert port.status == "ACTIVE"
+        else:
+            with pytest.raises(driver_exc.InvalidDataPlaneObjectError):
+                port._apply()
+
+
+def test_disabled_port_never_acks_remaining_flow(dirs):
+    port = _port(enabled=False)
+    with (
+        mock.patch.object(port, "delete_from_dp"),
+        mock.patch.object(hostns, "lookup_local_vlan", return_value=None),
+        mock.patch.object(sh, "ofctl", return_value="cookie=0x123"),
+        mock.patch.object(hostns, "fip_withdrawal_confirmed", return_value=True),
+    ):
+        with pytest.raises(driver_exc.InvalidDataPlaneObjectError):
+            port._apply()
+
+
+@pytest.mark.parametrize(
+    "response,expected", [(None, False), ("", True), ("192.168.1.50 dev eno1", False)]
+)
+def test_fip_withdrawal_requires_readable_and_absent_publication(response, expected):
+    with mock.patch.object(sh, "try_run", return_value=response):
+        assert (
+            hostns.fip_withdrawal_confirmed(["192.168.1.50"], 10001, "test") is expected
+        )
+
+
+# Shared gateway state must include every subnet served on the host.
+def test_two_subnets_keep_both_gateways_and_shared_nat(dirs):
+    first = _port(dhcp=EGRESS_DHCP)
+    second = _port(
+        ipv4="10.43.0.7",
+        dhcp={
+            **EGRESS_DHCP,
+            "cidr": "10.43.0.0/24",
+            "routers": [{"to": "default", "via": "10.43.0.1"}],
+        },
+    )
+    calls = []
+    with mock.patch.object(sh, "run", side_effect=_two_bridge_run(calls=calls)):
+        first.dump_to_dp()
+        calls.clear()
+        second.dump_to_dp()
+        first.dump_to_dp()
+    conf = json.loads(Path(hostns.egress_conf_path(first.vni)).read_text())
+    assert conf["routes"] == ["10.42.0.1/32", "10.43.0.1/32", "0.0.0.0/0"]
+    assert not any("link" in c and "del" in c for c in calls)
+    assert not any("-D" in c and "MASQUERADE" in c for c in calls)
+    assert any("10.43.0.1/24" in c and "replace" in c for c in calls)
+
+
+def test_deleting_last_port_of_subnet_removes_only_its_gateway(dirs):
+    first = _port(dhcp=EGRESS_DHCP)
+    second = _port(
+        ipv4="10.43.0.7",
+        dhcp={
+            **EGRESS_DHCP,
+            "cidr": "10.43.0.0/24",
+            "routers": [{"to": "default", "via": "10.43.0.1"}],
+        },
+    )
+    with mock.patch.object(sh, "run", side_effect=_two_bridge_run()):
+        first.dump_to_dp()
+        second.dump_to_dp()
+    calls = []
+
+    def run(cmd):
+        calls.append(cmd)
+        if "-json" in cmd and "addr" in cmd:
+            return json.dumps(
+                [
+                    {
+                        "addr_info": [
+                            {"family": "inet", "local": "10.42.0.1", "prefixlen": 24},
+                            {"family": "inet", "local": "10.43.0.1", "prefixlen": 24},
+                        ]
+                    }
+                ]
+            )
+        return _two_bridge_run()(cmd)
+
+    with mock.patch.object(sh, "run", side_effect=run):
+        second.delete_from_dp()
+    conf = json.loads(Path(hostns.egress_conf_path(first.vni)).read_text())
+    assert conf["routes"] == ["10.42.0.1/32", "0.0.0.0/0"]
+    assert any("10.43.0.1/24" in c and "del" in c for c in calls)
+    assert not any("link" in c and "del" in c and "gw10001" in c for c in calls)
+    assert not any("-D" in c and "MASQUERADE" in c for c in calls)
+
+
+def test_egress_declarations_work_without_network_functions(dirs):
+    port = _port(nfs=[], dhcp=EGRESS_DHCP)
+    with mock.patch.object(sh, "run", side_effect=_two_bridge_run()):
+        port.dump_to_dp()
+    assert os.path.exists(hostns.egress_port_path(port.vni, port.uuid))
+    assert not os.path.exists(port._nf_record_path)
+    assert hostns.egress_gateways(port.vni, {})[0] == {"10.42.0.1": "10.42.0.1/24"}
+
+
+def test_existing_nf_records_preserve_gateways_during_upgrade(dirs):
+    path = dirs / "nf" / "10001" / "old-port.json"
+    sh.write_atomic(str(path), json.dumps(EGRESS_DHCP))
+    new = {
+        **EGRESS_DHCP,
+        "cidr": "10.43.0.0/24",
+        "routers": [{"to": "default", "via": "10.43.0.1"}],
+    }
+    assert hostns.egress_gateways(10001, new)[0] == {
+        "10.42.0.1": "10.42.0.1/24",
+        "10.43.0.1": "10.43.0.1/24",
+    }
+    sh.write_atomic(hostns.egress_port_path(10001, "old-port"), "{}")
+    assert hostns.egress_gateways(10001, new)[0] == {"10.43.0.1": "10.43.0.1/24"}
+
+
+def test_egress_reads_peer_records_and_asserts_shared_gateway_once_per_cycle(dirs):
+    ports = [sys_uuid.uuid4() for _ in range(4)]
+    for port in ports:
+        sh.write_atomic(hostns.egress_port_path(10001, port), json.dumps(EGRESS_DHCP))
+        sh.write_atomic(
+            str(dirs / "nf" / "10001" / (str(port) + ".json")), json.dumps(EGRESS_DHCP)
+        )
+    sh.write_atomic(
+        hostns.egress_conf_path(10001),
+        json.dumps({"routes": ["10.42.0.1/32", "0.0.0.0/0"]}),
+    )
+    agent = object.__new__(evpn.EvpnAgentCapabilityDriver)
+    agent._storage = mock.Mock()
+    reads, calls = [], []
+    load = json.load
+
+    def counted_load(stream):
+        if str(stream.name).startswith((base.NF_RECORDS_DIR, base.EGRESS_RECORDS_DIR)):
+            reads.append(stream.name)
+        return load(stream)
+
+    with (
+        mock.patch.object(state, "snapshot_dataplane", side_effect=_dp),
+        mock.patch.object(json, "load", side_effect=counted_load),
+        mock.patch.object(sh, "run", side_effect=_two_bridge_run(calls=calls)),
+    ):
+        for _ in range(2):
+            agent.start()
+            try:
+                for port in ports:
+                    hostns.ensure_vni_egress(10001, EGRESS_DHCP, ["65001:10001"], port)
+            finally:
+                agent.finalize()
+    assert len(reads) == 16
+    assert sum("addr" in call and "replace" in call for call in calls) == 2
+
+
+def test_egress_cycle_tracks_gateway_and_mtu_changes_and_deletion(dirs, monkeypatch):
+    monkeypatch.setattr(hostns, "_EGRESS_DEMANDS", {})
+    second = {
+        **EGRESS_DHCP,
+        "cidr": "10.43.0.0/24",
+        "routers": [{"to": "default", "via": "10.43.0.1"}],
+        "mtu": 1400,
+    }
+    calls = []
+    normal_run = _two_bridge_run(calls=calls)
+
+    def run(cmd):
+        if "-json" in cmd and "addr" in cmd:
+            calls.append(cmd)
+            return json.dumps(
+                [
+                    {
+                        "addr_info": [
+                            {"family": "inet", "local": "10.42.0.1", "prefixlen": 24},
+                            {"family": "inet", "local": "10.43.0.1", "prefixlen": 24},
+                        ]
+                    }
+                ]
+            )
+        return normal_run(cmd)
+
+    with mock.patch.object(sh, "run", side_effect=run):
+        hostns.ensure_vni_egress(10001, EGRESS_DHCP, ["65001:10001"], "first")
+        hostns.ensure_vni_egress(10001, EGRESS_DHCP, ["65001:10001"], "second")
+        hostns.ensure_vni_egress(10001, second, ["65001:10001"], "second")
+        assert hostns.egress_gateways(10001, {}) == (
+            {"10.42.0.1": "10.42.0.1/24", "10.43.0.1": "10.43.0.1/24"},
+            "1400",
+        )
+        hostns.ensure_vni_egress(
+            10001, {**EGRESS_DHCP, "mtu": 1300}, ["65001:10001"], "first"
+        )
+        assert hostns.egress_gateways(10001, {})[1] == "1300"
+        hostns.forget_egress_port(10001, "first")
+        assert hostns.egress_gateways(10001, {}) == (
+            {"10.43.0.1": "10.43.0.1/24"},
+            "1400",
+        )
+        conf = json.loads(Path(hostns.egress_conf_path(10001)).read_text())
+        assert conf["routes"] == ["10.43.0.1/32", "0.0.0.0/0"]
+        assert any("del" in call and "10.42.0.1/24" in call for call in calls)
+        hostns.forget_egress_port(10001, "second")
+        assert os.path.exists(hostns.egress_conf_path(10001))
+        assert hostns.egress_gateways(10001, {}) == ({}, "1450")
+        hostns.gc_vni(10001)
+        assert 10001 not in hostns._EGRESS_DEMANDS
+        hostns.ensure_vni_egress(10001, EGRESS_DHCP, ["65001:10001"], "first")
+        assert hostns.egress_gateways(10001, {}) == (
+            {"10.42.0.1": "10.42.0.1/24"},
+            "1450",
+        )
+
+
+def test_failed_egress_change_does_not_skip_restoring_previous_demand(
+    dirs, monkeypatch
+):
+    monkeypatch.setattr(hostns, "_EGRESS_DEMANDS", {})
+    with mock.patch.object(sh, "run", side_effect=_two_bridge_run()):
+        hostns.ensure_vni_egress(10001, EGRESS_DHCP, ["65001:10001"], "port")
+        with mock.patch.object(hostns, "_sync_egress_gateways") as sync:
+            sync.side_effect = subprocess.CalledProcessError(1, "ip addr")
+            with pytest.raises(subprocess.CalledProcessError):
+                hostns.ensure_vni_egress(
+                    10001, {**EGRESS_DHCP, "mtu": 1300}, ["65001:10001"], "port"
+                )
+            sync.side_effect = None
+            hostns.ensure_vni_egress(10001, EGRESS_DHCP, ["65001:10001"], "port")
+            assert sync.call_count == 2
+
+
+def test_egress_prefix_choice_keeps_file_order_during_cidr_change(dirs, monkeypatch):
+    monkeypatch.setattr(hostns, "_EGRESS_DEMANDS", {})
+    changed = {**EGRESS_DHCP, "cidr": "10.42.0.0/16"}
+    for port in ("a", "b"):
+        sh.write_atomic(hostns.egress_port_path(10001, port), json.dumps(EGRESS_DHCP))
+    assert hostns.egress_gateways(10001, {})[0] == {"10.42.0.1": "10.42.0.1/24"}
+    with mock.patch.object(sh, "run", side_effect=_two_bridge_run()):
+        hostns.ensure_vni_egress(10001, changed, ["65001:10001"], "a")
+        assert hostns.egress_gateways(10001, {})[0] == {"10.42.0.1": "10.42.0.1/24"}
+        hostns.forget_egress_port(10001, "b")
+        assert hostns.egress_gateways(10001, {})[0] == {"10.42.0.1": "10.42.0.1/16"}
+
+
+def test_unreadable_gateway_declaration_does_not_destroy_egress(dirs):
+    sh.write_atomic(hostns.egress_port_path(10001, "peer"), "broken")
+    with mock.patch.object(hostns, "gc_vni_egress") as collect:
+        with pytest.raises(ValueError):
+            hostns.ensure_vni_egress(10001, EGRESS_DHCP, ["65001:10001"])
+        collect.assert_not_called()
+
+
+def test_no_gateway_demand_does_not_collect_shared_fips(dirs):
+    path = hostns.egress_conf_path(10001)
+    sh.write_atomic(path, json.dumps({"imp_rt": ["65001:10001"]}))
+    with mock.patch.object(hostns, "gc_vni_egress") as collect:
+        hostns.ensure_vni_egress(10001, {}, ["65001:10001"])
+        collect.assert_not_called()
+    assert os.path.exists(path)
+
+
+def test_missing_namespace_gateway_is_rebuilt(dirs):
+    path = hostns.egress_conf_path(10001)
+    sh.write_atomic(
+        path, json.dumps({"vni": 10001, "routes": ["10.42.0.1/32", "0.0.0.0/0"]})
+    )
+    calls = []
+    with (
+        mock.patch.object(sh, "run", side_effect=_two_bridge_run(calls=calls)),
+        mock.patch.object(hostns, "link_in_ns", return_value=None),
+    ):
+        hostns.ensure_vni_egress(10001, EGRESS_DHCP, ["65001:10001"])
+    assert any("link" in c and "del" in c and "gw10001" in c for c in calls)
+    assert any("link" in c and "add" in c and "gw10001" in c for c in calls)
+
+
+def test_vni_collection_discards_guard_cache_before_same_iteration_reuse(dirs):
+    hostns._GUARDED_VNIS.add(10001)
+    with mock.patch.object(sh, "run", return_value=""):
+        hostns.gc_vni(10001)
+    assert 10001 not in hostns._GUARDED_VNIS
+
+
+@pytest.mark.parametrize(
+    "mapped,expected", [("192.0.2.10", True), ("192.0.2.1", False)]
+)
+@pytest.mark.parametrize(
+    "mapping",
+    [
+        "-d {ip}/32 -j DNAT --to-destination 10.42.0.5",
+        "-s 10.42.0.5/32 -j SNAT --to-source {ip}",
+    ],
+)
+def test_fip_withdrawal_compares_exact_nat_address(mapped, expected, mapping):
+    rule = '-A PREROUTING -m comment --comment "{}" {}'.format(
+        hostns.fip_tag("test"), mapping.format(ip=mapped)
+    )
+    with (
+        mock.patch.object(sh, "try_run", side_effect=["vni10001", "", ""]),
+        mock.patch.object(hostns, "_iptables_save", return_value=rule),
+    ):
+        assert hostns.fip_withdrawal_confirmed(["192.0.2.1"], 10001, "test") is expected
+
+
+@pytest.mark.parametrize("stale_first", [True, False])
+@pytest.mark.parametrize("stale_ofport", [-1, 0, ["set", []]])
+def test_snapshot_guest_identity_ignores_stale_taps(stale_first, stale_ofport):
+    uid = str(sys_uuid.uuid4())
+    rows = [
+        {"name": "live-tap", "ofport": 7, "external_ids": ["map", [["iface-id", uid]]]},
+        {
+            "name": "stale-tap",
+            "ofport": stale_ofport,
+            "external_ids": ["map", [["iface-id", uid]]],
+        },
+    ]
+    if stale_first:
+        rows.reverse()
+    with mock.patch.object(state, "ovs_rows", return_value=rows):
+        assert state.snapshot_plugged_ifaces() == {uid: "live-tap"}
+
+
+def test_resolve_guest_identity_ignores_stale_taps():
+    port = _port()
+
+    def ovs(*args):
+        return "live-tap\n" if "ofport>0" in args else "stale-tap\nlive-tap\n"
+
+    with mock.patch.object(sh, "ovs", side_effect=ovs):
+        assert port._resolve_guest_port() == "live-tap"

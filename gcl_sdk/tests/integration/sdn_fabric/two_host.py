@@ -266,68 +266,96 @@ class TwoHostFabric:
             ],
         )
         for h in self.hosts:
-            host = evpn.EvpnHost(
-                uuid=sys_uuid.uuid4(), as_number=AS_NUMBER, rr_addresses=[RR_IP]
-            )
-            with open(h.gobgp_conf, "w") as fl:
-                fl.write(single.role_conf(host, h.underlay_ip))
-            # The connector config bakes in ``configs_dir`` (from
-            # CLIENT_CONF_DIR) and ``switch_name`` (from EVPN_BRIDGE); point
-            # them at this host's private conf dir before rendering so the
-            # connector reads the client configs the driver writes there.
-            # Its run directory too, so the two connectors keep their own
-            # flow-sync scratch and anycast files.
-            saved = (base.CLIENT_CONF_DIR, base.EVPN_BRIDGE, base.CONNECTOR_RUN_DIR)
-            base.CLIENT_CONF_DIR, base.EVPN_BRIDGE = h.conf_dir, "evpn"
-            base.CONNECTOR_RUN_DIR = h.run
-            try:
-                conf = host._render_connector_conf(h.underlay_ip)
-            finally:
-                base.CLIENT_CONF_DIR, base.EVPN_BRIDGE, base.CONNECTOR_RUN_DIR = saved
-            # The connector does not propagate OVS_RUNDIR to its ovs-vsctl /
-            # ovs-ofctl children, so it would program the *system* OVS. Point
-            # it at per-host wrapper binaries that pin OVS_RUNDIR, so every
-            # command it runs lands in this host's private OVS instance.
-            vsctl_bin = self._ovs_wrapper(h, "ovs-vsctl")
-            ofctl_bin = self._ovs_wrapper(h, "ovs-ofctl")
-            conf = conf.replace(
-                'ovs_vsctl_bin_path = "/usr/bin/ovs-vsctl"',
-                'ovs_vsctl_bin_path = "%s"' % vsctl_bin,
-            )
-            conf = conf.replace(
-                'ovs_ofctl_bin_path = "/usr/bin/ovs-ofctl"',
-                'ovs_ofctl_bin_path = "%s"' % ofctl_bin,
-            )
-            with open(h.connector_conf, "w") as fl:
-                fl.write(conf)
-            self._daemons.spawn(
-                "gobgpd-%s" % h.name,
-                [
-                    "ip",
-                    "netns",
-                    "exec",
-                    h.ns,
-                    self._gobgpd,
-                    "-f",
-                    h.gobgp_conf,
-                    "--api-hosts",
-                    "127.0.0.1:%d" % GRPC_PORT,
-                ],
-            )
-            self._daemons.spawn(
-                "connector-%s" % h.name,
-                [
-                    "ip",
-                    "netns",
-                    "exec",
-                    h.ns,
-                    "env",
-                    "OVS_RUNDIR=%s" % h.run,
-                    self._connector,
-                    "--config-file",
-                    h.connector_conf,
-                ],
-            )
+            self._start_host(h)
+
+    def _start_host(self, h):
+        host = evpn.EvpnHost(
+            uuid=sys_uuid.uuid4(), as_number=AS_NUMBER, rr_addresses=[RR_IP]
+        )
+        with open(h.gobgp_conf, "w") as fl:
+            fl.write(single.role_conf(host, h.underlay_ip))
+        # The connector config bakes in ``configs_dir`` (from
+        # CLIENT_CONF_DIR) and ``switch_name`` (from EVPN_BRIDGE); point
+        # them at this host's private conf dir before rendering so the
+        # connector reads the client configs the driver writes there.
+        # Its run directory too, so the two connectors keep their own
+        # flow-sync scratch and anycast files.
+        saved = (base.CLIENT_CONF_DIR, base.EVPN_BRIDGE, base.CONNECTOR_RUN_DIR)
+        base.CLIENT_CONF_DIR, base.EVPN_BRIDGE = h.conf_dir, "evpn"
+        base.CONNECTOR_RUN_DIR = h.run
+        try:
+            conf = host._render_connector_conf(h.underlay_ip)
+        finally:
+            base.CLIENT_CONF_DIR, base.EVPN_BRIDGE, base.CONNECTOR_RUN_DIR = saved
+        # The connector does not propagate OVS_RUNDIR to its ovs-vsctl /
+        # ovs-ofctl children, so it would program the *system* OVS. Point
+        # it at per-host wrapper binaries that pin OVS_RUNDIR, so every
+        # command it runs lands in this host's private OVS instance.
+        vsctl_bin = self._ovs_wrapper(h, "ovs-vsctl")
+        ofctl_bin = self._ovs_wrapper(h, "ovs-ofctl")
+        conf = conf.replace(
+            'ovs_vsctl_bin_path = "/usr/bin/ovs-vsctl"',
+            'ovs_vsctl_bin_path = "%s"' % vsctl_bin,
+        )
+        conf = conf.replace(
+            'ovs_ofctl_bin_path = "/usr/bin/ovs-ofctl"',
+            'ovs_ofctl_bin_path = "%s"' % ofctl_bin,
+        )
+        with open(h.connector_conf, "w") as fl:
+            fl.write(conf)
+        self._daemons.spawn(
+            "gobgpd-%s" % h.name,
+            [
+                "ip",
+                "netns",
+                "exec",
+                h.ns,
+                self._gobgpd,
+                "-f",
+                h.gobgp_conf,
+                "--api-hosts",
+                "127.0.0.1:%d" % GRPC_PORT,
+            ],
+        )
+        self._daemons.spawn(
+            "connector-%s" % h.name,
+            [
+                "ip",
+                "netns",
+                "exec",
+                h.ns,
+                "env",
+                "OVS_RUNDIR=%s" % h.run,
+                self._connector,
+                "--config-file",
+                h.connector_conf,
+            ],
+        )
+
+    def add_host(self):
+        host = _Host(self._workdir, self._tag, len(self.hosts))
+        self.hosts.append(host)
+        self._attach_ns(host.ns, host.veth, host.veth_ns, host.underlay_ip)
+        self._start_ovs(host)
+        self._start_host(host)
+        return host
+
+    def flows(self, host):
+        return _run(
+            [
+                "ip",
+                "netns",
+                "exec",
+                host.ns,
+                "env",
+                "OVS_RUNDIR=%s" % host.run,
+                "ovs-ofctl",
+                "-O",
+                "OpenFlow13",
+                "dump-flows",
+                "evpn",
+            ]
+        )
 
     # --- guests -----------------------------------------------------------
 

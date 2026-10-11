@@ -308,6 +308,7 @@ class EvpnHost(evpn_models.EvpnHost, _GobgpConfModel):
             # Carries the identity group in VXLAN-GBP. Fabric-wide: OVS will
             # not mix GBP and non-GBP tunnels on one UDP port.
             "gbp = True\n"
+            "restrict_tunnel_sources = True\n"
             "enable_sudo = False\n"
             'ovs_vsctl_bin_path = "/usr/bin/ovs-vsctl"\n'
             'ovs_ofctl_bin_path = "/usr/bin/ovs-ofctl"\n'

@@ -27,7 +27,6 @@ import pytest
 
 from gcl_sdk.agents.universal.drivers import pool as pool_driver
 
-
 TARGET_PORT_INFO = {
     "mac": "52:54:00:5e:ca:be",
     "ipv4": "10.20.0.22",
@@ -252,3 +251,62 @@ def test_a_spec_that_asks_for_ovs_says_so(model):
 
     assert view["ovs"] is True
     assert spec_type.from_simple_type(view).ovs is True
+
+
+@pytest.mark.parametrize("existing,desired", [(1, 2), (2, 1), (1, 0)])
+def test_sdn_nics_hotplug_without_recreating_guest(existing, desired):
+    infos = [
+        dict(
+            TARGET_PORT_INFO,
+            mac=f"52:54:00:00:00:{i:02x}",
+            overlay=True,
+            source="private",
+        )
+        for i in range(2)
+    ]
+    meta = pool_driver.MetaMachine(
+        uuid=sys_uuid.uuid4(),
+        project_id=sys_uuid.uuid4(),
+        cores=2,
+        ram=2048,
+        boot="hd0",
+        port_info=infos[0] if desired else {},
+        ports_info=infos[:desired],
+    )
+    dp = _dp_machine()
+    dp.image = None
+    dp_ports = [_dp_port(info["mac"], "br-int") for info in infos[:existing]]
+    observed = [_dp_port(info["mac"], "br-int") for info in infos[:desired]]
+    driver = mock.MagicMock()
+    driver.get_machine.return_value = (dp, observed)
+    pool = mock.MagicMock()
+    pool.dp_machine_map = {meta.uuid: dp}
+    pool.dp_port_map = {meta.uuid: dp_ports}
+    pool.load_driver.return_value = driver
+    with mock.patch.object(type(meta), "_is_core_machine", property(lambda self: True)):
+        meta.update_on_dp(pool, [])
+    assert driver.attach_port.call_count == max(0, desired - existing)
+    assert driver.detach_port.call_count == max(0, existing - desired)
+    driver.recreate_machine.assert_not_called()
+    driver.delete_machine.assert_not_called()
+    driver.set_machine_cores.assert_not_called()
+    driver.set_machine_ram.assert_not_called()
+    assert meta.ports_info == infos[:desired]
+
+
+def test_sdn_refresh_matches_mac_without_reordering_logical_ports(machine):
+    second = dict(
+        TARGET_PORT_INFO,
+        mac="52:54:00:00:00:02",
+        uuid=str(sys_uuid.uuid4()),
+        overlay=True,
+        source="second",
+    )
+    first = dict(TARGET_PORT_INFO, overlay=True, source="first")
+    machine.port_info = first
+    machine.ports_info = [first, second]
+    _refresh(
+        machine, [_dp_port(second["mac"], "br-int"), _dp_port(first["mac"], "br-int")]
+    )
+    assert machine.ports_info == [first, second]
+    assert machine.port_info == first

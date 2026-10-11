@@ -109,7 +109,7 @@ def test_netboot_filename_is_served_from_the_dhcp_function(fabric):
     assert "bound to 10.42.0.9" in out, out
     # dhclient records the BOOTP `file` field / option 67 it was handed —
     # the same value a guest's iPXE ROM chain-loads from.
-    with open("/tmp/dhclient-%s.lease" % guest.ns) as fl:
+    with open(guest.lease_path) as fl:
         lease = fl.read()
     assert "http://169.254.169.254/boot/boot.ipxe" in lease, lease
 

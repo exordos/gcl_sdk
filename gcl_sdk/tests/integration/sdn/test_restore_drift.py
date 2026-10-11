@@ -193,11 +193,14 @@ def test_an_egress_the_subnet_asked_for_is_reported(fabric):
 
     port.dhcp = routed
     reported = _missing(port)
+    assert "egress port declaration" in reported
     assert "egress namespace" in reported
     assert "egress gateway config" in reported
     assert "egress gateway leg" in reported
 
-    fabric.apply_egress(guest, port.vni, routed["cidr"], "10.42.8.1")
+    fabric.apply_egress(
+        guest, port.vni, routed["cidr"], "10.42.8.1", port_uuid=port.uuid
+    )
     # This tier emulates evpn_connector's delivery by re-plugging the leg
     # onto br-int, so the leg really is off the evpn bridge here — and
     # everything else the subnet asked for is now installed.

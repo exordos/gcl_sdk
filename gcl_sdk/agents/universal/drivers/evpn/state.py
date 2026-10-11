@@ -57,6 +57,9 @@ def dp_defaults() -> dict:
         "nf_guarded": None,
         "forwarded": None,
         "services": None,
+        "vlans": None,
+        "fip_tags": {},
+        "proxy_arp": None,
     }
 
 
@@ -65,7 +68,9 @@ def snapshot_dataplane() -> dict:
     snapshot = dp_defaults()
     try:
         flows = sh.ofctl("dump-flows", base.BR_INT)
-        snapshot["cookies"] = set(re.findall(r"cookie=(0x[0-9a-f]+)", flows))
+        snapshot["cookies"] = {
+            int(cookie, 16) for cookie in re.findall(r"cookie=(0x[0-9a-f]+)", flows)
+        }
         snapshot["unprotected_nf"] = {
             match.group(1)
             for line in flows.splitlines()
@@ -209,11 +214,13 @@ def snapshot_ovs() -> dict:
 
 def snapshot_plugged_ifaces() -> dict | None:
     """Guest identity (``iface-id``) -> OVS interface name."""
-    rows = ovs_rows("Interface", "name,external_ids")
+    rows = ovs_rows("Interface", "name,external_ids,ofport")
     if rows is None:
         return None
     plugged = {}
     for row in rows:
+        if not isinstance(row.get("ofport"), int) or row["ofport"] <= 0:
+            continue
         name, external = row.get("name"), row.get("external_ids")
         if not isinstance(name, str) or not isinstance(external, list):
             continue
@@ -286,11 +293,37 @@ def has_cookie(cookie: str) -> bool:
     cookies = dp()["cookies"]
     if cookies is None:
         return True
-    want = int(cookie, 16)
-    return any(int(seen, 16) == want for seen in cookies)
+    return int(cookie, 16) in cookies
 
 
 def has_port(name: str) -> bool:
     """Is this port on br-int? Unknown counts as present."""
     ports = dp()["ports"]
     return True if ports is None else name in ports
+
+
+def local_vlan(port_uuid: object) -> int | None:
+    """Read the VLAN map once for the iteration's restore checks."""
+    if _DP_SNAPSHOT is None:
+        return hostns.lookup_local_vlan(port_uuid)
+    if _DP_SNAPSHOT["vlans"] is None:
+        _DP_SNAPSHOT["vlans"] = hostns._vlan_map()
+    value = _DP_SNAPSHOT["vlans"].get(str(port_uuid))
+    return int(value) if value is not None else None
+
+
+def fip_tags(vni: int) -> set:
+    """The installed FIP tags, read once per VNI for restore checks."""
+    tables = {} if _DP_SNAPSHOT is None else _DP_SNAPSHOT["fip_tags"]
+    if vni not in tables:
+        tables[vni] = set(re.findall(r"\bevpn-fip-[\w-]+", hostns.fip_rules(vni)))
+    return tables[vni]
+
+
+def proxied_fips() -> dict:
+    """The host's proxy ARP entries, read once for restore checks."""
+    if _DP_SNAPSHOT is None:
+        return hostns.proxied_fips()
+    if _DP_SNAPSHOT["proxy_arp"] is None:
+        _DP_SNAPSHOT["proxy_arp"] = hostns.proxied_fips()
+    return _DP_SNAPSHOT["proxy_arp"]

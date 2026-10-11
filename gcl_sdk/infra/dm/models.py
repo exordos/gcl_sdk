@@ -506,6 +506,9 @@ class NodeSet(
         ra_types.AllowNone(ra_types.TypedList(ra_types.Dict())),
         default=None,
     )
+    networking = properties.property(
+        ra_types.AllowNone(ra_types.TypedList(ra_types.Dict())), default=None
+    )
     disk_spec = properties.property(
         types_dynamic.KindModelSelectorType(
             types_dynamic.KindModelType(SetRootDiskSpec),
@@ -548,6 +551,8 @@ class NodeSet(
         # Sent only when declared: an installation predating `interfaces`
         # fails to restore an unknown field, and omitting it keeps the hash
         # every installation already agrees on.
+        if self.networking is not None:
+            fields = fields | frozenset(("networking",))
         if self.interfaces is None:
             return fields
         return fields | frozenset(("interfaces",))

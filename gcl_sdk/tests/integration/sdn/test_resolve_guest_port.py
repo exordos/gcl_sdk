@@ -22,6 +22,7 @@ virtualport). Never ``attached-mac``: the MAC is the tenant's to set.
 """
 
 import subprocess
+import time
 import uuid as sys_uuid
 
 import pytest
@@ -76,3 +77,33 @@ def test_resolve_unplugged_is_retriable(fabric):
     port = _mk_port(sys_uuid.uuid4(), "52:54:00:de:ad:00")
     with pytest.raises(driver_exc.InvalidDataPlaneObjectError):
         port._resolve_guest_port()
+
+
+def test_stale_tap_does_not_hide_replugged_guest(fabric):
+    from gcl_sdk.agents.universal.drivers.evpn import state
+
+    guest = fabric.add_guest("rnew", vlan=43, ip="10.42.9.7/24")
+    port_uuid = sys_uuid.uuid4()
+    _set_externals(guest.host_veth, **{"iface-id": str(port_uuid)})
+    stale = fabric.add_guest("rold", vlan=44, ip="10.42.9.8/24").host_veth
+    _set_externals(stale, **{"iface-id": str(port_uuid)})
+    subprocess.run(["ip", "link", "del", stale], check=True)
+    for _ in range(30):
+        if (
+            subprocess.check_output(
+                ["ovs-vsctl", "get", "Interface", stale, "ofport"], text=True
+            ).strip()
+            == "-1"
+        ):
+            break
+        time.sleep(0.1)
+    assert (
+        subprocess.check_output(
+            ["ovs-vsctl", "get", "Interface", stale, "ofport"], text=True
+        ).strip()
+        == "-1"
+    )
+
+    port = _mk_port(port_uuid, "52:54:00:00:00:02")
+    assert port._resolve_guest_port() == guest.host_veth
+    assert state.snapshot_plugged_ifaces()[str(port_uuid)] == guest.host_veth

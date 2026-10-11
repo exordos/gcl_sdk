@@ -42,6 +42,8 @@ CLIENT_CONF_DIR = "/opt/evpn/vm_conf"
 
 NF_RECORDS_DIR = os.path.join(constants.WORK_DIR, "evpn_nf")
 
+EGRESS_RECORDS_DIR = os.path.join(constants.WORK_DIR, "evpn_egress")
+
 # evpn_connector owns the EVPN bridge, the agent owns br-int; one patch pair
 # per guest joins them, and the connector's config points at the patch.
 EVPN_BRIDGE = "evpn"

@@ -21,11 +21,13 @@ port, guest neighbours, DVR egress and its fabric guard, floating-address
 NAT, and their collection. Also the host-local VLAN map.
 """
 
+import collections
 import ipaddress
 import json
 import logging
 import os
 import re
+import shlex
 import socket
 import struct
 import subprocess
@@ -42,6 +44,9 @@ LOG = logging.getLogger(__name__)
 # VNIs whose egress guard was asserted this iteration: the guard is per
 # VNI, so re-checking it per guest only costs subprocesses.
 _GUARDED_VNIS: set = set()
+_EGRESS_DEMANDS: dict | None = None
+_NF_PORTS: dict | None = None
+_CLIENTS: dict | None = None
 
 
 def iptables(*args: str, ns: str | None = None, table: str = "nat") -> str:
@@ -257,6 +262,8 @@ def ensure_vni_nf_port(vni: int) -> int:
     address`` bounces the link even when unchanged, flushing the neighbours
     other guests programmed.
     """
+    if _NF_PORTS is not None and vni in _NF_PORTS:
+        return _NF_PORTS[vni]
     ns = ensure_vni_ns(vni)
     # Before the port exists: nothing may be routed in from it, ever.
     ensure_nf_guard(vni)
@@ -296,6 +303,9 @@ def ensure_vni_nf_port(vni: int) -> int:
     if ofport is None:
         # Not assigned yet; retriable on the next iteration.
         raise driver_exc.InvalidDataPlaneObjectError(obj={"port": port})
+    if _NF_PORTS is not None:
+        ensure_metadata_route_rule(ns)
+        _NF_PORTS[vni] = ofport
     return ofport
 
 
@@ -334,7 +344,8 @@ def ensure_guest_neighbour(vni: int, ipv4: str, mac: str) -> None:
     """
     ns = vni_ns(vni)
     port = nf_port(vni)
-    ensure_metadata_route_rule(ns)
+    if _NF_PORTS is None or vni not in _NF_PORTS:
+        ensure_metadata_route_rule(ns)
     sh.ns_ip(
         ns, "route", "replace", "%s/32" % ipv4, "dev", port, "table", GUEST_ROUTE_TABLE
     )
@@ -768,17 +779,203 @@ def egress_exp_rt(as_number: str, vni: int) -> str:
     return "%s:%d" % (as_number, 0x80000000 | (host << 15) | (vni & 0x7FFF))
 
 
-def ensure_vni_egress(vni: int, dhcp: dict, imp_rt: list[str]) -> None:
+def egress_port_path(vni: int, port_uuid: object) -> str:
+    """A port's gateway declaration, separate from the connector's clients."""
+    return os.path.join(base.EGRESS_RECORDS_DIR, str(vni), str(port_uuid) + ".json")
+
+
+class _EgressDemand:
+    """Gateway and MTU contributions of this VNI's ports during one cycle."""
+
+    def __init__(self, settings, nf_ports):
+        self._ports = {}
+        self._nf_ports = set()
+        self._gateways = collections.Counter()
+        self._mtus = collections.Counter()
+        self.applied = None
+        for name, spec in settings.items():
+            self.replace(name, spec, name in nf_ports)
+
+    @staticmethod
+    def _spec(dhcp):
+        cidr = dhcp.get("cidr")
+        gateway = evpn_records.default_gateway(dhcp.get("routers"))
+        if not cidr or not gateway:
+            return None
+        interface = ipaddress.IPv4Interface("%s/%s" % (gateway, cidr.split("/", 1)[1]))
+        return str(interface), int(dhcp.get("mtu") or 1450)
+
+    def replace(self, name, spec, nf_record):
+        previous = self._ports.get(name)
+        current = self._spec(spec or {})
+        if nf_record:
+            self._nf_ports.add(name)
+        else:
+            self._nf_ports.discard(name)
+        if name in self._ports and previous == current:
+            return
+        for counter, old, new in (
+            (
+                self._gateways,
+                previous[0] if previous else None,
+                current[0] if current else None,
+            ),
+            (
+                self._mtus,
+                previous[1] if previous else None,
+                current[1] if current else None,
+            ),
+        ):
+            if old is not None:
+                counter[old] -= 1
+                if not counter[old]:
+                    del counter[old]
+            if new is not None:
+                counter[new] += 1
+        self._ports[name] = current
+
+    def forget(self, name):
+        self.replace(name, {}, False)
+        self._ports.pop(name)
+
+    def render(self, dhcp):
+        gateways, contested = {}, set()
+        for address in self._gateways:
+            ip = address.split("/")[0]
+            if ip in gateways:
+                contested.add(ip)
+            gateways[ip] = address
+        current = self._spec(dhcp or {})
+        mtus = self._mtus.keys()
+        if current:
+            ip = current[0].split("/")[0]
+            gateways[ip] = current[0]
+            contested.discard(ip)
+            mtus = (*mtus, current[1])
+        if contested:
+            # Preserve file order while old and new prefixes coexist.
+            for name in sorted(
+                self._ports, key=lambda name: (name not in self._nf_ports, name)
+            ):
+                spec = self._ports[name]
+                if spec and spec[0].split("/")[0] in contested:
+                    gateways[spec[0].split("/")[0]] = spec[0]
+        return gateways, str(min(mtus, default=1450))
+
+
+def _egress_demand(vni: int) -> _EgressDemand:
+    if _EGRESS_DEMANDS is not None and vni in _EGRESS_DEMANDS:
+        return _EGRESS_DEMANDS[vni]
+    settings = {}
+    nf_dir = os.path.join(base.NF_RECORDS_DIR, str(vni))
+    for name in sorted(os.listdir(nf_dir)) if os.path.isdir(nf_dir) else []:
+        if not name.endswith(".json") or name.startswith(evpn_records.NF_CONFIG_PREFIX):
+            continue
+        with open(os.path.join(nf_dir, name)) as stream:
+            settings[name] = json.load(stream)
+    nf_ports = set(settings)
+    directory = os.path.dirname(egress_port_path(vni, "unused"))
+    for name in sorted(os.listdir(directory)) if os.path.isdir(directory) else []:
+        if name.endswith(".json"):
+            with open(os.path.join(directory, name)) as stream:
+                settings[name] = json.load(stream)
+    demand = _EgressDemand(settings, nf_ports)
+    if _EGRESS_DEMANDS is not None:
+        _EGRESS_DEMANDS[vni] = demand
+    return demand
+
+
+def egress_gateways(vni: int, dhcp: dict) -> tuple[dict[str, str], str]:
+    """Aggregate declarations, falling back to NF records during upgrade."""
+    return _egress_demand(vni).render(dhcp)
+
+
+def forget_egress_port(vni: int, port_uuid: object) -> None:
+    """Remove a detached port's gateway demand; retain gateways used by peers."""
+    sh.remove(egress_port_path(vni, port_uuid))
+    if _EGRESS_DEMANDS is not None and vni in _EGRESS_DEMANDS:
+        demand = _EGRESS_DEMANDS[vni]
+        name = str(port_uuid) + ".json"
+        demand.forget(name)
+        nf_record = os.path.join(base.NF_RECORDS_DIR, str(vni), name)
+        if os.path.exists(nf_record):
+            with open(nf_record) as stream:
+                demand.replace(name, json.load(stream), True)
+    if os.path.exists(egress_conf_path(vni)):
+        with open(egress_conf_path(vni)) as stream:
+            conf = json.load(stream)
+        # No current port: the remaining records own the shared gateway.
+        ensure_vni_egress(vni, {}, conf.get("imp_rt") or [])
+
+
+def _sync_egress_gateways(vni: int, gateways: dict, mtu: str, imp_rt: list) -> None:
+    """Change gateway addresses without deleting shared links, NAT or FIPs."""
+    path = egress_conf_path(vni)
+    with open(path) as stream:
+        conf = json.load(stream)
+    ns = vni_ns(vni)
+    gateway_link = "gw%d" % vni
+    desired = ["%s/32" % ip for ip in sorted(gateways)] + ["0.0.0.0/0"]
+    old_ips = {
+        route.split("/")[0] for route in conf.get("routes", []) if route.endswith("/32")
+    }
+    for address in gateways.values():
+        sh.ns_ip(ns, "addr", "replace", address, "dev", gateway_link)
+    stale = old_ips - gateways.keys()
+    if stale:
+        addresses = json.loads(
+            sh.ns_ip(ns, "-json", "addr", "show", "dev", gateway_link)
+        )
+        for link in addresses:
+            for address in link.get("addr_info", []):
+                if address.get("family") == "inet" and address.get("local") in stale:
+                    sh.ns_ip(
+                        ns,
+                        "addr",
+                        "del",
+                        "%s/%s" % (address["local"], address["prefixlen"]),
+                        "dev",
+                        gateway_link,
+                    )
+    sh.ns_ip(ns, "link", "set", gateway_link, "mtu", mtu)
+    conf["routes"] = desired
+    conf["imp_rt"] = list(imp_rt)
+    sh.write_if_changed(path, json.dumps(conf, indent=1, sort_keys=True))
+
+
+def ensure_vni_egress(
+    vni: int, dhcp: dict, imp_rt: list[str], port_uuid: object | None = None
+) -> None:
     """Anycast gateway + DVR egress for a VNI (design decision 6).
 
     The namespace holds the gateway on a veth leg plugged into the EVPN
     bridge; egress is masqueraded in the namespace and again in the root.
     Skipped when the CP subnet defines no gateway.
     """
-    cidr = (dhcp or {}).get("cidr")
-    gw_ip = evpn_records.default_gateway((dhcp or {}).get("routers"))
-    if not cidr or not gw_ip or not imp_rt:
+    if port_uuid is not None:
+        sh.write_if_changed(
+            egress_port_path(vni, port_uuid), json.dumps(dhcp or {}, sort_keys=True)
+        )
+    demand = _egress_demand(vni)
+    if port_uuid is not None:
+        name = str(port_uuid) + ".json"
+        demand.replace(
+            name,
+            dhcp,
+            os.path.exists(os.path.join(base.NF_RECORDS_DIR, str(vni), name)),
+        )
+    gateways, mtu = demand.render(dhcp)
+    if not imp_rt:
         return
+    if not gateways:
+        # A remaining peer may still own FIPs. Whole egress collection belongs
+        # to the last guest on the VNI, not the last explicit gateway demand.
+        return
+    desired = (tuple(sorted(gateways.items())), mtu, tuple(imp_rt))
+    if demand.applied == desired and vni in _GUARDED_VNIS:
+        return
+    demand.applied = None
+    gw_ip = sorted(gateways)[0]
     ns = ensure_vni_ns(vni)
     # Above the early return: an existing egress needs the guard and the
     # forwarding re-asserted too (libvirt re-adds its REJECT).
@@ -788,7 +985,9 @@ def ensure_vni_egress(vni: int, dhcp: dict, imp_rt: list[str]) -> None:
         _GUARDED_VNIS.add(vni)
     conf = egress_conf_path(vni)
     if os.path.exists(conf):
-        if egress_matches(conf, gw_ip, dhcp) and egress_leg_plugged(vni):
+        if egress_leg_plugged(vni) and link_in_ns(ns, "gw%d" % vni) is not None:
+            _sync_egress_gateways(vni, gateways, mtu, imp_rt)
+            demand.applied = desired
             return
         LOG.info("evpn: egress for vni %d is stale, rebuilding", vni)
         gc_vni_egress(vni)
@@ -797,8 +996,6 @@ def ensure_vni_egress(vni: int, dhcp: dict, imp_rt: list[str]) -> None:
         # would make `link add` fail forever.
         remove_egress_links(vni)
 
-    prefix_len = cidr.split("/", 1)[1]
-    mtu = str((dhcp or {}).get("mtu") or 1450)
     gw = "gw%d" % vni
     gw_br = egress_leg(vni)
     upl = "upl%d" % vni
@@ -809,7 +1006,8 @@ def ensure_vni_egress(vni: int, dhcp: dict, imp_rt: list[str]) -> None:
     sh.ip("link", "set", gw, "netns", ns)
     sh.ns_ip(ns, "link", "set", gw, "mtu", mtu)
     sh.ns_ip(ns, "link", "set", gw, "up")
-    sh.ns_ip(ns, "addr", "replace", "%s/%s" % (gw_ip, prefix_len), "dev", gw)
+    for address in gateways.values():
+        sh.ns_ip(ns, "addr", "replace", address, "dev", gw)
     sh.ip("link", "set", gw_br, "up")
     # High per-VNI ofport: evpn_connector silently drops a client whose
     # ofport collides with a guest patch's.
@@ -846,13 +1044,14 @@ def ensure_vni_egress(vni: int, dhcp: dict, imp_rt: list[str]) -> None:
         conf,
         client_conf(
             mac,
-            ["%s/32" % gw_ip, "0.0.0.0/0"],
+            ["%s/32" % ip for ip in sorted(gateways)] + ["0.0.0.0/0"],
             vni,
             ofport,
             imp_rt,
             [egress_exp_rt(as_number, vni)],
         ),
     )
+    demand.applied = desired
     LOG.info("evpn: egress gateway for vni %d ready (%s)", vni, gw_ip)
 
 
@@ -878,6 +1077,28 @@ def egress_matches(conf_path: str, gw_ip: str, dhcp: dict) -> bool:
 
 def vni_in_use(vni: int, skip_uuid: object) -> bool:
     """True while any other guest client config still carries this VNI."""
+    if _CLIENTS is not None:
+        if "by_uuid" not in _CLIENTS:
+            by_uuid, by_vni = {}, collections.defaultdict(set)
+            try:
+                names = os.listdir(base.CLIENT_CONF_DIR)
+            except FileNotFoundError:
+                names = []
+            for name in names:
+                if not name.endswith(".json") or re.fullmatch(r"gw\d+\.json", name):
+                    continue
+                try:
+                    with open(os.path.join(base.CLIENT_CONF_DIR, name)) as stream:
+                        client_vni = json.load(stream).get("vni")
+                    if not isinstance(client_vni, int):
+                        continue
+                    by_uuid[name] = client_vni
+                    by_vni[client_vni].add(name)
+                except (OSError, ValueError):
+                    continue
+            _CLIENTS.update(by_uuid=by_uuid, by_vni=by_vni)
+        names = _CLIENTS["by_vni"].get(vni, set())
+        return len(names) > int("%s.json" % skip_uuid in names)
     try:
         names = os.listdir(base.CLIENT_CONF_DIR)
     except FileNotFoundError:
@@ -894,6 +1115,19 @@ def vni_in_use(vni: int, skip_uuid: object) -> bool:
         except (OSError, ValueError):
             continue
     return False
+
+
+def record_client(port_uuid: object, vni: int | None) -> None:
+    """Update the cycle's occupancy index after a successful file mutation."""
+    if _CLIENTS is None or "by_uuid" not in _CLIENTS:
+        return
+    name = "%s.json" % port_uuid
+    previous = _CLIENTS["by_uuid"].pop(name, None)
+    if previous in _CLIENTS["by_vni"]:
+        _CLIENTS["by_vni"][previous].discard(name)
+    if vni is not None:
+        _CLIENTS["by_uuid"][name] = vni
+        _CLIENTS["by_vni"][vni].add(name)
 
 
 def fip_tag(uuid: object) -> str:
@@ -1165,6 +1399,8 @@ def gc_vni_egress(vni: int) -> None:
 
     The namespace goes with the VNI's last guest (`gc_vni`).
     """
+    if _EGRESS_DEMANDS is not None and vni in _EGRESS_DEMANDS:
+        _EGRESS_DEMANDS[vni].applied = None
     tr_cidr, _, _ = egress_transfer(vni)
     sh.remove(egress_conf_path(vni))
     # Before the links: the kernel drops their routes with them, and those
@@ -1195,7 +1431,12 @@ def remove_egress_links(vni: int) -> None:
 
 def gc_vni(vni: int) -> None:
     """Collect a VNI's whole footprint on this host: its last guest is gone."""
+    _GUARDED_VNIS.discard(vni)
+    if _NF_PORTS is not None:
+        _NF_PORTS.pop(vni, None)
     gc_vni_egress(vni)
+    if _EGRESS_DEMANDS is not None:
+        _EGRESS_DEMANDS.pop(vni, None)
     sh.try_run(
         [base.OVSVSCTL_BIN, "--if-exists", "del-port", base.BR_INT, nf_port(vni)]
     )
@@ -1213,5 +1454,39 @@ def gc_guest(port_uuid: object) -> None:
         [base.OVSVSCTL_BIN, "--if-exists", "del-port", base.BR_INT, "pi%d" % vlan],
         [base.OVSVSCTL_BIN, "--if-exists", "del-port", base.EVPN_BRIDGE, "pe%d" % vlan],
     ):
-        sh.try_run(cmd)
+        if sh.try_run(cmd) is None:
+            return
     release_local_vlan(port_uuid)
+
+
+def fip_withdrawal_confirmed(publics: list[str], vni: int, port_uuid: object) -> bool:
+    """Require readable, absent NAT/routes/proxy ARP before acknowledging."""
+    if not publics:
+        return True
+    namespaces = sh.try_run([base.IP_BIN, "netns", "list"])
+    routes = sh.try_run([base.IP_BIN, "route", "show"])
+    neighbours = sh.try_run([base.IP_BIN, "neigh", "show", "proxy"])
+    if namespaces is None or routes is None or neighbours is None:
+        return False
+    ns = vni_ns(vni)
+    if ns in {line.split()[0] for line in namespaces.splitlines() if line.split()}:
+        rules = _iptables_save(ns, "nat")
+        if rules is None:
+            return False
+        for line in rules.splitlines():
+            try:
+                args = shlex.split(line)
+            except ValueError:
+                return False
+            if fip_tag(port_uuid) not in args:
+                continue
+            for index, arg in enumerate(args[:-1]):
+                if arg in ("-d", "--destination", "--to-source"):
+                    address = args[index + 1].split("/")[0]
+                    if address in publics:
+                        return False
+    route_ips = {
+        line.split()[0].split("/")[0] for line in routes.splitlines() if line.split()
+    }
+    proxy_ips = {line.split()[0] for line in neighbours.splitlines() if line.split()}
+    return not set(publics) & (route_ips | proxy_ips)

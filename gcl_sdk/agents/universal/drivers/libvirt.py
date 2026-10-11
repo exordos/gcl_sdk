@@ -1330,7 +1330,9 @@ class LibvirtPoolDriver(pool_base.AbstractPoolDriver):
         )
 
         # Attach the interface both to live domain and persistent config
-        flags = libvirt.VIR_DOMAIN_AFFECT_LIVE | libvirt.VIR_DOMAIN_AFFECT_CONFIG
+        flags = libvirt.VIR_DOMAIN_AFFECT_CONFIG
+        if domain.isActive():
+            flags |= libvirt.VIR_DOMAIN_AFFECT_LIVE
         try:
             domain.attachDeviceFlags(interface_xml, flags)
         except libvirt.libvirtError as e:
@@ -1373,7 +1375,9 @@ class LibvirtPoolDriver(pool_base.AbstractPoolDriver):
             )
 
         # Detach the interface both from live domain and persistent config
-        flags = libvirt.VIR_DOMAIN_AFFECT_LIVE | libvirt.VIR_DOMAIN_AFFECT_CONFIG
+        flags = libvirt.VIR_DOMAIN_AFFECT_CONFIG
+        if domain.isActive():
+            flags |= libvirt.VIR_DOMAIN_AFFECT_LIVE
 
         try:
             domain.detachDeviceFlags(ET.tostring(target_interface, "unicode"), flags)

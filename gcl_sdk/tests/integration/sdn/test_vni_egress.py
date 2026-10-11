@@ -306,6 +306,78 @@ def test_the_namespace_goes_with_the_last_guest(fabric):
     assert not _ns_exists(hostns.vni_ns(VNI))
 
 
+def test_gateway_cycle_preserves_peers_and_updates_mtu(fabric, monkeypatch):
+    monkeypatch.setattr(hostns, "_EGRESS_DEMANDS", {})
+    guest = fabric.add_guest("egc", vlan=34, ip="10.42.7.8/24")
+    fabric.apply_egress(guest, VNI, CIDR, GW, port_uuid="first")
+    second = {
+        "cidr": "10.43.7.0/24",
+        "routers": [{"to": "default", "via": "10.43.7.1"}],
+        "mtu": 1400,
+    }
+    ns = hostns.vni_ns(VNI)
+
+    def gateway_state():
+        return json.loads(
+            subprocess.check_output(
+                [
+                    "ip",
+                    "netns",
+                    "exec",
+                    ns,
+                    "ip",
+                    "-json",
+                    "addr",
+                    "show",
+                    "dev",
+                    "gw%d" % VNI,
+                ],
+                text=True,
+            )
+        )[0]
+
+    hostns.ensure_vni_egress(VNI, second, ["65001:%d" % VNI], "second")
+    installed = gateway_state()
+    assert {
+        addr["local"] for addr in installed["addr_info"] if addr["family"] == "inet"
+    } == {GW, "10.43.7.1"}
+    assert installed["mtu"] == 1400
+    assert guest.ping(GW)
+
+    hostns.forget_egress_port(VNI, "second")
+    installed = gateway_state()
+    assert {
+        addr["local"] for addr in installed["addr_info"] if addr["family"] == "inet"
+    } == {GW}
+    assert installed["mtu"] == 1450
+    assert guest.ping(GW)
+
+    hostns.forget_egress_port(VNI, "first")
+    # The harness moves this leg to br-int for guest pings; return it
+    # to the fabric bridge before exercising VNI collection.
+    subprocess.check_call(
+        [
+            "ovs-vsctl",
+            "--if-exists",
+            "del-port",
+            fabric.br,
+            hostns.egress_leg(VNI),
+            "--",
+            "--may-exist",
+            "add-port",
+            fabric.evpn_br,
+            hostns.egress_leg(VNI),
+        ]
+    )
+    hostns.gc_vni(VNI)
+    assert VNI not in hostns._EGRESS_DEMANDS
+    hostns.ensure_vni_egress(VNI, second, ["65001:%d" % VNI], "second")
+    installed = gateway_state()
+    assert {
+        addr["local"] for addr in installed["addr_info"] if addr["family"] == "inet"
+    } == {"10.43.7.1"}
+
+
 def test_the_namespace_holds_the_default_routes_gateway(fabric):
     """The address the guest is handed is the address the host puts up.
 

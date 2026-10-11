@@ -40,6 +40,7 @@ which is where the connector's own flows already are. Guests on one host
 never cross the tunnel at all: their mark rides `pkt_mark` the whole way.
 """
 
+import socket
 import subprocess
 import time
 
@@ -79,6 +80,9 @@ def patched_bridges():
     exist and does not need to: what is under test is what the *translation*
     keeps, which `ofproto/trace` answers exactly.
     """
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+        probe.bind(("0.0.0.0", 0))
+        tunnel_port = probe.getsockname()[1]
     near, far = "gbpprobea", "gbpprobeb"
     for br in (near, far):
         _vsctl(["--if-exists", "del-br", br])
@@ -122,7 +126,7 @@ def patched_bridges():
             "ppvx",
             "type=vxlan",
             "options:remote_ip=10.178.9.9",
-            "options:dst_port=4790",
+            "options:dst_port=%d" % tunnel_port,
             "options:exts=gbp",
             "options:key=1234",
         ]

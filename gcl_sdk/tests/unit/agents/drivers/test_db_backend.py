@@ -14,6 +14,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 import uuid as sys_uuid
 
@@ -225,7 +226,10 @@ class TestDatabaseBackendClient:
         prop_b.is_read_only.return_value = False
 
         existing_obj = MagicMock()
-        existing_obj.properties = {"a": prop_a, "b": prop_b}
+        props = {"a": prop_a, "b": prop_b}
+        existing_obj.properties = SimpleNamespace(properties=props, get=props.get)
+        for prop in props.values():
+            prop.get_property_type.return_value.to_simple_type.side_effect = lambda v: v
         existing_obj.a = 1
         existing_obj.b = 2
         existing_obj.is_dirty.return_value = True
@@ -254,6 +258,7 @@ class TestDatabaseBackendClient:
         assert existing_obj.b == 20
         existing_obj.update.assert_called_once()
         assert actual is existing_obj
+        existing_obj.dump_to_simple_view.assert_not_called()
 
     def test_update_is_a_noop_when_nothing_changed(self):
         # The desired target carries only a read-only field, so the object
@@ -269,7 +274,9 @@ class TestDatabaseBackendClient:
         prop_a.is_read_only.return_value = True
 
         existing_obj = MagicMock()
-        existing_obj.properties = {"a": prop_a}
+        props = {"a": prop_a}
+        existing_obj.properties = SimpleNamespace(properties=props, get=props.get)
+        prop_a.get_property_type.return_value.to_simple_type.side_effect = lambda v: v
         existing_obj.a = 1
         existing_obj.is_dirty.return_value = False
 
@@ -290,6 +297,7 @@ class TestDatabaseBackendClient:
         assert existing_obj.a == 1
         existing_obj.update.assert_not_called()
         assert actual is existing_obj
+        existing_obj.dump_to_simple_view.assert_not_called()
 
     def test_delete_deletes_when_found_and_noop_when_missing(self):
         kind = "config"

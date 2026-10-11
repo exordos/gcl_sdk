@@ -22,6 +22,8 @@ import threading
 import time
 from unittest import mock
 
+import pytest
+
 from gcl_sdk.agents.universal.drivers import evpn_nf as nf
 
 MAC = "52:54:00:aa:bb:cc"
@@ -1367,6 +1369,47 @@ def test_a_doors_port_is_stolen_from_the_guest_like_the_platforms_own(tmp_path):
     }
     assert 11020 in claimed, "the door"
     assert set(base.PLATFORM_PORTS) <= claimed, "and the platform's own beside it"
+
+
+def test_nf_intercepts_only_claim_the_responder_addresses():
+    from gcl_sdk.agents.universal.drivers.evpn import flows
+
+    destinations = ["169.254.169.254", "10.120.0.1"]
+    with mock.patch.object(flows.sh, "run_flow_bundle") as bundle:
+        flows.ensure_port_nf_intercepts(
+            {"dhcp": {}, "dns": {"destinations": destinations},
+             "proxy": {"ports": [33118], "destinations": destinations}},
+            7, 42, MAC, "0x1", sources=["10.120.0.2"], zone=5,
+        )
+    intercepts = [line for line in bundle.call_args.args[0] if "tp_dst=" in line]
+    for line in intercepts:
+        if "tp_dst=67," in line:
+            assert "nw_dst=" not in line
+        else:
+            assert any("nw_dst=" + address + "," in line for address in destinations)
+            assert "ct(commit,zone=5)" in line
+    assert not any("nw_dst=10.120.0.3," in line for line in intercepts)
+    for port in [53, 11011, 11012, 11013, 33118]:
+        assert any("tp_dst=" + str(port) + "," in line for line in intercepts)
+
+
+@pytest.mark.parametrize(
+    "destinations",
+    [[], None, 123, "10.120.0.1", ["invalid", "0.0.0.0/0", "::1", 0, True]],
+)
+def test_explicit_invalid_nf_destinations_do_not_claim_arbitrary_peers(destinations):
+    from gcl_sdk.agents.universal.drivers.evpn import flows
+
+    with mock.patch.object(flows.sh, "run_flow_bundle") as bundle:
+        flows.ensure_port_nf_intercepts(
+            {"dns": {"destinations": destinations},
+             "proxy": {"destinations": destinations}},
+            7, 42, MAC, "0x1", sources=["10.120.0.2"],
+        )
+    intercepts = [line for line in bundle.call_args.args[0] if "tp_dst=" in line]
+    assert len(intercepts) == 1
+    assert "nw_dst=169.254.169.254," in intercepts[0]
+    assert "tp_dst=80," in intercepts[0]
 
 
 def test_a_silent_client_gives_its_proxy_worker_back(tmp_path):

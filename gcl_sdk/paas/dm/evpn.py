@@ -47,6 +47,11 @@ class EvpnPort(models.ModelWithRequiredUUID):
     security_rules = properties.property(ra_types.List(), default=list)
     # Floating IPs, 1:1 NAT to this guest: [{public}].
     fips = properties.property(ra_types.List(), default=list)
+    # A disabled target remains until the host acknowledges withdrawal.
+    enabled = properties.property(ra_types.Boolean(), default=True)
+    retired_fips = properties.property(
+        ra_types.TypedList(ra_types.String()), default=list
+    )
     # The port's group id, stamped on its traffic (skb mark locally,
     # VXLAN-GBP between hosts) so rules can name groups, not addresses.
     # Zero means unidentified.

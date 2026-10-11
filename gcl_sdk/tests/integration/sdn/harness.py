@@ -122,6 +122,7 @@ class Guest:
         self.dev = guest_dev
         self.vlan = vlan
         self.ipv4 = ipv4  # address without the prefix, or None
+        self.lease_path = "/var/lib/dhcp/dhclient-%s.lease" % ns
 
     def exec(self, *args, check=True, timeout=15):
         return subprocess.run(
@@ -208,13 +209,14 @@ class Guest:
         files keep runs and guests isolated. Returns the client's output;
         a lease shows as ``bound to <ip>``.
         """
-        conf = "/tmp/dhclient-%s-%s.conf" % (self.ns, self.name)
+        # Ubuntu's dhclient AppArmor profile permits these files here.
+        conf = "/var/lib/dhcp/dhclient-%s.conf" % self.ns
         with open(conf, "w") as fl:
             fl.write("timeout %d;\n" % wait)
         try:
             # no -d: the client exits right after binding (or at the config
             # timeout on no offer); the backgrounded lease-holder dies with
-            # the netns on cleanup.
+            # harness on cleanup.
             return self.exec(
                 "dhclient",
                 "-1",
@@ -222,9 +224,9 @@ class Guest:
                 "-cf",
                 conf,
                 "-lf",
-                "/tmp/dhclient-%s.lease" % self.ns,
+                self.lease_path,
                 "-pf",
-                "/tmp/dhclient-%s.pid" % self.ns,
+                "/var/lib/dhcp/dhclient-%s.pid" % self.ns,
                 self.dev,
                 check=False,
                 timeout=wait + 8,
@@ -586,7 +588,7 @@ class SdnHarness:
                 return
             time.sleep(0.5)
 
-    def apply_egress(self, guest, vni, cidr, gw_ip):
+    def apply_egress(self, guest, vni, cidr, gw_ip, port_uuid=None):
         """Wire the per-VNI DVR egress for a guest, driver-style.
 
         Runs the real ``_ensure_vni_egress`` (per-VNI namespace, gateway leg,
@@ -609,6 +611,7 @@ class SdnHarness:
                 "mtu": 1450,
             },
             ["65001:%d" % vni],
+            port_uuid=port_uuid,
         )
         self._egress_vnis.add(vni)
         gw_br = "gw%d-br" % vni
@@ -645,8 +648,22 @@ class SdnHarness:
             except Exception:
                 pass
         for g in self._guests:
+            for pid in _run(["ip", "netns", "pids", g.ns], check=False).split():
+                try:
+                    os.kill(int(pid), signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
             _run(["ip", "netns", "del", g.ns], check=False)
             _run(["ip", "link", "del", g.host_veth], check=False)
+            for path in (
+                g.lease_path,
+                g.lease_path + "~",
+                "/var/lib/dhcp/dhclient-%s.pid" % g.ns,
+            ):
+                try:
+                    os.unlink(path)
+                except FileNotFoundError:
+                    pass
         _run(["ovs-vsctl", "--if-exists", "del-br", self.br], check=False)
         _run(["ovs-vsctl", "--if-exists", "del-br", self.evpn_br], check=False)
         for k, v in self._saved.items():

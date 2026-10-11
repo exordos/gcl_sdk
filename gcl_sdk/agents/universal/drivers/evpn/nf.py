@@ -31,6 +31,11 @@ from gcl_sdk.agents.universal.drivers.evpn import state
 
 LOG = logging.getLogger(__name__)
 
+# None outside an agent cycle; only a successful ensure may set this True.
+_RESPONDER_READY: bool | None = None
+_RESPONDER_UNIT_PENDING = False
+_RESPONDER_MISSING: list | None = None
+
 
 def nf_by_kind(nfs: list | None) -> dict:
     """Index a target resource's ``[{kind, config}]`` list by kind."""
@@ -98,19 +103,31 @@ def ensure_nf_responder() -> None:
     """Install and run the responder unit; per-VNI ports and intercepts
     belong to the VNI and the guest's port.
     """
+    global _RESPONDER_READY, _RESPONDER_UNIT_PENDING, _RESPONDER_MISSING
+    if _RESPONDER_READY:
+        return
+    _RESPONDER_MISSING = None
     os.makedirs(base.NF_RECORDS_DIR, exist_ok=True)
-    changed = sh.write_if_changed(base.NF_UNIT_PATH, render_nf_unit())
-    if changed:
+    if sh.write_if_changed(base.NF_UNIT_PATH, render_nf_unit()):
+        _RESPONDER_UNIT_PENDING = True
+    if _RESPONDER_UNIT_PENDING:
         sh.run([base.SYSTEMCTL_BIN, "daemon-reload"])
     sh.run([base.SYSTEMCTL_BIN, "enable", "--now", base.NF_SERVICE])
-    if changed:
+    if _RESPONDER_UNIT_PENDING:
         sh.run([base.SYSTEMCTL_BIN, "restart", base.NF_SERVICE])
+        _RESPONDER_UNIT_PENDING = False
+    if _RESPONDER_READY is not None:
+        _RESPONDER_READY = True
+        _RESPONDER_MISSING = []
 
 
 def missing_nf_responder() -> list[str]:
     """What the responder lacks; each item is repaired by
     `ensure_nf_responder`, so none can loop.
     """
+    global _RESPONDER_MISSING
+    if _RESPONDER_READY is not None and _RESPONDER_MISSING is not None:
+        return list(_RESPONDER_MISSING)
     missing = []
     if not os.path.exists(base.NF_UNIT_PATH):
         missing.append("nf responder unit")
@@ -118,38 +135,45 @@ def missing_nf_responder() -> list[str]:
         with open(base.NF_UNIT_PATH) as unit:
             if unit.read() != render_nf_unit():
                 missing.append("nf responder credentials")
-    if state.service_is_down(base.NF_SERVICE):
+    if state.service_is_down(base.NF_SERVICE) or _RESPONDER_UNIT_PENDING:
         missing.append("nf responder")
-    return missing
+    if _RESPONDER_READY is not None:
+        _RESPONDER_MISSING = missing
+    return list(missing)
 
 
-def served_guests() -> list:
-    """Every guest record on the host, across all VNIs.
+def has_served_guests() -> bool:
+    """Whether any guest record remains on the host, across all VNIs.
 
     `nf-<kind>.json` config files are not guests; counting them would keep
     the responder running after its last guest.
     """
-    served = []
     try:
-        vnis = os.listdir(base.NF_RECORDS_DIR)
+        with os.scandir(base.NF_RECORDS_DIR) as vnis:
+            for vni in vnis:
+                try:
+                    with os.scandir(vni.path) as records:
+                        if any(
+                            record.name.endswith(".json")
+                            and not record.name.startswith(
+                                evpn_records.NF_CONFIG_PREFIX
+                            )
+                            for record in records
+                        ):
+                            return True
+                except OSError:
+                    continue
     except OSError:
-        return served
-    for vni in vnis:
-        try:
-            names = os.listdir(os.path.join(base.NF_RECORDS_DIR, vni))
-        except OSError:
-            continue
-        served += [
-            name
-            for name in names
-            if name.endswith(".json")
-            and not name.startswith(evpn_records.NF_CONFIG_PREFIX)
-        ]
-    return served
+        return False
+    return False
 
 
 def teardown_nf_responder() -> None:
     """Stop the responder; ports and intercepts go with their owners."""
+    global _RESPONDER_READY, _RESPONDER_MISSING
+    _RESPONDER_MISSING = None
+    if _RESPONDER_READY is not None:
+        _RESPONDER_READY = False
     sh.try_run([base.SYSTEMCTL_BIN, "disable", "--now", base.NF_SERVICE])
     if sh.remove(base.NF_UNIT_PATH):
         sh.try_run([base.SYSTEMCTL_BIN, "daemon-reload"])

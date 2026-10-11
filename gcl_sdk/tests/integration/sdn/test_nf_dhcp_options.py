@@ -61,7 +61,7 @@ def _lease(guest):
     is under test is what the responder *offered*, and an option the guest's
     script chooses not to apply is still an option that was served.
     """
-    with open("/tmp/dhclient-%s.lease" % guest.ns) as fl:
+    with open(guest.lease_path) as fl:
         return fl.read()
 
 
@@ -170,7 +170,7 @@ def test_a_guest_holding_the_wrong_address_is_corrected(fabric):
     guest = fabric.add_guest("st", vlan=41, mac=MAC, nfs=("dhcp", "dns"))
 
     # The lease a guest would be holding from before the change.
-    with open("/tmp/dhclient-%s.lease" % guest.ns, "w") as fl:
+    with open(guest.lease_path, "w") as fl:
         fl.write(
             "lease {\n"
             '  interface "%s";\n'
