@@ -250,9 +250,9 @@ class MachineVolume(
     device_type = properties.property(types.String(max_length=64), default="")
     speed = properties.property(
         types.Enum([s.value for s in ic.DiskSpeed]),
-        default=ic.DiskSpeed.WARM.value,
+        default=ic.DiskSpeed.HOT.value,
     )
-    ephemeral = properties.property(types.Boolean(), default=False)
+    ephemeral = properties.property(types.Boolean(), default=True)
     # Name of the storage pool (see AbstractPoolDriverSpec.storage_pool) the
     # volume was scheduled onto. Set by MetaVolume when it's first created;
     # left as-is afterwards (see get_meta_model_fields).
@@ -287,9 +287,9 @@ class AbstractStoragePool(
     pool_type = properties.property(types.String(), required=True)
     speed = properties.property(
         types.Enum([s.value for s in ic.DiskSpeed]),
-        default=ic.DiskSpeed.WARM.value,
+        default=ic.DiskSpeed.HOT.value,
     )
-    ephemeral = properties.property(types.Boolean(), default=False)
+    ephemeral = properties.property(types.Boolean(), default=True)
 
     @property
     def capacity(self) -> int:
@@ -932,9 +932,9 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
     device_type = properties.property(types.String(max_length=64), default="")
     speed = properties.property(
         types.Enum([s.value for s in ic.DiskSpeed]),
-        default=ic.DiskSpeed.WARM.value,
+        default=ic.DiskSpeed.HOT.value,
     )
-    ephemeral = properties.property(types.Boolean(), default=False)
+    ephemeral = properties.property(types.Boolean(), default=True)
     # Name of the storage pool this volume was scheduled onto. None until
     # dump_to_dp() first creates it; fixed from then on (see
     # get_meta_model_fields) so later cycles don't reshuffle existing
@@ -1228,8 +1228,7 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
             and self.storage_pool != dp_volume.storage_pool
         ):
             LOG.warning(
-                "Ignoring an unsupported storage pool change for volume "
-                "%s (%s -> %s)",
+                "Ignoring an unsupported storage pool change for volume %s (%s -> %s)",
                 self.uuid,
                 dp_volume.storage_pool,
                 self.storage_pool,
