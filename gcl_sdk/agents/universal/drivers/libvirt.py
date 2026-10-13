@@ -35,6 +35,7 @@ ImageFormatType = tp.Literal["raw", "qcow2"]
 NetworkType = tp.Literal["bridge", "network"]
 
 RAWSTOR_VHOST_NUM_QUEUES = 4
+RAWSTOR_VHOST_QUEUE_SIZE = 1
 MAX_VOLUME_INDEX = 4096
 CONSOLE_LOG_DIR = "/var/log/libvirt/qemu"
 
@@ -470,7 +471,13 @@ class XMLLibvirtInstance(XMLLibvirtMixin):
         bus: str = "virtio",
     ) -> str:
         disk = ET.Element("disk", type="vhostuser", device="disk")
-        ET.SubElement(disk, "driver", name="qemu", queues=str(RAWSTOR_VHOST_NUM_QUEUES))
+        ET.SubElement(
+            disk,
+            "driver",
+            name="qemu",
+            queues=str(RAWSTOR_VHOST_NUM_QUEUES),
+            queue_size=str(RAWSTOR_VHOST_QUEUE_SIZE),
+        )
         source = ET.SubElement(disk, "source", type="unix", path=socket_path)
         ET.SubElement(source, "reconnect", enabled="yes", timeout="5")
         ET.SubElement(disk, "target", dev=device, bus=bus)
