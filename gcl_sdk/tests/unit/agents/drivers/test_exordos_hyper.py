@@ -43,7 +43,9 @@ def _driver(
     spec = pool_base.ExordosLocalHyperDriverSpec(
         connection_uri="test:///default",
         node=node or sys_uuid.uuid4(),
-        storage_pool=storage_pool,
+        storage_pool=[{"name": storage_pool}]
+        if isinstance(storage_pool, str)
+        else (storage_pool or []),
     )
     pool = pool_base.MachinePool(
         uuid=sys_uuid.uuid4(), name="rawstor-pool", driver_spec=spec

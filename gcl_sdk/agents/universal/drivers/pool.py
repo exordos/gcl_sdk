@@ -993,8 +993,10 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
         self.machine = dp_volume.machine
         self.device_type = dp_volume.device_type
         self.status = dp_volume.status
-        # Pool placement is observed state, not a cached target assignment.
-        self.storage_pool = dp_volume.storage_pool
+        # Local placement is observable. A shared backend cannot expose its
+        # logical pool UUID, so retain that policy metadata when absent.
+        if dp_volume.storage_pool is not None or not self.storage_location:
+            self.storage_pool = dp_volume.storage_pool
 
     def _actualize_attachment(self, pool: MetaPool, dp_volume: MachineVolume) -> None:
         """Actualize the attachment of the volume."""
@@ -1287,12 +1289,15 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
 
         # A resize must charge the actual pool. Never infer an existing
         # disk's placement from its requested policy or available capacity.
-        if dp_volume.storage_pool is None:
+        if dp_volume.storage_pool is None and not self.storage_location:
             LOG.error("Cannot determine the storage pool of volume %s", self.uuid)
             self._from_dp_volume(dp_volume)
             self.status = VolumeStatus.ERROR.value
             return
-        if self.storage_pool not in (None, dp_volume.storage_pool):
+        if dp_volume.storage_pool is not None and self.storage_pool not in (
+            None,
+            dp_volume.storage_pool,
+        ):
             LOG.error(
                 "Storage pool migration is unsupported for volume %s (%s -> %s)",
                 self.uuid,
@@ -1302,7 +1307,8 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
             self._from_dp_volume(dp_volume)
             self.status = VolumeStatus.ERROR.value
             return
-        self.storage_pool = dp_volume.storage_pool
+        if dp_volume.storage_pool is not None:
+            self.storage_pool = dp_volume.storage_pool
 
         # A special case for root volumes. If the condition is true, it
         # means the machine failed to be created on previous iteration.

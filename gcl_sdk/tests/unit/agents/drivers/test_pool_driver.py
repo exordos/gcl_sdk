@@ -822,3 +822,23 @@ class TestStorageLocationPropagation:
 
         assert driver.detached.storage_location == "ost://10.0.0.5:7777"
         assert driver.deleted.storage_location == "ost://10.0.0.5:7777"
+
+
+def test_shared_volume_preserves_unobservable_logical_pool_on_restore():
+    uid = sys_uuid.uuid4()
+    volume = pool_driver.MetaVolume(
+        uuid=uid,
+        pool=sys_uuid.uuid4(),
+        project_id=sys_uuid.uuid4(),
+        storage_pool="logical-pool",
+        storage_location="mds://core:7776/",
+    )
+    volume._from_dp_volume(
+        pool_driver.MachineVolume(
+            uuid=uid,
+            project_id=volume.project_id,
+            size=10,
+            storage_location=volume.storage_location,
+        )
+    )
+    assert volume.storage_pool == "logical-pool"
