@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import abc
 import enum
-import json
 import logging
 import os
 import random
@@ -32,6 +31,7 @@ from restalchemy.dm import types_dynamic
 from restalchemy.dm import types_network as types_net
 
 from gcl_sdk.agents.universal import constants as c
+from gcl_sdk.agents.universal import utils as ua_utils
 from gcl_sdk.agents.universal.dm import models as ua_models
 from gcl_sdk.agents.universal.drivers import exceptions as ua_driver_exc
 from gcl_sdk.agents.universal.drivers import meta
@@ -461,57 +461,13 @@ class StoragePoolEntry(common_types.SchematicType):
     }
     __mandatory__ = {"name"}
 
-
-class StoragePoolListOrLegacyName(types.TypedList):
-    """The new list-of-named-pools format, or a bare legacy pool name.
-
-    A control plane that predates per-pool tier/ephemeral tagging (an
-    exordos_core that hasn't picked up this gcl_sdk change yet) still
-    sends `storage_pool` as a single pool name string, the way
-    LibvirtPoolDriverSpec.storage_pool always has. Accepting that shape
-    here - left untouched, as a plain string - keeps such a control
-    plane working: LibvirtPoolDriver's `_storage_pool_*` hooks already
-    treat a non-list `storage_pool` as one implicit pool with default
-    (warm, non-ephemeral) attributes.
-    """
-
-    def __init__(self, nested_type):
-        super().__init__(nested_type)
-        self._legacy_type = types.String(max_length=255)
-
     def validate(self, value):
-        if isinstance(value, str):
-            return self._legacy_type.validate(value)
-        return super().validate(value)
-
-    def to_simple_type(self, value):
-        if isinstance(value, str):
-            return value
-        return super().to_simple_type(value)
+        return isinstance(value, dict) and super().validate(value)
 
     def from_simple_type(self, value):
-        if isinstance(value, str):
-            return value
+        if not self.validate(value):
+            raise TypeError("Invalid storage pool entry: %r" % (value,))
         return super().from_simple_type(value)
-
-    def from_unicode(self, value):
-        if not isinstance(value, str):
-            raise TypeError("Value must be str, not %s" % type(value))
-
-        if not value.lstrip().startswith("["):
-            # Not list-shaped - the legacy bare pool name.
-            return value
-
-        # List-shaped: parse and validate it for real rather than
-        # silently falling back to treating it as a pool name - a
-        # malformed list (e.g. an entry missing "name") must fail
-        # loudly, not get treated as a nonexistent pool later on.
-        # from_simple_type() alone doesn't check mandatory fields, so
-        # validate explicitly.
-        parsed = self.from_simple_type(json.loads(value))
-        if not self.validate(parsed):
-            raise TypeError("Invalid storage_pool value: %r" % (value,))
-        return parsed
 
 
 class ExordosLocalHyperDriverSpec(LibvirtPoolDriverSpec):
@@ -522,10 +478,8 @@ class ExordosLocalHyperDriverSpec(LibvirtPoolDriverSpec):
     # Overrides LibvirtPoolDriverSpec.storage_pool (a single pool name)
     # with a list of named pools, each independently tagged with
     # tier/ephemeral so the scheduler can place a disk on the right one.
-    # A bare pool name string is still accepted for backward compatibility
-    # - see StoragePoolListOrLegacyName.
     storage_pool = properties.property(
-        StoragePoolListOrLegacyName(StoragePoolEntry()),
+        types.TypedList(StoragePoolEntry()),
         default=list,
     )
 
@@ -970,11 +924,8 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
         self.machine = dp_volume.machine
         self.device_type = dp_volume.device_type
         self.status = dp_volume.status
-        # Backfill for a volume that predates storage_pool tracking (no
-        # pinned pool yet, e.g. loaded from an older meta file) - trust
-        # the data plane's own record of where it actually lives.
-        if self.storage_pool is None and dp_volume.storage_pool is not None:
-            self.storage_pool = dp_volume.storage_pool
+        # Pool placement is observed state, not a cached target assignment.
+        self.storage_pool = dp_volume.storage_pool
 
     def _actualize_attachment(self, pool: MetaPool, dp_volume: MachineVolume) -> None:
         """Actualize the attachment of the volume."""
@@ -1226,24 +1177,24 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
         machine = dp_volume.machine
         unknown_action = True
 
-        # Migrating a volume between storage pools isn't implemented at
-        # the driver level - ignore an incoming storage_pool change
-        # (e.g. a stale/incorrect scheduling decision) and keep acting
-        # on the pool the volume actually lives on, rather than letting
-        # the resize/capacity logic below silently charge a different
-        # pool than the one really holding the data.
-        if (
-            dp_volume.storage_pool is not None
-            and self.storage_pool is not None
-            and self.storage_pool != dp_volume.storage_pool
-        ):
-            LOG.warning(
-                "Ignoring an unsupported storage pool change for volume %s (%s -> %s)",
+        # A resize must charge the actual pool. Never infer an existing
+        # disk's placement from its requested policy or available capacity.
+        if dp_volume.storage_pool is None:
+            LOG.error("Cannot determine the storage pool of volume %s", self.uuid)
+            self._from_dp_volume(dp_volume)
+            self.status = VolumeStatus.ERROR.value
+            return
+        if self.storage_pool not in (None, dp_volume.storage_pool):
+            LOG.error(
+                "Storage pool migration is unsupported for volume %s (%s -> %s)",
                 self.uuid,
                 dp_volume.storage_pool,
                 self.storage_pool,
             )
-            self.storage_pool = dp_volume.storage_pool
+            self._from_dp_volume(dp_volume)
+            self.status = VolumeStatus.ERROR.value
+            return
+        self.storage_pool = dp_volume.storage_pool
 
         # A special case for root volumes. If the condition is true, it
         # means the machine failed to be created on previous iteration.
@@ -1631,6 +1582,28 @@ class MetaMachine(meta.MetaCoordinatorDataPlaneModel):
 
 
 class PoolAgentDriver(meta.MetaCoordinatorAgentDriver):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Upgrade persisted local pool metadata before typed deserialization.
+        changed = False
+        for resource in self._storage["pool"]["resources"].values():
+            spec = resource.get("driver_spec", {})
+            if spec.get("kind") != "exordos_local_hyper":
+                continue
+            name = spec.get("storage_pool")
+            if not isinstance(name, str):
+                continue
+            entries = (
+                [{"name": name, "tier": "WARM", "ephemeral": True}] if name else []
+            )
+            spec["storage_pool"] = entries
+            fields = resource.get("target_fields")
+            if isinstance(fields, dict) and isinstance(fields.get("driver_spec"), dict):
+                fields["driver_spec"]["storage_pool"] = ua_utils.value_shape(entries)
+            changed = True
+        if changed:
+            self._storage.persist()
+
     # Order matters
     __model_map__ = {
         "pool": MetaPool,

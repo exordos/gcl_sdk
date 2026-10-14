@@ -14,6 +14,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import json
 from unittest import mock
 import uuid as sys_uuid
 
@@ -181,6 +182,7 @@ class TestVolumeResizeCapacity:
             uuid=volume_uuid,
             name=str(volume_uuid),
             size=dp_size,
+            storage_pool="storage",
             project_id=pool_driver.SYSTEM_PROJECT_ID,
             # What a real driver reports for a volume that exists: both
             # LibvirtPoolDriver.create_volume and its `get_volume` stamp
@@ -350,12 +352,7 @@ class TestSelectStoragePool:
         assert selected is cold_ephemeral
 
 
-class TestExordosLocalHyperDriverSpecStoragePoolCompat:
-    """`storage_pool` also accepts a bare pool name string, so a gcl_sdk
-    upgrade doesn't require exordos_core to move to the named-pool list
-    format at the same time.
-    """
-
+class TestExordosLocalHyperDriverSpecStoragePools:
     def _spec(self, storage_pool):
         return pool_driver.ExordosLocalHyperDriverSpec(
             connection_uri="qemu:///system",
@@ -363,61 +360,37 @@ class TestExordosLocalHyperDriverSpecStoragePoolCompat:
             storage_pool=storage_pool,
         )
 
-    def test_legacy_string_round_trips_unchanged(self):
-        spec = self._spec("default-pool")
-
-        assert spec.storage_pool == "default-pool"
-        assert spec.dump_to_simple_view()["storage_pool"] == "default-pool"
-
-        restored = pool_driver.ExordosLocalHyperDriverSpec.restore_from_simple_view(
-            **spec.dump_to_simple_view()
-        )
-        assert restored.storage_pool == "default-pool"
-
-    def test_new_list_format_round_trips(self):
-        entries = [
-            {"name": "hot-pool", "tier": ic.DiskTier.HOT.value, "ephemeral": True}
-        ]
+    def test_list_round_trips(self):
+        entries = [{"name": "local", "tier": "WARM", "ephemeral": True}]
         spec = self._spec(entries)
-
-        assert spec.storage_pool == entries
-        assert spec.dump_to_simple_view()["storage_pool"] == entries
-
         restored = pool_driver.ExordosLocalHyperDriverSpec.restore_from_simple_view(
             **spec.dump_to_simple_view()
         )
         assert restored.storage_pool == entries
 
-    def test_invalid_shapes_are_rejected(self):
-        with pytest.raises(Exception):
-            self._spec(123)
-        with pytest.raises(Exception):
-            self._spec([{"tier": ic.DiskTier.HOT.value}])  # missing mandatory "name"
-
-    def _storage_pool_type(self):
-        return (
-            self._spec("default-pool")
-            .properties.properties["storage_pool"]
-            .get_property_type()
-        )
-
-    def test_from_unicode_rejects_a_malformed_list_instead_of_treating_it_as_a_name(
-        self,
-    ):
-        # Regression: a list-shaped value that fails validation used to
-        # be silently downgraded to "it must be a bare legacy pool
-        # name", so a malformed new-format config passed validation and
-        # was only discovered later as a mysteriously "nonexistent pool".
-        field_type = self._storage_pool_type()
-
-        # Missing the mandatory "name" key.
-        with pytest.raises(Exception):
-            field_type.from_unicode('[{"tier": "HOT"}]')
-
-    def test_from_unicode_still_accepts_a_bare_legacy_name(self):
-        field_type = self._storage_pool_type()
-
-        assert field_type.from_unicode("default-pool") == "default-pool"
+    @pytest.mark.parametrize(
+        "value",
+        [
+            123,
+            "local",
+            [123],
+            [None],
+            ["local"],
+            [{}],
+            [{"name": "local", "unknown": True}],
+            [{"name": "local", "tier": "invalid"}],
+        ],
+    )
+    def test_invalid_shapes_raise_type_error(self, value):
+        with pytest.raises(TypeError):
+            self._spec(value)
+        with pytest.raises(TypeError):
+            pool_driver.ExordosLocalHyperDriverSpec.restore_from_simple_view(
+                kind="exordos_local_hyper",
+                connection_uri="qemu:///system",
+                node=str(sys_uuid.uuid4()),
+                storage_pool=value,
+            )
 
 
 class _FailingCreatePoolDriver(pool_driver.DummyPoolDriver):
@@ -469,7 +442,7 @@ class TestDumpToDpStoragePoolPinning:
 
 
 class TestStoragePoolConsistency:
-    def test_update_on_dp_ignores_a_conflicting_storage_pool_change(self):
+    def test_update_on_dp_rejects_a_conflicting_storage_pool_change(self):
         # The scheduler/meta state says "pool-b", but the volume
         # actually lives on "pool-a" - migrating between pools isn't
         # supported, so the data plane's own record must win.
@@ -509,6 +482,8 @@ class TestStoragePoolConsistency:
             meta_volume.update_on_dp(meta_pool)
 
         assert meta_volume.storage_pool == "pool-a"
+        assert meta_volume.status == pool_driver.VolumeStatus.ERROR.value
+        assert driver.resized_to is None
 
     def test_from_dp_volume_backfills_a_missing_storage_pool(self):
         # A volume that predates storage_pool tracking (e.g. loaded from
@@ -553,3 +528,78 @@ def test_selector_rejects_ambiguous_assigned_names_even_if_one_pool_is_full(name
         )
         is None
     )
+
+
+@pytest.mark.parametrize("cached", [None, "wrong"])
+def test_restore_reads_the_actual_storage_pool(cached):
+    uid = sys_uuid.uuid4()
+    volume = pool_driver.MetaVolume(
+        uuid=uid,
+        pool=sys_uuid.uuid4(),
+        size=10,
+        project_id=sys_uuid.uuid4(),
+        storage_pool=cached,
+    )
+    actual = pool_driver.MachineVolume(
+        uuid=uid, size=10, project_id=sys_uuid.uuid4(), storage_pool="actual"
+    )
+    volume.restore_from_dp(mock.Mock(dp_volume_map={uid: actual}))
+    assert volume.storage_pool == "actual"
+
+
+def test_resize_without_pin_charges_only_the_actual_pool():
+    uid = sys_uuid.uuid4()
+    actual_pool = _make_storage_pool("actual", "COLD", True, 100, 10)
+    other_pool = _make_storage_pool("other", "WARM", True, 1000)
+    actual = pool_driver.MachineVolume(
+        uuid=uid, size=10, project_id=sys_uuid.uuid4(), storage_pool="actual"
+    )
+    volume = pool_driver.MetaVolume(
+        uuid=uid, pool=sys_uuid.uuid4(), size=12, project_id=sys_uuid.uuid4()
+    )
+    driver = mock.Mock()
+    driver.get_volume.return_value = actual
+    pool = mock.Mock(
+        storage_pools=[actual_pool, other_pool], dp_volume_map={uid: actual}
+    )
+    pool.load_driver.return_value = driver
+    volume.update_on_dp(pool)
+    assert actual_pool.capacity_provisioned == 12
+    assert other_pool.capacity_provisioned == 0
+    assert volume.storage_pool == "actual"
+
+
+def test_resize_with_unknown_actual_pool_does_not_touch_driver():
+    uid = sys_uuid.uuid4()
+    actual = pool_driver.MachineVolume(uuid=uid, size=10, project_id=sys_uuid.uuid4())
+    volume = pool_driver.MetaVolume(
+        uuid=uid, pool=sys_uuid.uuid4(), size=12, project_id=sys_uuid.uuid4()
+    )
+    driver = mock.Mock()
+    pool = mock.Mock(dp_volume_map={uid: actual})
+    pool.load_driver.return_value = driver
+    volume.update_on_dp(pool)
+    driver.resize_volume.assert_not_called()
+    assert actual.size == 10
+    assert volume.status == "ERROR"
+
+
+def test_agent_upgrades_persisted_local_pool_metadata(tmp_path):
+    path = tmp_path / "meta.json"
+    pool_uuid = str(sys_uuid.uuid4())
+    value = {
+        "driver_spec": {"kind": "exordos_local_hyper", "storage_pool": "default"},
+        "target_fields": {"driver_spec": {"storage_pool": None}},
+    }
+    path.write_text(json.dumps({"pool": {"resources": {pool_uuid: value}}}))
+    driver = pool_driver.PoolAgentDriver(meta_file=str(path))
+    expected = [{"name": "default", "tier": "WARM", "ephemeral": True}]
+    assert (
+        driver._storage["pool"]["resources"][pool_uuid]["driver_spec"]["storage_pool"]
+        == expected
+    )
+    persisted = json.loads(path.read_text())["pool"]["resources"][pool_uuid]
+    assert persisted["driver_spec"]["storage_pool"] == expected
+    assert persisted["target_fields"]["driver_spec"]["storage_pool"] == [
+        {"name": None, "tier": None, "ephemeral": None}
+    ]

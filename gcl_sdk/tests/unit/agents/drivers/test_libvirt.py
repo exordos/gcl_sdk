@@ -37,7 +37,9 @@ def _local_driver() -> libvirt_driver.LibvirtPoolDriver:
     # libvirt's built-in "test" driver simulates a hypervisor in-memory -
     # no real virtualization or daemon needed, so real libvirt calls
     # (lookupByUUIDString, etc.) can be exercised end-to-end.
-    spec = pool_base.LibvirtPoolDriverSpec(connection_uri="test:///default")
+    spec = pool_base.LibvirtPoolDriverSpec(
+        connection_uri="test:///default", storage_pool="default-pool"
+    )
     pool = pool_base.MachinePool(
         uuid=sys_uuid.uuid4(), name="test-pool", driver_spec=spec
     )
@@ -56,26 +58,11 @@ def _multi_pool_driver(storage_pool) -> libvirt_driver.LibvirtPoolDriver:
     return libvirt_driver.LibvirtPoolDriver(pool)
 
 
-class TestStoragePoolBackwardCompat:
-    """ExordosLocalHyperDriverSpec.storage_pool also accepts a bare pool
-    name string (the format an exordos_core that predates per-pool
-    tier/ephemeral tagging still sends), not only the new named-pool
-    list - see StoragePoolListOrLegacyName.
-    """
-
-    def test_legacy_string_is_treated_as_the_sole_pool(self):
-        driver = _multi_pool_driver("default-pool")
-
+class TestStoragePoolConfiguration:
+    def test_plain_libvirt_spec_keeps_a_single_named_pool(self):
+        driver = _local_driver()
         assert driver._storage_pool_names() == ["default-pool"]
-        assert driver._storage_pool_attributes("default-pool") == (
-            ic.DiskTier.WARM.value,
-            True,
-        )
-
-        volume = pool_base.MachineVolume(
-            uuid=sys_uuid.uuid4(), name="vol", size=1, project_id=sys_uuid.uuid4()
-        )
-        assert driver._storage_pool_name_for(volume) == "default-pool"
+        assert driver._storage_pool_attributes("default-pool") == ("WARM", True)
 
     def test_new_list_format_keeps_per_pool_attributes(self):
         driver = _multi_pool_driver(
@@ -95,7 +82,7 @@ class TestStoragePoolBackwardCompat:
             True,
         )
         # Attributes omitted from an entry fall back to the same defaults
-        # as the legacy string format.
+        # as a single libvirt pool.
         assert driver._storage_pool_attributes("cold-pool") == (
             ic.DiskTier.WARM.value,
             True,
@@ -320,3 +307,66 @@ def test_domain_console_logs_to_file():
     assert console.get("type") == "pty"
     assert log.get("file") == log_path
     assert log.get("append") == "on"
+
+
+def test_recreate_preserves_global_disk_order_across_pools():
+    driver = _multi_pool_driver([{"name": "default-pool"}, {"name": "second-pool"}])
+    _define_second_pool(driver)
+    machine = pool_base.Machine(
+        uuid=sys_uuid.uuid4(),
+        project_id=sys_uuid.uuid4(),
+        name="multi-pool-order",
+        cores=1,
+        ram=512,
+    )
+    root_uuid, data_uuid = sys_uuid.uuid4(), sys_uuid.uuid4()
+    root = driver.create_volume(
+        pool_base.MachineVolume(
+            uuid=root_uuid,
+            name=str(root_uuid),
+            project_id=machine.project_id,
+            size=1,
+            storage_pool="second-pool",
+            index=0,
+        )
+    )
+    data = driver.create_volume(
+        pool_base.MachineVolume(
+            uuid=data_uuid,
+            name=str(data_uuid),
+            project_id=machine.project_id,
+            size=1,
+            storage_pool="default-pool",
+            index=1,
+        )
+    )
+    port = pool_base.Port(
+        uuid=sys_uuid.uuid4(),
+        project_id=machine.project_id,
+        mac="52:54:00:11:22:44",
+        source="default",
+        status="ACTIVE",
+    )
+    driver.create_machine(machine, [root, data], [port])
+
+    def disk_paths():
+        xml = ET.fromstring(
+            driver._client.lookupByUUIDString(str(machine.uuid)).XMLDesc()
+        )
+        return [
+            (disk.find("target").get("dev"), disk.find("source").get("file"))
+            for disk in xml.findall("./devices/disk")
+            if disk.get("device") == "disk"
+        ]
+
+    try:
+        before = disk_paths()
+        listed = list(driver.list_volumes(machine))
+        assert [(volume.uuid, volume.index) for volume in listed] == [
+            (root.uuid, 0),
+            (data.uuid, 1),
+        ]
+        driver.recreate_machine(machine, ports=[port])
+        assert disk_paths() == before
+    finally:
+        driver.delete_machine(machine, delete_volumes=True)

@@ -733,6 +733,9 @@ class LibvirtPoolDriver(pool_base.AbstractPoolDriver):
                 if disk.get("device") != "disk":
                     continue
 
+                # Count all disks in domain order, even those on another pool.
+                disk_index = idx
+                idx += 1
                 source = disk.find("source")
                 if source is None:
                     LOG.warning("Unable to detect source for %s", ET.tostring(disk))
@@ -748,8 +751,7 @@ class LibvirtPoolDriver(pool_base.AbstractPoolDriver):
                     LOG.warning("Unable to detect volume for path: %s", path)
                     continue
 
-                result[volume] = (domain, idx)
-                idx += 1
+                result[volume] = (domain, disk_index)
 
         return result
 
