@@ -75,9 +75,9 @@ def test_default_policies_have_stable_identity_and_distinct_replication():
     cluster = uuid.uuid4()
     policies = capacity.default_policies(cluster)
     assert policies == capacity.default_policies(cluster)
-    assert {(p["ephemeral"], p["mirrors"]) for p in policies.values()} == {
-        (True, 1),
-        (False, 2),
+    assert {(p["tier"], p["ephemeral"], p["mirrors"]) for p in policies.values()} == {
+        ("COLD", True, 1),
+        ("COLD", False, 2),
     }
 
 

@@ -59,7 +59,7 @@ passes these to `rawstor.Target.create()` directly. This requires bindings from
 [run 37329790134](https://github.com/rawstor/librawstor/actions/runs/37329790134),
 version `99.0.0+0.fe3340e`, or a compatible newer build. Rawstor disks do not
 consume the hypervisor's local qcow2 budget. Implicit qcow2 pool attributes and
-new disk requests default to HOT ephemeral; explicit pool attributes override them.
+new disk requests default to WARM ephemeral; explicit pool attributes override them.
 
 Set `RAWSTOR_TEST_MDS` and `RAWSTOR_TEST_OST` to daemon paths to run the native
 integration in `test_rawstor_cluster.py`. It checks two MDS instances, two OSTs
