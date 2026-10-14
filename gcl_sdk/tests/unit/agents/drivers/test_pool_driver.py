@@ -235,11 +235,11 @@ class TestVolumeResizeCapacity:
         assert storage_pool.capacity_provisioned == 10
 
 
-def _make_storage_pool(name, speed, ephemeral, capacity_usable, capacity_provisioned=0):
+def _make_storage_pool(name, tier, ephemeral, capacity_usable, capacity_provisioned=0):
     return pool_driver.ThinStoragePool(
         name=name,
         pool_type="dir",
-        speed=speed,
+        tier=tier,
         ephemeral=ephemeral,
         capacity_usable=capacity_usable,
         capacity_provisioned=capacity_provisioned,
@@ -250,12 +250,12 @@ class TestSelectStoragePool:
     """The soft match picks the most free-space pool, not the first one."""
 
     def test_exact_match_picks_the_one_with_most_free_space(self):
-        small_hot = _make_storage_pool("small-hot", ic.DiskSpeed.HOT.value, False, 20)
-        big_hot = _make_storage_pool("big-hot", ic.DiskSpeed.HOT.value, False, 100)
-        warm = _make_storage_pool("warm", ic.DiskSpeed.WARM.value, False, 1000)
+        small_hot = _make_storage_pool("small-hot", ic.DiskTier.HOT.value, False, 20)
+        big_hot = _make_storage_pool("big-hot", ic.DiskTier.HOT.value, False, 100)
+        warm = _make_storage_pool("warm", ic.DiskTier.WARM.value, False, 1000)
 
         selected = pool_driver.select_storage_pool(
-            [small_hot, big_hot, warm], ic.DiskSpeed.HOT.value, False, 10
+            [small_hot, big_hot, warm], ic.DiskTier.HOT.value, False, 10
         )
 
         assert selected is big_hot
@@ -263,34 +263,34 @@ class TestSelectStoragePool:
     def test_fallback_match_picks_the_one_with_most_free_space(self):
         # Neither pool is hot, so this falls back to the largest pool with
         # room, rather than whichever happens to be listed first.
-        small = _make_storage_pool("small", ic.DiskSpeed.WARM.value, False, 20)
-        big = _make_storage_pool("big", ic.DiskSpeed.COLD.value, False, 100)
+        small = _make_storage_pool("small", ic.DiskTier.WARM.value, False, 20)
+        big = _make_storage_pool("big", ic.DiskTier.COLD.value, False, 100)
 
         selected = pool_driver.select_storage_pool(
-            [small, big], ic.DiskSpeed.HOT.value, False, 10
+            [small, big], ic.DiskTier.HOT.value, False, 10
         )
 
         assert selected is big
 
     def test_fuller_exact_match_loses_to_emptier_one(self):
         full_hot = _make_storage_pool(
-            "full-hot", ic.DiskSpeed.HOT.value, False, 100, capacity_provisioned=95
+            "full-hot", ic.DiskTier.HOT.value, False, 100, capacity_provisioned=95
         )
-        empty_hot = _make_storage_pool("empty-hot", ic.DiskSpeed.HOT.value, False, 100)
+        empty_hot = _make_storage_pool("empty-hot", ic.DiskTier.HOT.value, False, 100)
 
         selected = pool_driver.select_storage_pool(
-            [full_hot, empty_hot], ic.DiskSpeed.HOT.value, False, 10
+            [full_hot, empty_hot], ic.DiskTier.HOT.value, False, 10
         )
 
         assert selected is empty_hot
 
     def test_assigned_name_ignores_weight(self):
-        assigned = _make_storage_pool("assigned", ic.DiskSpeed.WARM.value, False, 20)
-        bigger = _make_storage_pool("bigger", ic.DiskSpeed.WARM.value, False, 100)
+        assigned = _make_storage_pool("assigned", ic.DiskTier.WARM.value, False, 20)
+        bigger = _make_storage_pool("bigger", ic.DiskTier.WARM.value, False, 100)
 
         selected = pool_driver.select_storage_pool(
             [assigned, bigger],
-            ic.DiskSpeed.WARM.value,
+            ic.DiskTier.WARM.value,
             False,
             10,
             assigned_name="assigned",
@@ -299,50 +299,50 @@ class TestSelectStoragePool:
         assert selected is assigned
 
     def test_no_pool_fits(self):
-        small = _make_storage_pool("small", ic.DiskSpeed.WARM.value, False, 5)
+        small = _make_storage_pool("small", ic.DiskTier.WARM.value, False, 5)
 
         selected = pool_driver.select_storage_pool(
-            [small], ic.DiskSpeed.WARM.value, False, 10
+            [small], ic.DiskTier.WARM.value, False, 10
         )
 
         assert selected is None
 
     def test_never_places_a_durable_request_on_an_ephemeral_pool(self):
-        # Unlike speed, ephemeral is a data-safety property: falling
+        # Unlike tier, ephemeral is a data-safety property: falling
         # back across it could silently wipe a "durable" disk on host
         # reboot, so the durable request must go unscheduled (retried
         # later) rather than land on the ephemeral pool with room.
         ephemeral_pool = _make_storage_pool(
-            "ephemeral", ic.DiskSpeed.HOT.value, True, 100
+            "ephemeral", ic.DiskTier.HOT.value, True, 100
         )
 
         selected = pool_driver.select_storage_pool(
-            [ephemeral_pool], ic.DiskSpeed.HOT.value, False, 10
+            [ephemeral_pool], ic.DiskTier.HOT.value, False, 10
         )
 
         assert selected is None
 
     def test_never_places_an_ephemeral_request_on_a_durable_pool(self):
-        durable_pool = _make_storage_pool("durable", ic.DiskSpeed.HOT.value, False, 100)
+        durable_pool = _make_storage_pool("durable", ic.DiskTier.HOT.value, False, 100)
 
         selected = pool_driver.select_storage_pool(
-            [durable_pool], ic.DiskSpeed.HOT.value, True, 10
+            [durable_pool], ic.DiskTier.HOT.value, True, 10
         )
 
         assert selected is None
 
-    def test_speed_still_falls_back_within_the_matching_ephemeral_tier(self):
+    def test_tier_still_falls_back_within_the_matching_ephemeral_tier(self):
         cold_ephemeral = _make_storage_pool(
-            "cold-ephemeral", ic.DiskSpeed.COLD.value, True, 100
+            "cold-ephemeral", ic.DiskTier.COLD.value, True, 100
         )
-        hot_durable = _make_storage_pool("hot-durable", ic.DiskSpeed.HOT.value, False, 100)
+        hot_durable = _make_storage_pool("hot-durable", ic.DiskTier.HOT.value, False, 100)
 
         # Requesting hot+ephemeral: no exact match, but the ephemeral
-        # pool (wrong speed) is still preferred over the durable one
-        # (wrong ephemeral) - the speed fallback only crosses within the
+        # pool (wrong tier) is still preferred over the durable one
+        # (wrong ephemeral) - the tier fallback only crosses within the
         # same durability tier.
         selected = pool_driver.select_storage_pool(
-            [cold_ephemeral, hot_durable], ic.DiskSpeed.HOT.value, True, 10
+            [cold_ephemeral, hot_durable], ic.DiskTier.HOT.value, True, 10
         )
 
         assert selected is cold_ephemeral
@@ -374,7 +374,7 @@ class TestExordosLocalHyperDriverSpecStoragePoolCompat:
 
     def test_new_list_format_round_trips(self):
         entries = [
-            {"name": "hot-pool", "speed": ic.DiskSpeed.HOT.value, "ephemeral": True}
+            {"name": "hot-pool", "tier": ic.DiskTier.HOT.value, "ephemeral": True}
         ]
         spec = self._spec(entries)
 
@@ -391,7 +391,7 @@ class TestExordosLocalHyperDriverSpecStoragePoolCompat:
             self._spec(123)
         with pytest.raises(Exception):
             self._spec(
-                [{"speed": ic.DiskSpeed.HOT.value}]
+                [{"tier": ic.DiskTier.HOT.value}]
             )  # missing mandatory "name"
 
     def _storage_pool_type(self):
@@ -412,7 +412,7 @@ class TestExordosLocalHyperDriverSpecStoragePoolCompat:
 
         # Missing the mandatory "name" key.
         with pytest.raises(Exception):
-            field_type.from_unicode('[{"speed": "HOT"}]')
+            field_type.from_unicode('[{"tier": "HOT"}]')
 
     def test_from_unicode_still_accepts_a_bare_legacy_name(self):
         field_type = self._storage_pool_type()

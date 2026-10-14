@@ -59,7 +59,7 @@ def _multi_pool_driver(storage_pool) -> libvirt_driver.LibvirtPoolDriver:
 class TestStoragePoolBackwardCompat:
     """ExordosLocalHyperDriverSpec.storage_pool also accepts a bare pool
     name string (the format an exordos_core that predates per-pool
-    speed/ephemeral tagging still sends), not only the new named-pool
+    tier/ephemeral tagging still sends), not only the new named-pool
     list - see StoragePoolListOrLegacyName.
     """
 
@@ -68,7 +68,7 @@ class TestStoragePoolBackwardCompat:
 
         assert driver._storage_pool_names() == ["default-pool"]
         assert driver._storage_pool_attributes("default-pool") == (
-            ic.DiskSpeed.HOT.value,
+            ic.DiskTier.WARM.value,
             True,
         )
 
@@ -82,7 +82,7 @@ class TestStoragePoolBackwardCompat:
             [
                 {
                     "name": "hot-pool",
-                    "speed": ic.DiskSpeed.HOT.value,
+                    "tier": ic.DiskTier.HOT.value,
                     "ephemeral": True,
                 },
                 {"name": "cold-pool"},
@@ -91,13 +91,13 @@ class TestStoragePoolBackwardCompat:
 
         assert driver._storage_pool_names() == ["hot-pool", "cold-pool"]
         assert driver._storage_pool_attributes("hot-pool") == (
-            ic.DiskSpeed.HOT.value,
+            ic.DiskTier.HOT.value,
             True,
         )
         # Attributes omitted from an entry fall back to the same defaults
         # as the legacy string format.
         assert driver._storage_pool_attributes("cold-pool") == (
-            ic.DiskSpeed.HOT.value,
+            ic.DiskTier.WARM.value,
             True,
         )
 

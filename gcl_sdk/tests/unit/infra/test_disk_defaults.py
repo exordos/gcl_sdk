@@ -33,12 +33,12 @@ from gcl_sdk.infra.dm import models
         ),
     ],
 )
-def test_generated_volumes_default_to_hot_ephemeral(spec):
+def test_generated_volumes_default_to_warm_ephemeral(spec):
     node = SimpleNamespace(
         uuid=uuid.uuid4(), node_type=c.NodeType.VM, project_id=uuid.uuid4()
     )
     for volume in spec.volumes(node):
-        assert volume.speed == c.DiskSpeed.HOT.value
+        assert volume.tier == c.DiskTier.WARM.value
         assert volume.ephemeral is True
 
 
@@ -47,8 +47,8 @@ def test_explicit_persistent_warm_policy_is_preserved():
         uuid=uuid.uuid4(), node_type=c.NodeType.VM, project_id=uuid.uuid4()
     )
     spec = models.SetRootDiskSpec(
-        image="image", size=10, speed=c.DiskSpeed.WARM.value, ephemeral=False
+        image="image", size=10, tier=c.DiskTier.WARM.value, ephemeral=False
     )
     volume = spec.node_spec(None, node.uuid).volumes(node)[0]
-    assert volume.speed == c.DiskSpeed.WARM.value
+    assert volume.tier == c.DiskTier.WARM.value
     assert volume.ephemeral is False

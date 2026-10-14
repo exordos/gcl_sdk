@@ -871,7 +871,7 @@ class LibvirtPoolDriver(pool_base.AbstractPoolDriver):
 
         `storage_pool` is either a single pool name (str, e.g. plain
         "libvirt" driver specs) or a list of named, individually
-        speed/ephemeral-tagged pools (e.g. ExordosLocalHyperDriverSpec).
+        tier/ephemeral-tagged pools (e.g. ExordosLocalHyperDriverSpec).
         """
         storage_pool = self._spec.storage_pool
         if isinstance(storage_pool, list):
@@ -899,16 +899,16 @@ class LibvirtPoolDriver(pool_base.AbstractPoolDriver):
         )
 
     def _storage_pool_attributes(self, name: str) -> tp.Tuple[str, bool]:
-        """(speed, ephemeral) attributes for a named storage pool."""
+        """(tier, ephemeral) attributes for a named storage pool."""
         storage_pool = self._spec.storage_pool
         if not isinstance(storage_pool, list):
             # A single implicit pool has fixed default attributes.
-            return ic.DiskSpeed.HOT.value, True
+            return ic.DiskTier.WARM.value, True
 
         for entry in storage_pool:
             if entry["name"] == name:
                 return (
-                    entry.get("speed", ic.DiskSpeed.HOT.value),
+                    entry.get("tier", ic.DiskTier.WARM.value),
                     entry.get("ephemeral", True),
                 )
 
@@ -948,7 +948,7 @@ class LibvirtPoolDriver(pool_base.AbstractPoolDriver):
 
             storage_pool_element = ET.fromstring(vir_storage_pool.XMLDesc())
             pool_type = storage_pool_element.get("type")
-            speed, ephemeral = self._storage_pool_attributes(name)
+            tier, ephemeral = self._storage_pool_attributes(name)
 
             thin_pool = pool_base.ThinStoragePool(
                 uuid=sys_uuid.UUID(vir_storage_pool.UUIDString()),
@@ -956,7 +956,7 @@ class LibvirtPoolDriver(pool_base.AbstractPoolDriver):
                 capacity_usable=vir_storage_pool.info()[1] >> 30,  # GB
                 available_actual=vir_storage_pool.info()[3] >> 30,  # GB
                 pool_type=pool_type,
-                speed=speed,
+                tier=tier,
                 ephemeral=ephemeral,
             )
             self._fill_thin_storage_pool(thin_pool, pool_volumes)

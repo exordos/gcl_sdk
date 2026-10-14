@@ -55,7 +55,7 @@ class VolumeStatus(str, enum.Enum):
     ERROR = "ERROR"
 
 
-class DiskSpeed(str, enum.Enum):
+class DiskTier(str, enum.Enum):
     COLD = "COLD"
     WARM = "WARM"
     HOT = "HOT"

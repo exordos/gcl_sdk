@@ -248,9 +248,9 @@ class MachineVolume(
         types.AllowNone(types.String(max_length=127)), default=None
     )
     device_type = properties.property(types.String(max_length=64), default="")
-    speed = properties.property(
-        types.Enum([s.value for s in ic.DiskSpeed]),
-        default=ic.DiskSpeed.HOT.value,
+    tier = properties.property(
+        types.Enum([s.value for s in ic.DiskTier]),
+        default=ic.DiskTier.WARM.value,
     )
     ephemeral = properties.property(types.Boolean(), default=True)
     # Name of the storage pool (see AbstractPoolDriverSpec.storage_pool) the
@@ -285,9 +285,9 @@ class AbstractStoragePool(
         default=lambda: sys_uuid.uuid4(),
     )
     pool_type = properties.property(types.String(), required=True)
-    speed = properties.property(
-        types.Enum([s.value for s in ic.DiskSpeed]),
-        default=ic.DiskSpeed.HOT.value,
+    tier = properties.property(
+        types.Enum([s.value for s in ic.DiskTier]),
+        default=ic.DiskTier.WARM.value,
     )
     ephemeral = properties.property(types.Boolean(), default=True)
 
@@ -350,7 +350,7 @@ class ThinStoragePool(
 
 def select_storage_pool(
     storage_pools: tp.Iterable[AbstractStoragePool],
-    speed: str,
+    tier: str,
     ephemeral: bool,
     size: int,
     assigned_name: tp.Optional[str] = None,
@@ -361,13 +361,13 @@ def select_storage_pool(
     given), only that pool is considered - this is then just a capacity
     check, e.g. for a resize.
 
-    Otherwise `ephemeral` is a hard constraint - unlike `speed`, it's not
+    Otherwise `ephemeral` is a hard constraint - unlike `tier`, it's not
     a performance preference but a data-safety property, so a durable
     (non-ephemeral) request is never placed on an ephemeral pool (or
     vice versa) as a fallback. Within the pools matching it, this is a
-    soft (best-effort) match on `speed`, the same way
+    soft (best-effort) match on `tier`, the same way
     DummySoftAntiAffinityFilter treats affinity: prefer a pool with an
-    exact speed match, but if the requested tier doesn't exist or is
+    exact tier match, but if the requested tier doesn't exist or is
     full, fall back to any same-durability pool with room rather than
     failing outright. Within either candidate set, the pool with the
     most free capacity ("weight") wins, rather than the first found -
@@ -387,7 +387,7 @@ def select_storage_pool(
     candidates = [sp for sp in storage_pools if sp.ephemeral == ephemeral]
 
     exact_matches = [
-        sp for sp in candidates if sp.speed == speed and sp.has_capacity(size)
+        sp for sp in candidates if sp.tier == tier and sp.has_capacity(size)
     ]
     if exact_matches:
         return max(exact_matches, key=lambda sp: sp.available)
@@ -446,7 +446,7 @@ class LibvirtPoolDriverSpec(AbstractPoolDriverSpec):
 class StoragePoolEntry(common_types.SchematicType):
     __scheme__ = {
         "name": types.String(max_length=255),
-        "speed": types.Enum([s.value for s in ic.DiskSpeed]),
+        "tier": types.Enum([s.value for s in ic.DiskTier]),
         "ephemeral": types.Boolean(),
     }
     __mandatory__ = {"name"}
@@ -455,7 +455,7 @@ class StoragePoolEntry(common_types.SchematicType):
 class StoragePoolListOrLegacyName(types.TypedList):
     """The new list-of-named-pools format, or a bare legacy pool name.
 
-    A control plane that predates per-pool speed/ephemeral tagging (an
+    A control plane that predates per-pool tier/ephemeral tagging (an
     exordos_core that hasn't picked up this gcl_sdk change yet) still
     sends `storage_pool` as a single pool name string, the way
     LibvirtPoolDriverSpec.storage_pool always has. Accepting that shape
@@ -511,7 +511,7 @@ class ExordosLocalHyperDriverSpec(LibvirtPoolDriverSpec):
 
     # Overrides LibvirtPoolDriverSpec.storage_pool (a single pool name)
     # with a list of named pools, each independently tagged with
-    # speed/ephemeral so the scheduler can place a disk on the right one.
+    # tier/ephemeral so the scheduler can place a disk on the right one.
     # A bare pool name string is still accepted for backward compatibility
     # - see StoragePoolListOrLegacyName.
     storage_pool = properties.property(
@@ -930,9 +930,9 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
         types.AllowNone(types.String(max_length=127)), default=None
     )
     device_type = properties.property(types.String(max_length=64), default="")
-    speed = properties.property(
-        types.Enum([s.value for s in ic.DiskSpeed]),
-        default=ic.DiskSpeed.HOT.value,
+    tier = properties.property(
+        types.Enum([s.value for s in ic.DiskTier]),
+        default=ic.DiskTier.WARM.value,
     )
     ephemeral = properties.property(types.Boolean(), default=True)
     # Name of the storage pool this volume was scheduled onto. None until
@@ -1068,7 +1068,7 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
             boot=self.boot,
             label=self.label,
             device_type=self.device_type,
-            speed=self.speed,
+            tier=self.tier,
             ephemeral=self.ephemeral,
             storage_pool=self.storage_pool,
             index=self.index,
@@ -1087,7 +1087,7 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
         See `select_storage_pool` for the actual matching rules.
         """
         return select_storage_pool(
-            pool.storage_pools, self.speed, self.ephemeral, size, self.storage_pool
+            pool.storage_pools, self.tier, self.ephemeral, size, self.storage_pool
         )
 
     def _has_storage_capacity(
@@ -1120,7 +1120,7 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
             "boot",
             "label",
             "device_type",
-            "speed",
+            "tier",
             "ephemeral",
             "storage_pool",
             "project_id",
@@ -1135,7 +1135,7 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
             # Reuse it
             dp_volume = pool.dp_volume_map[self.uuid]
         else:
-            # Find a storage pool matching this volume's speed/ephemeral
+            # Find a storage pool matching this volume's tier/ephemeral
             # request with enough room for it.
             storage_pool = self._find_storage_pool(pool, self.size)
             if storage_pool is None:
@@ -1150,7 +1150,7 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
                 boot=self.boot,
                 label=self.label,
                 device_type=self.device_type,
-                speed=self.speed,
+                tier=self.tier,
                 ephemeral=self.ephemeral,
                 storage_pool=storage_pool.name,
                 index=self.index,

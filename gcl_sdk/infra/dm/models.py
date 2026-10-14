@@ -48,9 +48,9 @@ class Volume(
         ra_types.AllowNone(ra_types.String(max_length=127)), default=None
     )
     device_type = properties.property(ra_types.String(max_length=64), default="")
-    speed = properties.property(
-        ra_types.Enum([s.value for s in pc.DiskSpeed]),
-        default=pc.DiskSpeed.HOT.value,
+    tier = properties.property(
+        ra_types.Enum([s.value for s in pc.DiskTier]),
+        default=pc.DiskTier.WARM.value,
     )
     ephemeral = properties.property(ra_types.Boolean(), default=True)
     index = properties.property(
@@ -80,7 +80,7 @@ class Volume(
                 "boot",
                 "index",
                 "device_type",
-                "speed",
+                "tier",
                 "ephemeral",
                 "project_id",
             )
@@ -123,9 +123,9 @@ class RootDiskSpec(AbstractDiskSpec):
         required=True,
         default=pc.DEF_ROOT_DISK_SIZE,
     )
-    speed = properties.property(
-        ra_types.Enum([s.value for s in pc.DiskSpeed]),
-        default=pc.DiskSpeed.HOT.value,
+    tier = properties.property(
+        ra_types.Enum([s.value for s in pc.DiskTier]),
+        default=pc.DiskTier.WARM.value,
     )
     ephemeral = properties.property(ra_types.Boolean(), default=True)
 
@@ -150,7 +150,7 @@ class RootDiskSpec(AbstractDiskSpec):
             size=self.size,
             image=self.image,
             index=0,
-            speed=self.speed,
+            tier=self.tier,
             ephemeral=self.ephemeral,
             project_id=project_id or node.project_id,
             status=pc.VolumeStatus.NEW.value,
@@ -165,7 +165,7 @@ class DisksSpecDiskType(common_types.SchematicType):
         "image": ra_types.String(max_length=256),
         "mount_point": ra_types.String(max_length=512),
         "fs": ra_types.String(max_length=256),
-        "speed": ra_types.Enum([s.value for s in pc.DiskSpeed]),
+        "tier": ra_types.Enum([s.value for s in pc.DiskTier]),
         "ephemeral": ra_types.Boolean(),
     }
     __mandatory__ = {"size"}
@@ -272,7 +272,7 @@ class DisksSpec(AbstractDiskSpec):
             size=int(root["size"]),
             image=root["image"],
             index=0,
-            speed=root.get("speed", pc.DiskSpeed.HOT.value),
+            tier=root.get("tier", pc.DiskTier.WARM.value),
             ephemeral=root.get("ephemeral", True),
             project_id=project_id or node.project_id,
             status=pc.VolumeStatus.NEW.value,
@@ -294,7 +294,7 @@ class DisksSpec(AbstractDiskSpec):
                 size=int(disk["size"]),
                 image=disk.get("image"),
                 index=idx + 1,
-                speed=disk.get("speed", pc.DiskSpeed.HOT.value),
+                tier=disk.get("tier", pc.DiskTier.WARM.value),
                 ephemeral=disk.get("ephemeral", True),
                 project_id=project_id or node.project_id,
                 status=pc.VolumeStatus.NEW.value,
@@ -417,7 +417,7 @@ class SetRootDiskSpec(RootDiskSpec, AbstractSetDiskSpec):
         return RootDiskSpec(
             image=self.image,
             size=self.size,
-            speed=self.speed,
+            tier=self.tier,
             ephemeral=self.ephemeral,
         )
 
