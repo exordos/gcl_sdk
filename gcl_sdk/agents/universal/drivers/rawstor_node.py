@@ -20,8 +20,10 @@ import subprocess
 
 from restalchemy.dm import properties
 from restalchemy.dm import types
+from restalchemy.dm import types_dynamic
 
 from gcl_sdk.agents.universal.drivers import meta
+from gcl_sdk.agents.universal.drivers import rawstor_specs
 from gcl_sdk.agents.universal.drivers import storage_capacity
 from gcl_sdk.agents.universal.drivers.rawstor_cluster import _write_if_changed
 
@@ -32,10 +34,12 @@ OST_UNIT_DIR = Path("/etc/systemd/system")
 class MetaStorageNode(meta.MetaCoordinatorDataPlaneModel):
     cluster = properties.property(types.UUID(), required=True)
     agent = properties.property(types.AllowNone(types.UUID()), default=None)
-    failure_domain_path = properties.property(types.String(max_length=255), default="")
-    endpoint = properties.property(types.String(max_length=2048), required=True)
-    location = properties.property(types.String(max_length=2048), required=True)
-    bind_address = properties.property(types.String(max_length=255), required=True)
+    driver_spec = properties.property(
+        types_dynamic.KindModelSelectorType(
+            types_dynamic.KindModelType(rawstor_specs.RawstorNodeDriverSpec),
+        ),
+        required=True,
+    )
     status = properties.property(
         types.Enum(["NEW", "IN_PROGRESS", "ACTIVE", "ERROR"]), default="NEW"
     )
@@ -46,9 +50,9 @@ class MetaStorageNode(meta.MetaCoordinatorDataPlaneModel):
 
     def restore_from_dp(self, **kwargs):
         path = storage_capacity.validate_ost_configuration(
-            self.location, self.bind_address
+            self.driver_spec.location, self.driver_spec.bind_address
         )
-        is_zfs = self.location.startswith("zfs://")
+        is_zfs = self.driver_spec.location.startswith("zfs://")
         if is_zfs:
             # Provision pools/datasets explicitly; reconciliation never formats disks.
             subprocess.run(["zfs", "list", "-H", "-o", "name", path], check=True)
@@ -63,7 +67,8 @@ class MetaStorageNode(meta.MetaCoordinatorDataPlaneModel):
         config = OST_CONFIG_DIR / f"{self.uuid}.conf"
         previous_config = config.read_text() if config.exists() else None
         config_changed = _write_if_changed(
-            config, f"BIND_ADDR={self.bind_address}\nLOCATION={self.location}\n"
+            config,
+            f"BIND_ADDR={self.driver_spec.bind_address}\nLOCATION={self.driver_spec.location}\n",
         )
         unit_changed = _write_if_changed(
             OST_UNIT_DIR / f"{self.unit_name}.d" / "exordos.conf", dropin
@@ -76,7 +81,7 @@ class MetaStorageNode(meta.MetaCoordinatorDataPlaneModel):
         import rawstor
 
         # A running unit alone is insufficient: verify the advertised OST responds.
-        rawstor.Location(self.endpoint).info()
+        rawstor.Location(self.driver_spec.endpoint).info()
         self.status = "ACTIVE"
 
     def dump_to_dp(self, **kwargs):
