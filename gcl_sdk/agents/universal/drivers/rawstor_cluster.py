@@ -35,6 +35,7 @@ from restalchemy.dm import types
 from restalchemy.dm import types_dynamic
 
 from gcl_sdk.agents.universal import constants as c
+from gcl_sdk.agents.universal.drivers import exceptions as driver_exc
 from gcl_sdk.agents.universal.drivers import meta
 from gcl_sdk.agents.universal.drivers import pool as pool_base
 from gcl_sdk.agents.universal.drivers import storage_capacity
@@ -169,6 +170,44 @@ class RawstorStorageClusterDriver(AbstractStorageClusterDriver):
             except subprocess.CalledProcessError:
                 _write_if_changed(topology, previous_topology)
                 raise
+
+    def restore(self) -> None:
+        if not self._spec.endpoint.startswith("mds://"):
+            return
+        config = MDS_CONFIG_DIR / f"{self._cluster.uuid}.conf"
+        topology = MDS_CONFIG_DIR / f"{self._cluster.uuid}.topology"
+        if not config.exists() or not topology.exists():
+            raise driver_exc.ResourceNotFound(resource=self._cluster)
+        values = dict(line.split("=", 1) for line in config.read_text().splitlines())
+        actual_bind = values["BIND_ADDR"]
+        endpoint = urlparse(self._spec.endpoint)
+        addresses = socket.getaddrinfo(
+            endpoint.hostname, endpoint.port, type=socket.SOCK_STREAM
+        )
+        expected_binds = {
+            f"[{entry[4][0]}]:{endpoint.port}"
+            if ":" in entry[4][0]
+            else f"{entry[4][0]}:{endpoint.port}"
+            for entry in addresses
+        }
+        if actual_bind not in expected_binds:
+            self._spec.endpoint = f"mds://{actual_bind}/"
+        nodes = {}
+        for line in topology.read_text().splitlines():
+            if not line.strip():
+                continue
+            node_uuid, endpoint, weight, path = line.split()
+            nodes[node_uuid] = {
+                "endpoint": endpoint,
+                "weight": int(weight),
+                "failure_domain_path": path,
+            }
+        self._spec.nodes = nodes
+        active = subprocess.run(
+            ["systemctl", "is-active", "--quiet", self.unit_name], check=False
+        )
+        if active.returncode:
+            raise driver_exc.ResourceNotFound(resource=self._cluster)
 
     def delete(self) -> None:
         if not self._spec.endpoint.startswith("mds://"):
@@ -317,13 +356,27 @@ class MetaStorageCluster(meta.MetaCoordinatorDataPlaneModel):
         """Refresh this cluster's reported capacity."""
         driver = self.load_driver()
         if isinstance(driver, RawstorStorageClusterDriver):
+            driver.restore()
+        try:
+            self.storage_pools = list(driver.get_capacity())
+        except OSError:
+            LOG.exception("Unable to query storage cluster %s", self.uuid)
+            self.storage_pools = []
+            self.capacity_info = {}
+            self.status = pool_base.MachinePoolStatus.DISABLED.value
+        else:
+            self.status = pool_base.MachinePoolStatus.ACTIVE.value
+
+    def dump_to_dp(self, **kwargs) -> None:
+        """Configure the core MDS and report its capacity."""
+        driver = self.load_driver()
+        if isinstance(driver, RawstorStorageClusterDriver):
             driver.configure()
         self.storage_pools = list(driver.get_capacity())
         self.status = pool_base.MachinePoolStatus.ACTIVE.value
 
-    def dump_to_dp(self, **kwargs) -> None:
-        """Configure the core MDS and report its capacity."""
-        self.restore_from_dp(**kwargs)
+    def update_on_dp(self, **kwargs) -> None:
+        self.dump_to_dp(**kwargs)
 
     def delete_from_dp(self, **kwargs) -> None:
         driver = self.load_driver()

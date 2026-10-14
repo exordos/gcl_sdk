@@ -70,7 +70,9 @@ def node(tmp_path, monkeypatch):
 def test_reconcile_starts_ost_and_checks_advertised_endpoint(node):
     model, module = node
     with (
-        patch.object(module.subprocess, "run") as run,
+        patch.object(
+            module.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)
+        ) as run,
         patch("rawstor.Location") as location,
     ):
         model.dump_to_dp()
@@ -93,7 +95,12 @@ def test_reconcile_starts_ost_and_checks_advertised_endpoint(node):
 
 def test_unreachable_ost_is_not_reported_ready_and_can_retry(node):
     model, module = node
-    with patch.object(module.subprocess, "run"), patch("rawstor.Location") as location:
+    with (
+        patch.object(
+            module.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)
+        ),
+        patch("rawstor.Location") as location,
+    ):
         location.return_value.info.side_effect = OSError("not ready")
         with pytest.raises(OSError):
             model.dump_to_dp()
@@ -123,7 +130,12 @@ def test_update_restarts_changed_bind_and_delete_preserves_backing_data(node):
     backing.mkdir()
     data = backing / "data"
     data.write_text("keep")
-    with patch.object(module.subprocess, "run") as run, patch("rawstor.Location"):
+    with (
+        patch.object(
+            module.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)
+        ) as run,
+        patch("rawstor.Location"),
+    ):
         model.dump_to_dp()
         run.reset_mock()
         model.driver_spec.bind_address = "0.0.0.0:7778"
@@ -236,7 +248,9 @@ def test_agent_delete_does_not_contact_or_restart_an_unreachable_ost(node, tmp_p
     driver.start()
     resource = model.to_ua_resource("storage_node")
     with (
-        patch.object(module.subprocess, "run") as run,
+        patch.object(
+            module.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)
+        ) as run,
         patch("rawstor.Location") as location,
     ):
         location.return_value.info.side_effect = OSError("unreachable")
@@ -282,7 +296,12 @@ def test_ost_configuration_rejects_invalid_zfs(location):
 def test_zfs_reconcile_uses_existing_dataset_and_privileged_template_dropin(node):
     model, module = node
     model.driver_spec.location = "zfs://tank/ost1"
-    with patch.object(module.subprocess, "run") as run, patch("rawstor.Location"):
+    with (
+        patch.object(
+            module.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)
+        ) as run,
+        patch("rawstor.Location"),
+    ):
         model.dump_to_dp()
         commands = [call.args[0] for call in run.call_args_list]
         assert ["zfs", "list", "-H", "-o", "name", "tank/ost1"] in commands
@@ -299,3 +318,38 @@ def test_zfs_reconcile_uses_existing_dataset_and_privileged_template_dropin(node
         assert not any(
             command.args[0][0] in ("zfs", "zpool") for command in run.call_args_list
         )
+
+
+def test_restore_reads_changed_config_without_applying_it(node):
+    model, module = node
+    with patch.object(module.subprocess, "run"), patch("rawstor.Location"):
+        model.dump_to_dp()
+    config = module.OST_CONFIG_DIR / f"{model.uuid}.conf"
+    content = "BIND_ADDR=127.0.0.1:8888\nLOCATION=file:///other/ost\n"
+    config.write_text(content)
+    with (
+        patch.object(
+            module.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)
+        ) as run,
+        patch("rawstor.Location"),
+        patch.object(module, "_write_if_changed") as write,
+    ):
+        model.restore_from_dp()
+    write.assert_not_called()
+    assert model.driver_spec.bind_address == "127.0.0.1:8888"
+    assert model.driver_spec.location == "file:///other/ost"
+    assert config.read_text() == content
+    assert [call.args[0] for call in run.call_args_list] == [
+        ["systemctl", "is-active", "--quiet", model.unit_name]
+    ]
+
+
+def test_restore_missing_ost_does_not_create_it(node):
+    from gcl_sdk.agents.universal.drivers import exceptions
+
+    model, module = node
+    with patch.object(module.subprocess, "run") as run:
+        with pytest.raises(exceptions.ResourceNotFound):
+            model.restore_from_dp()
+    run.assert_not_called()
+    assert not module.OST_CONFIG_DIR.exists()

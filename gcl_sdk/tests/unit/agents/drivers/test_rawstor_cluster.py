@@ -553,3 +553,104 @@ def test_cached_driver_reports_capacity_on_current_model(tmp_path, monkeypatch):
     )
     assert current.load_driver() is driver
     assert driver._cluster is current
+
+
+def test_cluster_update_applies_configuration(tmp_path, monkeypatch):
+    cluster = _cluster(tmp_path)
+    driver = rawstor_cluster.RawstorStorageClusterDriver(cluster)
+    monkeypatch.setattr(cluster, "load_driver", lambda: driver)
+    with (
+        patch.object(driver, "configure") as configure,
+        patch.object(driver, "get_capacity", return_value=[]),
+    ):
+        cluster.update_on_dp()
+    configure.assert_called_once()
+
+
+def test_cluster_restore_only_reads_actual_topology(tmp_path, monkeypatch):
+    import subprocess
+
+    cluster = _cluster(tmp_path)
+    cluster.driver_spec.endpoint = "mds://127.0.0.1:7776/"
+    monkeypatch.setattr(rawstor_cluster, "MDS_CONFIG_DIR", tmp_path)
+    (tmp_path / f"{cluster.uuid}.conf").write_text("BIND_ADDR=127.0.0.1:7776\n")
+    node_uuid = str(sys_uuid.uuid4())
+    content = f"{node_uuid} ost://127.0.0.1:7777 100 dc/server\n"
+    topology = tmp_path / f"{cluster.uuid}.topology"
+    topology.write_text(content)
+    driver = rawstor_cluster.RawstorStorageClusterDriver(cluster)
+    monkeypatch.setattr(cluster, "load_driver", lambda: driver)
+    with (
+        patch.object(driver, "configure") as configure,
+        patch.object(driver, "get_capacity", return_value=[]),
+        patch.object(
+            rawstor_cluster.subprocess,
+            "run",
+            return_value=subprocess.CompletedProcess([], 0),
+        ) as run,
+        patch.object(rawstor_cluster, "_write_if_changed") as write,
+    ):
+        cluster.restore_from_dp()
+    configure.assert_not_called()
+    write.assert_not_called()
+    assert cluster.driver_spec.nodes[node_uuid]["failure_domain_path"] == "dc/server"
+    assert topology.read_text() == content
+    assert [call.args[0] for call in run.call_args_list] == [
+        ["systemctl", "is-active", "--quiet", driver.unit_name]
+    ]
+
+
+def test_coordinator_observes_drift_and_applies_target_on_update(tmp_path, monkeypatch):
+    cluster = _cluster(tmp_path)
+    cluster.driver_spec.endpoint = "mds://127.0.0.1:7776/"
+    cluster.driver_spec.ost_endpoint = ""
+    cluster.driver_spec.managed = True
+    node_uuid = str(sys_uuid.uuid4())
+    cluster.driver_spec.nodes = {
+        node_uuid: {
+            "endpoint": "ost://127.0.0.1:7777",
+            "weight": 100,
+            "failure_domain_path": "dc/server",
+        }
+    }
+    resource = cluster.to_ua_resource("storage_cluster")
+    monkeypatch.setattr(rawstor_cluster, "MDS_CONFIG_DIR", tmp_path / "config")
+    monkeypatch.setattr(
+        rawstor_cluster.RawstorStorageClusterDriver, "get_capacity", lambda self: []
+    )
+    driver = rawstor_cluster.StorageClusterAgentDriver(
+        meta_file=str(tmp_path / "meta.json")
+    )
+    driver.start()
+    with patch.object(
+        rawstor_cluster.subprocess,
+        "run",
+        return_value=subprocess.CompletedProcess([], 0),
+    ) as run:
+        created = driver.create(resource)
+        topology = rawstor_cluster.MDS_CONFIG_DIR / f"{cluster.uuid}.topology"
+        original = topology.read_text()
+        topology.write_text(original.replace(" 100 ", " 200 "))
+        run.reset_mock()
+        [actual] = driver.list("storage_cluster")
+        assert actual.value["driver_spec"]["nodes"][node_uuid]["weight"] == 200
+        assert actual.hash != created.hash
+        assert all(call.args[0][1] == "is-active" for call in run.call_args_list)
+        updated = driver.update(resource)
+        assert updated.value["driver_spec"]["nodes"][node_uuid]["weight"] == 100
+        assert topology.read_text() == original
+        assert ["systemctl", "reload", f"rawstor-mds@{cluster.uuid}.service"] in [
+            call.args[0] for call in run.call_args_list
+        ]
+        run.reset_mock()
+        with patch.object(
+            rawstor_cluster.RawstorStorageClusterDriver,
+            "get_capacity",
+            side_effect=OSError("MDS unavailable"),
+        ):
+            [unavailable] = driver.list("storage_cluster")
+            assert unavailable.value["status"] == "DISABLED"
+            assert unavailable.value["capacity_info"] == {}
+            driver.delete(updated)
+        assert not topology.exists()
+        assert not any("enable" in call.args[0] for call in run.call_args_list)
