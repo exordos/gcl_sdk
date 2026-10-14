@@ -20,6 +20,7 @@ from uuid import uuid4
 
 import pytest
 
+from gcl_sdk.agents.universal.drivers import rawstor_specs
 from gcl_sdk.agents.universal.drivers import storage_capacity
 
 
@@ -56,9 +57,12 @@ def node(tmp_path, monkeypatch):
     model = rawstor_node.MetaStorageNode(
         uuid=uuid4(),
         cluster=uuid4(),
-        endpoint="ost://host:7777",
-        location=f"file://{tmp_path}/data",
-        bind_address="0.0.0.0:7777",
+        driver_spec=rawstor_specs.RawstorNodeDriverSpec(
+            endpoint="ost://host:7777",
+            location=f"file://{tmp_path}/data",
+            bind_address="0.0.0.0:7777",
+            failure_domain_path="",
+        ),
     )
     return model, rawstor_node
 
@@ -71,10 +75,12 @@ def test_reconcile_starts_ost_and_checks_advertised_endpoint(node):
     ):
         model.dump_to_dp()
         assert model.status == "ACTIVE"
-        location.assert_called_once_with(model.endpoint)
+        location.assert_called_once_with(model.driver_spec.endpoint)
         location.return_value.info.assert_called_once()
         config = (module.OST_CONFIG_DIR / f"{model.uuid}.conf").read_text()
-        assert f"BIND_ADDR=0.0.0.0:7777\nLOCATION={model.location}\n" == config
+        assert (
+            f"BIND_ADDR=0.0.0.0:7777\nLOCATION={model.driver_spec.location}\n" == config
+        )
         assert not (module.OST_UNIT_DIR / model.unit_name).exists()
         commands = [c.args[0] for c in run.call_args_list]
         assert ["systemctl", "enable", "--now", model.unit_name] in commands
@@ -113,15 +119,15 @@ def test_update_restarts_changed_bind_and_delete_preserves_backing_data(node):
     model, module = node
     from pathlib import Path
 
-    backing = Path(model.location.removeprefix("file://"))
+    backing = Path(model.driver_spec.location.removeprefix("file://"))
     backing.mkdir()
     data = backing / "data"
     data.write_text("keep")
     with patch.object(module.subprocess, "run") as run, patch("rawstor.Location"):
         model.dump_to_dp()
         run.reset_mock()
-        model.bind_address = "0.0.0.0:7778"
-        model.endpoint = "ost://host:7778"
+        model.driver_spec.bind_address = "0.0.0.0:7778"
+        model.driver_spec.endpoint = "ost://host:7778"
         model.update_on_dp()
         assert ["systemctl", "restart", model.unit_name] in [
             c.args[0] for c in run.call_args_list
@@ -146,12 +152,12 @@ def test_native_ost_launch_from_reconciled_config(node, monkeypatch, tmp_path, b
         location = os.environ.get("RAWSTOR_TEST_ZFS_LOCATION")
         if not location:
             pytest.skip("Set RAWSTOR_TEST_ZFS_LOCATION to an isolated test dataset")
-        model.location = location
+        model.driver_spec.location = location
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
-    model.bind_address = f"127.0.0.1:{port}"
-    model.endpoint = f"ost://127.0.0.1:{port}"
+    model.driver_spec.bind_address = f"127.0.0.1:{port}"
+    model.driver_spec.endpoint = f"ost://127.0.0.1:{port}"
     processes = []
     log = (tmp_path / "ost.log").open("w")
     real_run = subprocess.run
@@ -203,9 +209,11 @@ def test_native_ost_launch_from_reconciled_config(node, monkeypatch, tmp_path, b
         assert model.status == "ACTIVE"
         import rawstor
 
-        assert rawstor.Location(model.endpoint).info().total > 0
+        assert rawstor.Location(model.driver_spec.endpoint).info().total > 0
         if backing == "zfs":
-            target = rawstor.Location(model.endpoint).create(size=8 << 20, width=1)
+            target = rawstor.Location(model.driver_spec.endpoint).create(
+                size=8 << 20, width=1
+            )
             assert target.spec().size == 8 << 20
             snapshot = target.create_version()
             assert snapshot.spec().size == 8 << 20
@@ -273,7 +281,7 @@ def test_ost_configuration_rejects_invalid_zfs(location):
 
 def test_zfs_reconcile_uses_existing_dataset_and_privileged_template_dropin(node):
     model, module = node
-    model.location = "zfs://tank/ost1"
+    model.driver_spec.location = "zfs://tank/ost1"
     with patch.object(module.subprocess, "run") as run, patch("rawstor.Location"):
         model.dump_to_dp()
         commands = [call.args[0] for call in run.call_args_list]
