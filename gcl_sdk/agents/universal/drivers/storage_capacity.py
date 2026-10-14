@@ -118,7 +118,7 @@ def default_policies(cluster_uuid):
     return {
         str(uuid.uuid5(cluster_uuid, name)): {
             "name": name,
-            "speed": "WARM",
+            "tier": "COLD",
             "ephemeral": ephemeral,
             "mirrors": mirrors,
             "failure_domain": "server",
@@ -139,7 +139,7 @@ def validate_policy(policy):
     chunk = policy["chunk_size"]
     if chunk <= 0 or chunk & (chunk - 1) or chunk > 1 << 30:
         raise ValueError("Chunk size must be a power of two no larger than 1 GiB")
-    if policy["speed"] not in {"COLD", "WARM", "HOT"}:
-        raise ValueError("Unknown disk speed")
+    if policy["tier"] not in {"COLD", "WARM", "HOT"}:
+        raise ValueError("Unknown disk tier")
     if not isinstance(policy["ephemeral"], bool):
         raise ValueError("Ephemeral must be boolean")
