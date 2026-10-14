@@ -22,6 +22,7 @@ from restalchemy.dm import properties
 from restalchemy.dm import types
 from restalchemy.dm import types_dynamic
 
+from gcl_sdk.agents.universal.drivers import exceptions as driver_exc
 from gcl_sdk.agents.universal.drivers import meta
 from gcl_sdk.agents.universal.drivers import rawstor_specs
 from gcl_sdk.agents.universal.drivers import storage_capacity
@@ -48,7 +49,7 @@ class MetaStorageNode(meta.MetaCoordinatorDataPlaneModel):
     def unit_name(self):
         return f"rawstor-ost@{self.uuid}.service"
 
-    def restore_from_dp(self, **kwargs):
+    def _configure(self):
         path = storage_capacity.validate_ost_configuration(
             self.driver_spec.location, self.driver_spec.bind_address
         )
@@ -84,11 +85,32 @@ class MetaStorageNode(meta.MetaCoordinatorDataPlaneModel):
         rawstor.Location(self.driver_spec.endpoint).info()
         self.status = "ACTIVE"
 
+    def restore_from_dp(self, **kwargs):
+        config = OST_CONFIG_DIR / f"{self.uuid}.conf"
+        if not config.exists():
+            raise driver_exc.ResourceNotFound(resource=self)
+        values = dict(line.split("=", 1) for line in config.read_text().splitlines())
+        self.driver_spec.bind_address = values["BIND_ADDR"]
+        self.driver_spec.location = values["LOCATION"]
+        active = subprocess.run(
+            ["systemctl", "is-active", "--quiet", self.unit_name], check=False
+        )
+        if active.returncode:
+            raise driver_exc.ResourceNotFound(resource=self)
+        import rawstor
+
+        try:
+            rawstor.Location(self.driver_spec.endpoint).info()
+        except OSError:
+            self.status = "ERROR"
+        else:
+            self.status = "ACTIVE"
+
     def dump_to_dp(self, **kwargs):
-        self.restore_from_dp(**kwargs)
+        self._configure()
 
     def update_on_dp(self, **kwargs):
-        self.restore_from_dp(**kwargs)
+        self._configure()
 
     def delete_from_dp(self, **kwargs):
         subprocess.run(["systemctl", "disable", "--now", self.unit_name], check=True)
