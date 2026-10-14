@@ -40,13 +40,13 @@ from gcl_sdk.agents.universal.drivers import rawstor_cluster  # noqa: E402
 from gcl_sdk.infra import constants as ic  # noqa: E402
 
 
-def _cluster(tmp_path, speed=ic.DiskSpeed.HOT.value, ephemeral=False):
+def _cluster(tmp_path, tier=ic.DiskTier.HOT.value, ephemeral=False):
     # rawstor's "file://" location is a real, local, daemon-less backend
     # (see pyrawstor/tests) - no server needed to exercise it for real.
     spec = rawstor_cluster.RawstorStorageClusterDriverSpec(
         location=f"file://{tmp_path}",
         endpoint="ost://10.0.0.5:7777",
-        speed=speed,
+        tier=tier,
         ephemeral=ephemeral,
     )
     return rawstor_cluster.MetaStorageCluster(uuid=sys_uuid.uuid4(), driver_spec=spec)
@@ -99,15 +99,15 @@ class TestRawstorStorageClusterDriver:
         assert storage_pool.capacity_usable == 100
         assert storage_pool.available_actual == 80
 
-    def test_speed_and_ephemeral_come_from_the_driver_spec(self, tmp_path, monkeypatch):
-        cluster = _cluster(tmp_path, speed=ic.DiskSpeed.COLD.value, ephemeral=True)
+    def test_tier_and_ephemeral_come_from_the_driver_spec(self, tmp_path, monkeypatch):
+        cluster = _cluster(tmp_path, tier=ic.DiskTier.COLD.value, ephemeral=True)
         _fake_location_info(monkeypatch, used_gb=0, total_gb=100)
 
         [storage_pool] = rawstor_cluster.RawstorStorageClusterDriver(
             cluster
         ).get_capacity()
 
-        assert storage_pool.speed == ic.DiskSpeed.COLD.value
+        assert storage_pool.tier == ic.DiskTier.COLD.value
         assert storage_pool.ephemeral is True
 
     def test_capacity_provisioned_sums_real_objects_at_the_location(self, tmp_path):
@@ -205,7 +205,7 @@ class TestStorageClusterAgentDriver:
                     "kind": "rawstor",
                     "location": f"file://{tmp_path}",
                     "endpoint": "ost://10.0.0.5:7777",
-                    "speed": ic.DiskSpeed.HOT.value,
+                    "tier": ic.DiskTier.HOT.value,
                     "ephemeral": False,
                 },
             },

@@ -539,11 +539,11 @@ class RawstorStorageClusterAgentSpec(RawstorStorageClusterDriverSpec):
     nodes = properties.property(types.Dict(), default=dict)
     pools = properties.property(types.Dict(), default=dict)
     managed = properties.property(types.Boolean(), default=False)
-    speed = properties.property(
-        types.Enum([s.value for s in ic.DiskSpeed]),
-        default=ic.DiskSpeed.HOT.value,
+    tier = properties.property(
+        types.Enum([s.value for s in ic.DiskTier]),
+        default=ic.DiskTier.WARM.value,
     )
-    ephemeral = properties.property(types.Boolean(), default=False)
+    ephemeral = properties.property(types.Boolean(), default=True)
 
 
 class MachinePool(
