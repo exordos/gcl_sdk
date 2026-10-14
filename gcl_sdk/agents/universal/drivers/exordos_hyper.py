@@ -417,7 +417,11 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
         # the core bootstrap VM's).
         if self._storage_pool_names():
             try:
-                return super().get_volume(volume)
+                found = super().get_volume(volume)
+                for observed in super().list_volumes():
+                    if observed.uuid == volume:
+                        return observed
+                return found
             except pool_base.VolumeNotFoundError:
                 pass
 
