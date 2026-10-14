@@ -115,14 +115,14 @@ class TestRawstorStorageClusterDriver:
         # file:// location, to exercise the actual enumeration path.
         cluster = _cluster(tmp_path)
         location = rawstor.Location(f"file://{tmp_path}")
-        location.create(size=10 << 30, width=1)
-        location.create(size=5 << 30, width=1)
+        location.create(size=2 << 30, width=1)
+        location.create(size=1 << 30, width=1)
 
         [storage_pool] = rawstor_cluster.RawstorStorageClusterDriver(
             cluster
         ).get_capacity()
 
-        assert storage_pool.capacity_provisioned == 15
+        assert storage_pool.capacity_provisioned == 3
 
     def test_uuid_is_deterministic_per_cluster(self, tmp_path, monkeypatch):
         cluster = _cluster(tmp_path)
