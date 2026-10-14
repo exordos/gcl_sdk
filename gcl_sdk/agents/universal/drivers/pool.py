@@ -34,6 +34,7 @@ from gcl_sdk.agents.universal import constants as c
 from gcl_sdk.agents.universal.dm import models as ua_models
 from gcl_sdk.agents.universal.drivers import exceptions as ua_driver_exc
 from gcl_sdk.agents.universal.drivers import meta
+from gcl_sdk.agents.universal.drivers import rawstor_specs
 from gcl_sdk.common import exceptions
 from gcl_sdk.common import types as common_types
 from gcl_sdk.common import utils
@@ -339,11 +340,13 @@ class ThinStoragePool(
         types.Float(min_value=0.0), default=1.0
     )
     available_actual = properties.property(types.Integer(min_value=0), default=0)
-    # Rawstor creation policy; ignored by local qcow2 drivers.
-    mirrors = properties.property(types.Integer(min_value=1, max_value=255), default=1)
-    chunk_size = properties.property(types.Integer(min_value=1), default=1 << 30)
-    failure_domain = properties.property(
-        types.Enum(["ost", "server", "rack", "row", "dc"]), default="server"
+    driver_spec = properties.property(
+        types.AllowNone(
+            types_dynamic.KindModelSelectorType(
+                types_dynamic.KindModelType(rawstor_specs.RawstorPoolDriverSpec),
+            )
+        ),
+        default=None,
     )
 
     @property
