@@ -331,7 +331,10 @@ class Node(
         ra_types.Enum([t.value for t in pc.NodeType]),
         default=pc.NodeType.VM.value,
     )
-    default_network = properties.property(ra_types.Dict(), default=dict)
+    __create_only_fields__ = ("default_network",)
+    default_network = properties.property(
+        ra_types.AllowNone(ra_types.Dict()), default=None
+    )
     disk_spec = properties.property(
         types_dynamic.KindModelSelectorType(
             types_dynamic.KindModelType(RootDiskSpec),
@@ -499,15 +502,14 @@ class NodeSet(
         ra_types.Enum([t.value for t in pc.NodeType]),
         default=pc.NodeType.VM.value,
     )
-    default_network = properties.property(ra_types.Dict(), default=dict)
+    default_network = properties.property(
+        ra_types.AllowNone(ra_types.Dict()), default=None
+    )
     # Interfaces the nodes ask for, carried opaque. None (leave placement to
     # the default rule) differs from [] (ask for nothing).
     interfaces = properties.property(
         ra_types.AllowNone(ra_types.TypedList(ra_types.Dict())),
         default=None,
-    )
-    networking = properties.property(
-        ra_types.AllowNone(ra_types.TypedList(ra_types.Dict())), default=None
     )
     disk_spec = properties.property(
         types_dynamic.KindModelSelectorType(
@@ -551,8 +553,8 @@ class NodeSet(
         # Sent only when declared: an installation predating `interfaces`
         # fails to restore an unknown field, and omitting it keeps the hash
         # every installation already agrees on.
-        if self.networking is not None:
-            fields = fields | frozenset(("networking",))
+        if self.default_network is None:
+            fields = fields - frozenset(("default_network",))
         if self.interfaces is None:
             return fields
         return fields | frozenset(("interfaces",))

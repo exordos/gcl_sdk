@@ -46,7 +46,9 @@ def test_a_set_that_declares_no_legs_sends_no_interfaces():
 
 
 def test_a_set_that_declares_legs_sends_them():
-    node_set = _node_set(interfaces=[{"kind": "subnet", "subnet": str(sys_uuid.uuid4())}])
+    node_set = _node_set(
+        interfaces=[{"kind": "subnet", "subnet": str(sys_uuid.uuid4())}]
+    )
     assert "interfaces" in node_set.get_resource_target_fields()
 
     _all_values, target = node_set.get_ua_all_and_target_values()
@@ -60,3 +62,34 @@ def test_asking_for_no_networking_is_not_saying_nothing():
 
     _all_values, target = node_set.get_ua_all_and_target_values()
     assert target["interfaces"] == []
+
+
+def test_default_network_template_preserves_omission_and_empty_object():
+    _, omitted = _node_set().get_ua_all_and_target_values()
+    _, empty = _node_set(default_network={}).get_ua_all_and_target_values()
+    assert "default_network" not in omitted
+    assert empty["default_network"] == {}
+
+
+def test_node_default_network_is_sent_only_for_creation_and_not_hashed():
+    identifier = sys_uuid.uuid4()
+    values = dict(
+        uuid=identifier,
+        project_id=sys_uuid.uuid4(),
+        cores=1,
+        ram=1024,
+        disk_spec=models.RootDiskSpec(image="ubuntu_24.04"),
+    )
+    omitted = models.Node(**values).to_ua_resource()
+    empty = models.Node(**values, default_network={}).to_ua_resource()
+    fip = models.Node(**values, default_network={"floating_ip": True}).to_ua_resource()
+    assert "default_network" not in omitted.value
+    assert empty.value["default_network"] == {}
+    assert fip.value["default_network"] == {"floating_ip": True}
+    assert omitted.hash == empty.hash == fip.hash
+
+
+def test_node_and_nodeset_have_no_networking_field():
+    for model in (models.Node, models.NodeSet):
+        assert "networking" not in model.properties.properties
+    assert "networking" not in _node_set().get_resource_target_fields()
