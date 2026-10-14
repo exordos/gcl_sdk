@@ -192,7 +192,7 @@ class RawstorStorageClusterDriver(AbstractStorageClusterDriver):
                 driver_spec=pool_base.rawstor_specs.RawstorPoolDriverSpec(mirrors=1),
                 capacity_usable=info.total >> 30,
                 available_actual=(info.total - info.used) >> 30,
-                speed=self._spec.speed,
+                tier=self._spec.tier,
                 ephemeral=self._spec.ephemeral,
             )
             for target in location:
@@ -242,7 +242,7 @@ class RawstorStorageClusterDriver(AbstractStorageClusterDriver):
                     uuid=sys_uuid.UUID(pool_uuid),
                     name=policy["name"],
                     pool_type="rawstor",
-                    speed=policy["speed"],
+                    tier=policy["tier"],
                     ephemeral=policy["ephemeral"],
                     driver_spec=pool_base.rawstor_specs.RawstorPoolDriverSpec(
                         mirrors=policy["mirrors"],
