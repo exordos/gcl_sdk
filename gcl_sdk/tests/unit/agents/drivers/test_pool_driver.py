@@ -335,7 +335,9 @@ class TestSelectStoragePool:
         cold_ephemeral = _make_storage_pool(
             "cold-ephemeral", ic.DiskTier.COLD.value, True, 100
         )
-        hot_durable = _make_storage_pool("hot-durable", ic.DiskTier.HOT.value, False, 100)
+        hot_durable = _make_storage_pool(
+            "hot-durable", ic.DiskTier.HOT.value, False, 100
+        )
 
         # Requesting hot+ephemeral: no exact match, but the ephemeral
         # pool (wrong tier) is still preferred over the durable one
@@ -390,9 +392,7 @@ class TestExordosLocalHyperDriverSpecStoragePoolCompat:
         with pytest.raises(Exception):
             self._spec(123)
         with pytest.raises(Exception):
-            self._spec(
-                [{"tier": ic.DiskTier.HOT.value}]
-            )  # missing mandatory "name"
+            self._spec([{"tier": ic.DiskTier.HOT.value}])  # missing mandatory "name"
 
     def _storage_pool_type(self):
         return (
@@ -535,3 +535,21 @@ class TestStoragePoolConsistency:
         meta_volume._from_dp_volume(dp_volume)
 
         assert meta_volume.storage_pool == "pool-a"
+
+
+@pytest.mark.parametrize("name", ["duplicate", ""])
+def test_selector_rejects_ambiguous_assigned_names_even_if_one_pool_is_full(name):
+    first = _make_storage_pool(name, ic.DiskTier.WARM.value, True, 10, 10)
+    second = _make_storage_pool(name, ic.DiskTier.WARM.value, True, 100)
+    assert (
+        pool_driver.select_storage_pool(
+            [first, second], ic.DiskTier.WARM.value, True, 1, assigned_name=name
+        )
+        is None
+    )
+    assert (
+        pool_driver.select_storage_pool(
+            [first, second], ic.DiskTier.WARM.value, True, 1
+        )
+        is None
+    )

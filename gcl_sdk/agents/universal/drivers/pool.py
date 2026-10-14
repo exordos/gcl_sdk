@@ -374,7 +374,13 @@ def select_storage_pool(
     this spreads volumes across pools instead of piling them onto
     whichever pool happens to come first.
     """
+    storage_pools = tuple(storage_pools)
+    names = {}
+    for sp in storage_pools:
+        names[sp.name] = names.get(sp.name, 0) + 1
     if assigned_name is not None:
+        if names.get(assigned_name) != 1:
+            return None
         return next(
             (
                 sp
@@ -384,7 +390,11 @@ def select_storage_pool(
             None,
         )
 
-    candidates = [sp for sp in storage_pools if sp.ephemeral == ephemeral]
+    # Local drivers address pools by name. An ambiguous name cannot safely
+    # identify the data destination, even when only one duplicate has room.
+    candidates = [
+        sp for sp in storage_pools if sp.ephemeral == ephemeral and names[sp.name] == 1
+    ]
 
     exact_matches = [
         sp for sp in candidates if sp.tier == tier and sp.has_capacity(size)
