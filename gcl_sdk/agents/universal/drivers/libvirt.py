@@ -34,7 +34,7 @@ from gcl_sdk.infra import constants as ic
 ImageFormatType = tp.Literal["raw", "qcow2"]
 NetworkType = tp.Literal["bridge", "network"]
 
-RAWSTOR_VHOST_NUM_QUEUES = 1
+RAWSTOR_VHOST_NUM_QUEUES = 4
 RAWSTOR_VHOST_QUEUE_SIZE = 128
 MAX_VOLUME_INDEX = 4096
 CONSOLE_LOG_DIR = "/var/log/libvirt/qemu"
