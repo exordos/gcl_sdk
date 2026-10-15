@@ -748,7 +748,7 @@ class LibvirtPoolDriver(pool_base.AbstractPoolDriver):
 
                 volume = path_map.get(path)
                 if volume is None:
-                    LOG.warning("Unable to detect volume for path: %s", path)
+                    LOG.debug("Unable to detect volume for path: %s", path)
                     continue
 
                 result[volume] = (domain, disk_index)
