@@ -55,6 +55,12 @@ class VolumeStatus(str, enum.Enum):
     ERROR = "ERROR"
 
 
+class DiskTier(str, enum.Enum):
+    COLD = "COLD"
+    WARM = "WARM"
+    HOT = "HOT"
+
+
 class ProfileType(str, enum.Enum):
     GLOBAL = "GLOBAL"
     ELEMENT = "ELEMENT"

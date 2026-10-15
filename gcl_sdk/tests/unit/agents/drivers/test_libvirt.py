@@ -26,19 +26,150 @@ import pytest
 # instead of failing collection when it's not installed.
 pytest.importorskip("libvirt")
 
+import libvirt  # noqa: E402
+
 from gcl_sdk.agents.universal.drivers import libvirt as libvirt_driver  # noqa: E402
 from gcl_sdk.agents.universal.drivers import pool as pool_base  # noqa: E402
+from gcl_sdk.infra import constants as ic  # noqa: E402
 
 
 def _local_driver() -> libvirt_driver.LibvirtPoolDriver:
     # libvirt's built-in "test" driver simulates a hypervisor in-memory -
     # no real virtualization or daemon needed, so real libvirt calls
     # (lookupByUUIDString, etc.) can be exercised end-to-end.
-    spec = pool_base.LibvirtPoolDriverSpec(connection_uri="test:///default")
+    spec = pool_base.LibvirtPoolDriverSpec(
+        connection_uri="test:///default", storage_pool="default-pool"
+    )
     pool = pool_base.MachinePool(
         uuid=sys_uuid.uuid4(), name="test-pool", driver_spec=spec
     )
     return libvirt_driver.LibvirtPoolDriver(pool)
+
+
+def _multi_pool_driver(storage_pool) -> libvirt_driver.LibvirtPoolDriver:
+    spec = pool_base.ExordosLocalHyperDriverSpec(
+        connection_uri="test:///default",
+        node=sys_uuid.uuid4(),
+        storage_pool=storage_pool,
+    )
+    pool = pool_base.MachinePool(
+        uuid=sys_uuid.uuid4(), name="test-pool", driver_spec=spec
+    )
+    return libvirt_driver.LibvirtPoolDriver(pool)
+
+
+class TestStoragePoolConfiguration:
+    def test_plain_libvirt_spec_keeps_a_single_named_pool(self):
+        driver = _local_driver()
+        assert driver._storage_pool_names() == ["default-pool"]
+        assert driver._storage_pool_attributes("default-pool") == ("WARM", True)
+
+    def test_new_list_format_keeps_per_pool_attributes(self):
+        driver = _multi_pool_driver(
+            [
+                {
+                    "name": "hot-pool",
+                    "tier": ic.DiskTier.HOT.value,
+                    "ephemeral": True,
+                },
+                {"name": "cold-pool"},
+            ]
+        )
+
+        assert driver._storage_pool_names() == ["hot-pool", "cold-pool"]
+        assert driver._storage_pool_attributes("hot-pool") == (
+            ic.DiskTier.HOT.value,
+            True,
+        )
+        # Attributes omitted from an entry fall back to the same defaults
+        # as a single libvirt pool.
+        assert driver._storage_pool_attributes("cold-pool") == (
+            ic.DiskTier.WARM.value,
+            True,
+        )
+
+        volume = pool_base.MachineVolume(
+            uuid=sys_uuid.uuid4(),
+            name="vol",
+            size=1,
+            project_id=sys_uuid.uuid4(),
+            storage_pool="hot-pool",
+        )
+        assert driver._storage_pool_name_for(volume) == "hot-pool"
+
+
+def _define_second_pool(driver: libvirt_driver.LibvirtPoolDriver) -> None:
+    # libvirt's "test" driver keeps its state for the life of the process,
+    # not per connection - a pool defined by an earlier test is still
+    # there, so this must be idempotent.
+    try:
+        vir_pool = driver._client.storagePoolLookupByName("second-pool")
+    except libvirt.libvirtError:
+        xml = """
+        <pool type='dir'>
+          <name>second-pool</name>
+          <target>
+            <path>/second-pool</path>
+          </target>
+        </pool>
+        """
+        vir_pool = driver._client.storagePoolDefineXML(xml)
+
+    if not vir_pool.isActive():
+        vir_pool.create()
+
+
+class TestGetVolumeStoragePool:
+    """Regression: a volume discovered in a non-default pool (via
+    `list_volumes`/`get_volume`) used to come back with `storage_pool`
+    left as None, so a later attach/detach/resize on it would raise
+    ValueError in a multi-pool configuration (`_storage_pool_name_for`
+    can't guess which of several pools it belongs to). Both `list_volumes`
+    and `get_volume` must stamp the pool it was actually found in.
+    """
+
+    def _driver_with_second_pool(self) -> libvirt_driver.LibvirtPoolDriver:
+        driver = _multi_pool_driver([{"name": "default-pool"}, {"name": "second-pool"}])
+        _define_second_pool(driver)
+        return driver
+
+    def test_get_volume_reports_the_pool_it_was_found_in(self):
+        driver = self._driver_with_second_pool()
+        volume_uuid = sys_uuid.uuid4()
+        created = driver.create_volume(
+            pool_base.MachineVolume(
+                uuid=volume_uuid,
+                name=str(volume_uuid),
+                size=1,
+                project_id=sys_uuid.uuid4(),
+                storage_pool="second-pool",
+            )
+        )
+        assert created.storage_pool == "second-pool"
+
+        fetched = driver.get_volume(volume_uuid)
+
+        assert fetched.storage_pool == "second-pool"
+        # Would raise ValueError before the fix: with storage_pool unset
+        # and two pools configured, there's no way to tell which one.
+        assert driver._storage_pool_name_for(fetched) == "second-pool"
+
+    def test_list_volumes_reports_the_pool_each_volume_was_found_in(self):
+        driver = self._driver_with_second_pool()
+        volume_uuid = sys_uuid.uuid4()
+        driver.create_volume(
+            pool_base.MachineVolume(
+                uuid=volume_uuid,
+                name=str(volume_uuid),
+                size=1,
+                project_id=sys_uuid.uuid4(),
+                storage_pool="second-pool",
+            )
+        )
+
+        listed = {v.uuid: v for v in driver.list_volumes()}
+
+        assert listed[volume_uuid].storage_pool == "second-pool"
 
 
 class TestDeleteMachine:
@@ -176,3 +307,66 @@ def test_domain_console_logs_to_file():
     assert console.get("type") == "pty"
     assert log.get("file") == log_path
     assert log.get("append") == "on"
+
+
+def test_recreate_preserves_global_disk_order_across_pools():
+    driver = _multi_pool_driver([{"name": "default-pool"}, {"name": "second-pool"}])
+    _define_second_pool(driver)
+    machine = pool_base.Machine(
+        uuid=sys_uuid.uuid4(),
+        project_id=sys_uuid.uuid4(),
+        name="multi-pool-order",
+        cores=1,
+        ram=512,
+    )
+    root_uuid, data_uuid = sys_uuid.uuid4(), sys_uuid.uuid4()
+    root = driver.create_volume(
+        pool_base.MachineVolume(
+            uuid=root_uuid,
+            name=str(root_uuid),
+            project_id=machine.project_id,
+            size=1,
+            storage_pool="second-pool",
+            index=0,
+        )
+    )
+    data = driver.create_volume(
+        pool_base.MachineVolume(
+            uuid=data_uuid,
+            name=str(data_uuid),
+            project_id=machine.project_id,
+            size=1,
+            storage_pool="default-pool",
+            index=1,
+        )
+    )
+    port = pool_base.Port(
+        uuid=sys_uuid.uuid4(),
+        project_id=machine.project_id,
+        mac="52:54:00:11:22:44",
+        source="default",
+        status="ACTIVE",
+    )
+    driver.create_machine(machine, [root, data], [port])
+
+    def disk_paths():
+        xml = ET.fromstring(
+            driver._client.lookupByUUIDString(str(machine.uuid)).XMLDesc()
+        )
+        return [
+            (disk.find("target").get("dev"), disk.find("source").get("file"))
+            for disk in xml.findall("./devices/disk")
+            if disk.get("device") == "disk"
+        ]
+
+    try:
+        before = disk_paths()
+        listed = list(driver.list_volumes(machine))
+        assert [(volume.uuid, volume.index) for volume in listed] == [
+            (root.uuid, 0),
+            (data.uuid, 1),
+        ]
+        driver.recreate_machine(machine, ports=[port])
+        assert disk_paths() == before
+    finally:
+        driver.delete_machine(machine, delete_volumes=True)

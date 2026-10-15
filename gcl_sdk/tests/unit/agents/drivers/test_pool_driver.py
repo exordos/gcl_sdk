@@ -21,6 +21,7 @@ import pytest
 
 from gcl_sdk.agents.universal.dm import models
 from gcl_sdk.agents.universal.drivers import pool as pool_driver
+from gcl_sdk.infra import constants as ic
 
 
 def _make_resource(kind: str, value: dict) -> models.Resource:
@@ -180,6 +181,7 @@ class TestVolumeResizeCapacity:
             uuid=volume_uuid,
             name=str(volume_uuid),
             size=dp_size,
+            storage_pool="storage",
             project_id=pool_driver.SYSTEM_PROJECT_ID,
             # What a real driver reports for a volume that exists: both
             # LibvirtPoolDriver.create_volume and its `get_volume` stamp
@@ -232,3 +234,351 @@ class TestVolumeResizeCapacity:
         assert meta_volume.status == pool_driver.VolumeStatus.ERROR.value
         assert driver.resized_to is None
         assert storage_pool.capacity_provisioned == 10
+
+
+def _make_storage_pool(name, tier, ephemeral, capacity_usable, capacity_provisioned=0):
+    return pool_driver.ThinStoragePool(
+        name=name,
+        pool_type="dir",
+        tier=tier,
+        ephemeral=ephemeral,
+        capacity_usable=capacity_usable,
+        capacity_provisioned=capacity_provisioned,
+    )
+
+
+class TestSelectStoragePool:
+    """The soft match picks the most free-space pool, not the first one."""
+
+    def test_exact_match_picks_the_one_with_most_free_space(self):
+        small_hot = _make_storage_pool("small-hot", ic.DiskTier.HOT.value, False, 20)
+        big_hot = _make_storage_pool("big-hot", ic.DiskTier.HOT.value, False, 100)
+        warm = _make_storage_pool("warm", ic.DiskTier.WARM.value, False, 1000)
+
+        selected = pool_driver.select_storage_pool(
+            [small_hot, big_hot, warm], ic.DiskTier.HOT.value, False, 10
+        )
+
+        assert selected is big_hot
+
+    def test_fallback_match_picks_the_one_with_most_free_space(self):
+        # Neither pool is hot, so this falls back to the largest pool with
+        # room, rather than whichever happens to be listed first.
+        small = _make_storage_pool("small", ic.DiskTier.WARM.value, False, 20)
+        big = _make_storage_pool("big", ic.DiskTier.COLD.value, False, 100)
+
+        selected = pool_driver.select_storage_pool(
+            [small, big], ic.DiskTier.HOT.value, False, 10
+        )
+
+        assert selected is big
+
+    def test_fuller_exact_match_loses_to_emptier_one(self):
+        full_hot = _make_storage_pool(
+            "full-hot", ic.DiskTier.HOT.value, False, 100, capacity_provisioned=95
+        )
+        empty_hot = _make_storage_pool("empty-hot", ic.DiskTier.HOT.value, False, 100)
+
+        selected = pool_driver.select_storage_pool(
+            [full_hot, empty_hot], ic.DiskTier.HOT.value, False, 10
+        )
+
+        assert selected is empty_hot
+
+    def test_assigned_name_ignores_weight(self):
+        assigned = _make_storage_pool("assigned", ic.DiskTier.WARM.value, False, 20)
+        bigger = _make_storage_pool("bigger", ic.DiskTier.WARM.value, False, 100)
+
+        selected = pool_driver.select_storage_pool(
+            [assigned, bigger],
+            ic.DiskTier.WARM.value,
+            False,
+            10,
+            assigned_name="assigned",
+        )
+
+        assert selected is assigned
+
+    def test_no_pool_fits(self):
+        small = _make_storage_pool("small", ic.DiskTier.WARM.value, False, 5)
+
+        selected = pool_driver.select_storage_pool(
+            [small], ic.DiskTier.WARM.value, False, 10
+        )
+
+        assert selected is None
+
+    def test_never_places_a_durable_request_on_an_ephemeral_pool(self):
+        # Unlike tier, ephemeral is a data-safety property: falling
+        # back across it could silently wipe a "durable" disk on host
+        # reboot, so the durable request must go unscheduled (retried
+        # later) rather than land on the ephemeral pool with room.
+        ephemeral_pool = _make_storage_pool(
+            "ephemeral", ic.DiskTier.HOT.value, True, 100
+        )
+
+        selected = pool_driver.select_storage_pool(
+            [ephemeral_pool], ic.DiskTier.HOT.value, False, 10
+        )
+
+        assert selected is None
+
+    def test_never_places_an_ephemeral_request_on_a_durable_pool(self):
+        durable_pool = _make_storage_pool("durable", ic.DiskTier.HOT.value, False, 100)
+
+        selected = pool_driver.select_storage_pool(
+            [durable_pool], ic.DiskTier.HOT.value, True, 10
+        )
+
+        assert selected is None
+
+    def test_tier_still_falls_back_within_the_matching_ephemeral_tier(self):
+        cold_ephemeral = _make_storage_pool(
+            "cold-ephemeral", ic.DiskTier.COLD.value, True, 100
+        )
+        hot_durable = _make_storage_pool(
+            "hot-durable", ic.DiskTier.HOT.value, False, 100
+        )
+
+        # Requesting hot+ephemeral: no exact match, but the ephemeral
+        # pool (wrong tier) is still preferred over the durable one
+        # (wrong ephemeral) - the tier fallback only crosses within the
+        # same durability tier.
+        selected = pool_driver.select_storage_pool(
+            [cold_ephemeral, hot_durable], ic.DiskTier.HOT.value, True, 10
+        )
+
+        assert selected is cold_ephemeral
+
+
+class TestExordosLocalHyperDriverSpecStoragePools:
+    def _spec(self, storage_pool):
+        return pool_driver.ExordosLocalHyperDriverSpec(
+            connection_uri="qemu:///system",
+            node=sys_uuid.uuid4(),
+            storage_pool=storage_pool,
+        )
+
+    def test_list_round_trips(self):
+        entries = [{"name": "local", "tier": "WARM", "ephemeral": True}]
+        spec = self._spec(entries)
+        restored = pool_driver.ExordosLocalHyperDriverSpec.restore_from_simple_view(
+            **spec.dump_to_simple_view()
+        )
+        assert restored.storage_pool == entries
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            123,
+            "local",
+            [123],
+            [None],
+            ["local"],
+            [{}],
+            [{"name": "local", "unknown": True}],
+            [{"name": "local", "tier": "invalid"}],
+        ],
+    )
+    def test_invalid_shapes_raise_type_error(self, value):
+        with pytest.raises(TypeError):
+            self._spec(value)
+        with pytest.raises(TypeError):
+            pool_driver.ExordosLocalHyperDriverSpec.restore_from_simple_view(
+                kind="exordos_local_hyper",
+                connection_uri="qemu:///system",
+                node=str(sys_uuid.uuid4()),
+                storage_pool=value,
+            )
+
+
+class _FailingCreatePoolDriver(pool_driver.DummyPoolDriver):
+    """DummyPoolDriver whose create_volume always fails."""
+
+    def create_volume(self, volume):
+        raise RuntimeError("boom")
+
+
+class TestDumpToDpStoragePoolPinning:
+    """A failed create must not leave the volume pinned to the pool it
+    failed on - otherwise a later retry can never try a different one,
+    even if that pool is now full/unavailable and another has room.
+    """
+
+    def test_create_failure_does_not_pin_storage_pool(self):
+        storage_pool = pool_driver.ThinStoragePool(
+            name="storage",
+            pool_type="dir",
+            capacity_usable=100,
+            capacity_provisioned=0,
+        )
+        meta_pool = pool_driver.MetaPool(
+            uuid=sys_uuid.uuid4(),
+            driver_spec=pool_driver.DummyPoolDriverSpec(),
+        )
+        meta_pool.storage_pools = [storage_pool]
+        meta_pool.dp_volume_map = {}
+
+        volume_uuid = sys_uuid.uuid4()
+        meta_volume = pool_driver.MetaVolume(
+            uuid=volume_uuid,
+            pool=meta_pool.uuid,
+            name=str(volume_uuid),
+            size=10,
+            project_id=sys_uuid.uuid4(),
+        )
+
+        driver = _FailingCreatePoolDriver(meta_pool)
+
+        with mock.patch.object(
+            pool_driver.MetaPool, "load_driver", return_value=driver
+        ):
+            with pytest.raises(RuntimeError):
+                meta_volume.dump_to_dp(meta_pool)
+
+        assert meta_volume.storage_pool is None
+        assert storage_pool.capacity_provisioned == 0
+
+
+class TestStoragePoolConsistency:
+    def test_update_on_dp_rejects_a_conflicting_storage_pool_change(self):
+        # The scheduler/meta state says "pool-b", but the volume
+        # actually lives on "pool-a" - migrating between pools isn't
+        # supported, so the data plane's own record must win.
+        storage_pool_a = pool_driver.ThinStoragePool(
+            name="pool-a", pool_type="dir", capacity_usable=100
+        )
+        meta_pool = pool_driver.MetaPool(
+            uuid=sys_uuid.uuid4(), driver_spec=pool_driver.DummyPoolDriverSpec()
+        )
+        meta_pool.storage_pools = [storage_pool_a]
+
+        volume_uuid = sys_uuid.uuid4()
+        dp_volume = pool_driver.MachineVolume(
+            uuid=volume_uuid,
+            name=str(volume_uuid),
+            size=10,
+            project_id=pool_driver.SYSTEM_PROJECT_ID,
+            status=pool_driver.VolumeStatus.ACTIVE.value,
+            storage_pool="pool-a",
+        )
+        meta_pool.dp_volume_map = {volume_uuid: dp_volume}
+
+        meta_volume = pool_driver.MetaVolume(
+            uuid=volume_uuid,
+            pool=meta_pool.uuid,
+            name=str(volume_uuid),
+            size=10,
+            project_id=sys_uuid.uuid4(),
+            storage_pool="pool-b",
+        )
+
+        driver = _ResizingPoolDriver(meta_pool, dp_volume)
+
+        with mock.patch.object(
+            pool_driver.MetaPool, "load_driver", return_value=driver
+        ):
+            meta_volume.update_on_dp(meta_pool)
+
+        assert meta_volume.storage_pool == "pool-a"
+        assert meta_volume.status == pool_driver.VolumeStatus.ERROR.value
+        assert driver.resized_to is None
+
+    def test_from_dp_volume_backfills_a_missing_storage_pool(self):
+        # A volume that predates storage_pool tracking (e.g. loaded from
+        # an older meta file) has no pinned pool yet - trust the data
+        # plane's own record of where it actually lives.
+        volume_uuid = sys_uuid.uuid4()
+        meta_volume = pool_driver.MetaVolume(
+            uuid=volume_uuid,
+            pool=sys_uuid.uuid4(),
+            name=str(volume_uuid),
+            size=10,
+            project_id=sys_uuid.uuid4(),
+        )
+        assert meta_volume.storage_pool is None
+
+        dp_volume = pool_driver.MachineVolume(
+            uuid=volume_uuid,
+            name=str(volume_uuid),
+            size=10,
+            project_id=pool_driver.SYSTEM_PROJECT_ID,
+            storage_pool="pool-a",
+        )
+
+        meta_volume._from_dp_volume(dp_volume)
+
+        assert meta_volume.storage_pool == "pool-a"
+
+
+@pytest.mark.parametrize("name", ["duplicate", ""])
+def test_selector_rejects_ambiguous_assigned_names_even_if_one_pool_is_full(name):
+    first = _make_storage_pool(name, ic.DiskTier.WARM.value, True, 10, 10)
+    second = _make_storage_pool(name, ic.DiskTier.WARM.value, True, 100)
+    assert (
+        pool_driver.select_storage_pool(
+            [first, second], ic.DiskTier.WARM.value, True, 1, assigned_name=name
+        )
+        is None
+    )
+    assert (
+        pool_driver.select_storage_pool(
+            [first, second], ic.DiskTier.WARM.value, True, 1
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize("cached", [None, "wrong"])
+def test_restore_reads_the_actual_storage_pool(cached):
+    uid = sys_uuid.uuid4()
+    volume = pool_driver.MetaVolume(
+        uuid=uid,
+        pool=sys_uuid.uuid4(),
+        size=10,
+        project_id=sys_uuid.uuid4(),
+        storage_pool=cached,
+    )
+    actual = pool_driver.MachineVolume(
+        uuid=uid, size=10, project_id=sys_uuid.uuid4(), storage_pool="actual"
+    )
+    volume.restore_from_dp(mock.Mock(dp_volume_map={uid: actual}))
+    assert volume.storage_pool == "actual"
+
+
+def test_resize_without_pin_charges_only_the_actual_pool():
+    uid = sys_uuid.uuid4()
+    actual_pool = _make_storage_pool("actual", "COLD", True, 100, 10)
+    other_pool = _make_storage_pool("other", "WARM", True, 1000)
+    actual = pool_driver.MachineVolume(
+        uuid=uid, size=10, project_id=sys_uuid.uuid4(), storage_pool="actual"
+    )
+    volume = pool_driver.MetaVolume(
+        uuid=uid, pool=sys_uuid.uuid4(), size=12, project_id=sys_uuid.uuid4()
+    )
+    driver = mock.Mock()
+    driver.get_volume.return_value = actual
+    pool = mock.Mock(
+        storage_pools=[actual_pool, other_pool], dp_volume_map={uid: actual}
+    )
+    pool.load_driver.return_value = driver
+    volume.update_on_dp(pool)
+    assert actual_pool.capacity_provisioned == 12
+    assert other_pool.capacity_provisioned == 0
+    assert volume.storage_pool == "actual"
+
+
+def test_resize_with_unknown_actual_pool_does_not_touch_driver():
+    uid = sys_uuid.uuid4()
+    actual = pool_driver.MachineVolume(uuid=uid, size=10, project_id=sys_uuid.uuid4())
+    volume = pool_driver.MetaVolume(
+        uuid=uid, pool=sys_uuid.uuid4(), size=12, project_id=sys_uuid.uuid4()
+    )
+    driver = mock.Mock()
+    pool = mock.Mock(dp_volume_map={uid: actual})
+    pool.load_driver.return_value = driver
+    volume.update_on_dp(pool)
+    driver.resize_volume.assert_not_called()
+    assert actual.size == 10
+    assert volume.status == "ERROR"
+
