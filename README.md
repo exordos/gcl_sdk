@@ -55,9 +55,9 @@ authority.
 
 `MachineVolume.storage_policy` preserves the assigned pool UUID, mirrors,
 chunk size and failure domain across reconciliation. `ExordosLocalHyperDriver`
-passes these to `rawstor.Target.create()` directly. This requires bindings from
-[run 37329790134](https://github.com/rawstor/librawstor/actions/runs/37329790134),
-version `99.0.0+0.fe3340e`, or a compatible newer build. Rawstor disks do not
+passes these to `rawstor.Target.create()` directly. The integration is tested with bindings from
+[run 38805653704](https://github.com/rawstor/librawstor/actions/runs/38805653704),
+version `99.0.0+0.9f7ea5d`. Rawstor disks do not
 consume the hypervisor's local qcow2 budget. Implicit qcow2 pool attributes and
 new disk requests default to WARM ephemeral; explicit pool attributes override them.
 
