@@ -31,7 +31,6 @@ from restalchemy.dm import types_dynamic
 from restalchemy.dm import types_network as types_net
 
 from gcl_sdk.agents.universal import constants as c
-from gcl_sdk.agents.universal import utils as ua_utils
 from gcl_sdk.agents.universal.dm import models as ua_models
 from gcl_sdk.agents.universal.drivers import exceptions as ua_driver_exc
 from gcl_sdk.agents.universal.drivers import meta
@@ -1582,28 +1581,6 @@ class MetaMachine(meta.MetaCoordinatorDataPlaneModel):
 
 
 class PoolAgentDriver(meta.MetaCoordinatorAgentDriver):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        # Upgrade persisted local pool metadata before typed deserialization.
-        changed = False
-        for resource in self._storage["pool"]["resources"].values():
-            spec = resource.get("driver_spec", {})
-            if spec.get("kind") != "exordos_local_hyper":
-                continue
-            name = spec.get("storage_pool")
-            if not isinstance(name, str):
-                continue
-            entries = (
-                [{"name": name, "tier": "WARM", "ephemeral": True}] if name else []
-            )
-            spec["storage_pool"] = entries
-            fields = resource.get("target_fields")
-            if isinstance(fields, dict) and isinstance(fields.get("driver_spec"), dict):
-                fields["driver_spec"]["storage_pool"] = ua_utils.value_shape(entries)
-            changed = True
-        if changed:
-            self._storage.persist()
-
     # Order matters
     __model_map__ = {
         "pool": MetaPool,

@@ -14,7 +14,6 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import json
 from unittest import mock
 import uuid as sys_uuid
 
@@ -583,23 +582,3 @@ def test_resize_with_unknown_actual_pool_does_not_touch_driver():
     assert actual.size == 10
     assert volume.status == "ERROR"
 
-
-def test_agent_upgrades_persisted_local_pool_metadata(tmp_path):
-    path = tmp_path / "meta.json"
-    pool_uuid = str(sys_uuid.uuid4())
-    value = {
-        "driver_spec": {"kind": "exordos_local_hyper", "storage_pool": "default"},
-        "target_fields": {"driver_spec": {"storage_pool": None}},
-    }
-    path.write_text(json.dumps({"pool": {"resources": {pool_uuid: value}}}))
-    driver = pool_driver.PoolAgentDriver(meta_file=str(path))
-    expected = [{"name": "default", "tier": "WARM", "ephemeral": True}]
-    assert (
-        driver._storage["pool"]["resources"][pool_uuid]["driver_spec"]["storage_pool"]
-        == expected
-    )
-    persisted = json.loads(path.read_text())["pool"]["resources"][pool_uuid]
-    assert persisted["driver_spec"]["storage_pool"] == expected
-    assert persisted["target_fields"]["driver_spec"]["storage_pool"] == [
-        {"name": None, "tier": None, "ephemeral": None}
-    ]
