@@ -326,6 +326,22 @@ class Node(
     hostname = properties.property(
         ra_types.AllowNone(ra_nettypes.Hostname()), default=None
     )
+    # The actual power state of the node
+    power_state = properties.property(
+        ra_types.Enum([s.value for s in pc.PowerState]),
+        default=pc.PowerState.ON.value,
+    )
+    # The target power state of the node
+    target_power_state = properties.property(
+        ra_types.Enum(
+            [
+                pc.PowerState.ON.value,
+                pc.PowerState.OFF.value,
+                pc.PowerState.REBOOT.value,
+            ]
+        ),
+        default=pc.PowerState.ON.value,
+    )
 
     @classmethod
     def get_resource_kind(cls) -> str:
