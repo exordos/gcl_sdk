@@ -26,10 +26,11 @@ from restalchemy.dm import types
 from gcl_sdk.agents.universal import constants as c
 from gcl_sdk.agents.universal.drivers import exceptions
 from gcl_sdk.agents.universal.drivers import meta
+from gcl_sdk.secret import constants as secret_c
 
 LOG = logging.getLogger(__name__)
-AUTHORIZED_KEYS_PATH = ".ssh/authorized_keys"
-SSH_KEY_TARGET_KIND = "ssh_key_target"
+AUTHORIZED_KEYS_PATH = secret_c.AUTHORIZED_KEYS_PATH
+SSH_KEY_TARGET_KIND = secret_c.SSH_KEY_TARGET_KIND
 
 
 class SSHKey(meta.MetaDataPlaneModel):
