@@ -16,6 +16,8 @@
 from __future__ import annotations
 
 import abc
+import dataclasses
+import datetime
 import enum
 import logging
 import os
@@ -31,6 +33,7 @@ from restalchemy.dm import types_dynamic
 from restalchemy.dm import types_network as types_net
 
 from gcl_sdk.agents.universal import constants as c
+from gcl_sdk.agents.universal import operations
 from gcl_sdk.agents.universal.dm import models as ua_models
 from gcl_sdk.agents.universal.drivers import exceptions as ua_driver_exc
 from gcl_sdk.agents.universal.drivers import meta
@@ -66,6 +69,20 @@ class MachineStatus(str, enum.Enum):
     ERROR = "ERROR"
     FLASHED = "FLASHED"
     NEED_RESCHEDULE = "NEED_RESCHEDULE"
+
+
+class PowerState(str, enum.Enum):
+    ON = "ON"
+    OFF = "OFF"
+    # Target only. A request to reboot the machine.
+    REBOOT = "REBOOT"
+    # Actual only. The reboot is in progress.
+    REBOOTING = "REBOOTING"
+    # Actual only. The reboot has been performed, the control plane has
+    # to switch the target back to `ON`.
+    REBOOTED = "REBOOTED"
+    # Actual only. Paused, crashed, shutting down and so on.
+    UNKNOWN = "UNKNOWN"
 
 
 class VolumeStatus(str, enum.Enum):
@@ -225,6 +242,9 @@ class Machine(
     )
     image = properties.property(
         types.AllowNone(types.String(max_length=255)), default=None
+    )
+    power_state = properties.property(
+        types.AllowNone(types.Enum([s.value for s in PowerState])), default=None
     )
 
 
@@ -706,6 +726,7 @@ class DummyPoolDriver(AbstractPoolDriver):
                 # "running" is not a MachineStatus, so building this model
                 # raised instead of returning a machine.
                 status=MachineStatus.ACTIVE.value,
+                power_state=PowerState.ON.value,
                 project_id=SYSTEM_PROJECT_ID,
             ),
             tuple(),
@@ -1238,8 +1259,111 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
         self.machine = machine
 
 
+@dataclasses.dataclass
+class _MachinePowerOperation(operations.Operation):
+    """Base class for machine power operations.
+
+    The context of every step:
+        driver: AbstractPoolDriver - the pool driver.
+        machine: Machine - the data plane machine fetched this iteration.
+
+    Power on and power off are requested only while the machine hasn't
+    reached the target, so they never finish by themselves. They are
+    dropped from the catalog once they aren't requested anymore.
+    """
+
+    group: tp.ClassVar[str | None] = "power"
+
+    # How long to wait for a graceful shutdown before forcing it
+    graceful_timeout: tp.ClassVar[datetime.timedelta] = datetime.timedelta(seconds=60)
+    # How long to wait for the machine to start before sending start again
+    start_timeout: tp.ClassVar[datetime.timedelta] = datetime.timedelta(seconds=60)
+
+    def _shutdown(self, driver: AbstractPoolDriver, machine: Machine) -> None:
+        """Shut down the machine gracefully, then forcibly on timeout."""
+        since_shutdown = self.since("send_shutdown")
+        if since_shutdown is None:
+            driver.shutdown_machine(machine, force=False)
+            self.log("send_shutdown")
+            return
+
+        if since_shutdown < self.graceful_timeout:
+            return
+
+        since_forced = self.since("send_force_shutdown")
+        if since_forced is None or since_forced >= self.graceful_timeout:
+            driver.shutdown_machine(machine, force=True)
+            self.log("send_force_shutdown")
+            LOG.warning(
+                "The machine %s was not shut down gracefully, force the shutdown",
+                machine.uuid,
+            )
+
+    def _start(self, driver: AbstractPoolDriver, machine: Machine) -> None:
+        """Start the machine, send start again on timeout."""
+        since_start = self.since("send_start")
+        if since_start is None or since_start >= self.start_timeout:
+            driver.start_machine(machine)
+            self.log("send_start")
+
+
+@dataclasses.dataclass
+class PowerOffMachineOperation(_MachinePowerOperation):
+    op_key: tp.ClassVar[str] = "power_off"
+
+    def step(self, driver: AbstractPoolDriver, machine: Machine) -> operations.OpStatus:
+        self._shutdown(driver, machine)
+        return operations.OpStatus.IN_PROGRESS
+
+
+@dataclasses.dataclass
+class PowerOnMachineOperation(_MachinePowerOperation):
+    op_key: tp.ClassVar[str] = "power_on"
+
+    def step(self, driver: AbstractPoolDriver, machine: Machine) -> operations.OpStatus:
+        self._start(driver, machine)
+        return operations.OpStatus.IN_PROGRESS
+
+
+@dataclasses.dataclass
+class RebootMachineOperation(_MachinePowerOperation):
+    """Reboot the machine as shutdown and start.
+
+    A graceful reboot via ACPI may be silently ignored by the guest and
+    there is no way to notice it. The shutdown and start steps are
+    observable on the data plane instead. A reboot of a powered off
+    machine just starts it.
+
+    The finished reboot stays in the catalog while the target is `REBOOT`,
+    so it's reported as `REBOOTED` and isn't performed again until the
+    control plane switches the target.
+    """
+
+    op_key: tp.ClassVar[str] = "reboot"
+
+    def step(self, driver: AbstractPoolDriver, machine: Machine) -> operations.OpStatus:
+        # The machine has been started after the shutdown
+        if self.last("send_start") is not None:
+            if machine.power_state == PowerState.ON:
+                return operations.OpStatus.DONE
+
+            self._start(driver, machine)
+            return operations.OpStatus.IN_PROGRESS
+
+        if machine.power_state == PowerState.OFF:
+            self._start(driver, machine)
+        else:
+            self._shutdown(driver, machine)
+
+        return operations.OpStatus.IN_PROGRESS
+
+
 class MetaMachine(meta.MetaCoordinatorDataPlaneModel):
     """Machine meta model."""
+
+    # Power operations of machines. They are kept in memory, so they start
+    # from scratch after the agent restart.
+    __operations__ = operations.OperationCatalog()
 
     name = properties.property(types.String(max_length=255), default="")
     cores = properties.property(types.Integer(min_value=0, max_value=4096), default=0)
@@ -1263,6 +1387,12 @@ class MetaMachine(meta.MetaCoordinatorDataPlaneModel):
     )
     project_id = properties.property(types.UUID(), required=True, read_only=True)
     port_info = properties.property(types.Dict(), default=dict)
+    # The target power state from the control plane or the actual one
+    # from the data plane. `None` means the control plane doesn't manage
+    # the power state (an older version), so leave it as is.
+    power_state = properties.property(
+        types.AllowNone(types.Enum([s.value for s in PowerState])), default=None
+    )
 
     @property
     def _is_core_machine(self) -> bool:
@@ -1312,11 +1442,56 @@ class MetaMachine(meta.MetaCoordinatorDataPlaneModel):
         driver.delete_machine(dp_machine)
         LOG.info("The machine %s deleted", self.uuid)
 
+    def _actual_power_state(self, dp_machine: Machine) -> tp.Optional[str]:
+        """Return the actual power state to report to the control plane.
+
+        The intermediate states of a reboot are hidden behind `REBOOTING`.
+        A finished reboot is reported as `REBOOTED`, so the control plane
+        knows the reboot has been performed and switches the target back
+        to `ON`.
+        """
+        reboot = self.__operations__.get(self.uuid, RebootMachineOperation)
+        if reboot is None or reboot.status == operations.OpStatus.FAILED:
+            return dp_machine.power_state
+
+        if reboot.status == operations.OpStatus.DONE:
+            return PowerState.REBOOTED.value
+        return PowerState.REBOOTING.value
+
+    def _actualize_power_state(
+        self, driver: AbstractPoolDriver, dp_machine: Machine
+    ) -> tp.Optional[operations.Operation]:
+        """Start or proceed with the operation to reach the target power.
+
+        Return `None` if there is nothing to do.
+        """
+        target = self.power_state
+
+        # Compare with the data plane rather than with the reported state.
+        # A reboot left in the catalog isn't requested anymore and it's
+        # dropped by the next sweep.
+        if target != PowerState.REBOOT and dp_machine.power_state == target:
+            return None
+
+        op: _MachinePowerOperation
+        if target == PowerState.ON:
+            op = PowerOnMachineOperation()
+        elif target == PowerState.OFF:
+            op = PowerOffMachineOperation()
+        elif target == PowerState.REBOOT:
+            op = RebootMachineOperation()
+        else:
+            LOG.error("Invalid target power state %s for machine %s", target, self.uuid)
+            return None
+
+        return self.__operations__.run(self.uuid, op, driver=driver, machine=dp_machine)
+
     def _from_dp_machine(self, dp_machine: Machine, ports: tp.Collection[Port]) -> None:
         self.cores = dp_machine.cores
         self.ram = dp_machine.ram
         self.status = dp_machine.status
         self.boot = dp_machine.boot
+        self.power_state = self._actual_power_state(dp_machine)
 
         for port in ports:
             # Only MAC and source are available in the data plane
@@ -1452,6 +1627,11 @@ class MetaMachine(meta.MetaCoordinatorDataPlaneModel):
         self, pool: tp.Optional[MetaPool], volumes: tp.Collection[MetaVolume]
     ) -> None:
         """Load the machine from the data plane."""
+        # The machine is restored once per iteration before it's updated,
+        # so drop power operations that weren't requested since the last
+        # iteration. Do it first to drop them for a vanished machine too.
+        self.__operations__.sweep(self.uuid)
+
         # Prevent actualization when pool is not provided
         if pool is None:
             raise ValueError(f"The pool is not provided for machine {self.uuid}")
@@ -1473,6 +1653,8 @@ class MetaMachine(meta.MetaCoordinatorDataPlaneModel):
         self, pool: MetaPool, volumes: tp.Collection[MetaVolume]
     ) -> None:
         """Delete the machine from the data plane."""
+        self.__operations__.clear(self.uuid)
+
         if self.uuid not in pool.dp_machine_map:
             raise ua_driver_exc.ResourceNotFound(resource=self)
 
@@ -1488,6 +1670,20 @@ class MetaMachine(meta.MetaCoordinatorDataPlaneModel):
         dp_machine: Machine = pool.dp_machine_map[self.uuid]
         driver: AbstractPoolDriver = pool.load_driver()
         unknown_action = True
+
+        # Power state
+        if self.power_state is not None and self.power_state != (
+            self._actual_power_state(dp_machine)
+        ):
+            unknown_action = False
+            power_op = self._actualize_power_state(driver, dp_machine)
+
+            # Don't apply other changes while the power operation is in
+            # progress. Recreation of the domain starts the machine and
+            # breaks the operation.
+            if power_op is not None and not power_op.finished:
+                self._from_dp_machine(*driver.get_machine(self.uuid))
+                return
 
         # Cores
         if self.cores != dp_machine.cores:
