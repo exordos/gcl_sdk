@@ -34,6 +34,7 @@ from gcl_sdk.agents.universal import constants as c
 from gcl_sdk.agents.universal.dm import models as ua_models
 from gcl_sdk.agents.universal.drivers import exceptions as ua_driver_exc
 from gcl_sdk.agents.universal.drivers import meta
+from gcl_sdk.agents.universal.drivers import rawstor_specs
 from gcl_sdk.common import exceptions
 from gcl_sdk.common import types as common_types
 from gcl_sdk.common import utils
@@ -153,6 +154,11 @@ class VolumeNotAttachedError(exceptions.UniversalAgentException):
     machine: sys_uuid.UUID
 
 
+class VolumeResizeNotSupportedError(exceptions.UniversalAgentException):
+    __template__ = "Resizing volume {volume} is not supported by this pool driver."
+    volume: sys_uuid.UUID
+
+
 class PortAlreadyAttachedError(exceptions.UniversalAgentException):
     __template__ = "The port {port} is already attached to machine {machine}."
     port: sys_uuid.UUID
@@ -258,6 +264,13 @@ class MachineVolume(
     storage_pool = properties.property(
         types.AllowNone(types.String(max_length=255)), default=None
     )
+    # Network address (ost://host:port) of the StorageCluster this volume
+    # was scheduled onto, set by the control plane's scheduler. Unset for
+    # a volume on the hypervisor's own local (qcow2) pool.
+    storage_location = properties.property(
+        types.AllowNone(types.String(max_length=2048)), default=None
+    )
+    storage_policy = properties.property(types.Dict(), default=dict)
     status = properties.property(
         types.Enum([s.value for s in VolumeStatus]),
         default=VolumeStatus.NEW.value,
@@ -327,6 +340,14 @@ class ThinStoragePool(
         types.Float(min_value=0.0), default=1.0
     )
     available_actual = properties.property(types.Integer(min_value=0), default=0)
+    driver_spec = properties.property(
+        types.AllowNone(
+            types_dynamic.KindModelSelectorType(
+                types_dynamic.KindModelType(rawstor_specs.RawstorPoolDriverSpec),
+            )
+        ),
+        default=None,
+    )
 
     @property
     def capacity(self) -> int:
@@ -485,6 +506,44 @@ class ExordosLocalHyperDriverSpec(LibvirtPoolDriverSpec):
 
 class DummyPoolDriverSpec(AbstractPoolDriverSpec):
     KIND = "dummy"
+
+
+class AbstractStorageClusterDriverSpec(
+    types_dynamic.AbstractKindModel,
+    models.SimpleViewMixin,
+):
+    """Base class for all storage cluster driver specs.
+
+    Kept separate from AbstractPoolDriverSpec - a storage cluster isn't a
+    MachinePool and carries no machine-scheduling fields.
+    """
+
+
+class RawstorStorageClusterDriverSpec(AbstractStorageClusterDriverSpec):
+    """Public cluster configuration; topology and policies are separate resources."""
+
+    KIND = "rawstor"
+    endpoint = properties.property(types.String(max_length=2048), required=True)
+
+
+class RawstorStorageClusterAgentSpec(RawstorStorageClusterDriverSpec):
+    """Agent snapshot, including legacy fields accepted from older payloads."""
+
+    # Local backing store configured on the OST host by the CLI.
+    location = properties.property(types.String(max_length=2048), default="")
+    # Public MDS location used by hypervisors, e.g. mds://core:7776/.
+    endpoint = properties.property(types.String(max_length=2048), required=True)
+    # OST advertised to the core MDS. Empty for legacy direct-OST clusters.
+    ost_endpoint = properties.property(types.String(max_length=2048), default="")
+    # Keyed by stable OST/pool UUIDs; supplied by the control plane.
+    nodes = properties.property(types.Dict(), default=dict)
+    pools = properties.property(types.Dict(), default=dict)
+    managed = properties.property(types.Boolean(), default=False)
+    tier = properties.property(
+        types.Enum([s.value for s in ic.DiskTier]),
+        default=ic.DiskTier.WARM.value,
+    )
+    ephemeral = properties.property(types.Boolean(), default=True)
 
 
 class MachinePool(
@@ -905,6 +964,17 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
     storage_pool = properties.property(
         types.AllowNone(types.String(max_length=255)), default=None
     )
+    # Network address of the StorageCluster this volume was scheduled
+    # onto by the control plane's scheduler; unset for a local pool. Not
+    # discoverable from the data plane the way storage_pool sometimes is
+    # (probing an actual pool for the object), so unlike storage_pool it's
+    # never backfilled from dp_volume - self is always authoritative and
+    # dp_volume must be overlaid with it before any driver call, see
+    # get_meta_model_fields/dump_to_dp/update_on_dp/delete_from_dp.
+    storage_location = properties.property(
+        types.AllowNone(types.String(max_length=2048)), default=None
+    )
+    storage_policy = properties.property(types.Dict(), default=dict)
     index = properties.property(
         types.Integer(min_value=0, max_value=4096),
         default=4096,
@@ -923,8 +993,10 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
         self.machine = dp_volume.machine
         self.device_type = dp_volume.device_type
         self.status = dp_volume.status
-        # Pool placement is observed state, not a cached target assignment.
-        self.storage_pool = dp_volume.storage_pool
+        # Local placement is observable. A shared backend cannot expose its
+        # logical pool UUID, so retain that policy metadata when absent.
+        if dp_volume.storage_pool is not None or not self.storage_location:
+            self.storage_pool = dp_volume.storage_pool
 
     def _actualize_attachment(self, pool: MetaPool, dp_volume: MachineVolume) -> None:
         """Actualize the attachment of the volume."""
@@ -956,7 +1028,18 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
         driver: AbstractPoolDriver,
         dp_volume: MachineVolume,
     ) -> None:
-        dp_volume = driver.create_volume(dp_volume)
+        try:
+            dp_volume = driver.create_volume(dp_volume)
+        except VolumeAlreadyExistsError:
+            # Self-healing, like _attach_volume/_detach_volume below: an
+            # earlier iteration may have created the real object but not
+            # recorded it here (e.g. a sibling resource failed right
+            # after) - pick up its actual state instead of erroring.
+            LOG.warning(
+                "The volume %s already exists, using its current state",
+                self.uuid,
+            )
+            dp_volume = driver.get_volume(dp_volume.uuid)
         self.status = dp_volume.status
         LOG.info("The volume %s created", self.uuid)
 
@@ -1031,6 +1114,8 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
             tier=self.tier,
             ephemeral=self.ephemeral,
             storage_pool=self.storage_pool,
+            storage_location=self.storage_location,
+            storage_policy=self.storage_policy,
             index=self.index,
             machine=self.machine,
             project_id=self.project_id,
@@ -1053,6 +1138,9 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
     def _has_storage_capacity(
         self, pool: MetaPool, size: tp.Optional[int] = None
     ) -> bool:
+        if self.storage_location:
+            # Admission belongs to the remote cluster's scheduler.
+            return True
         if not pool.storage_pools:
             return False
 
@@ -1060,6 +1148,8 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
         return self._find_storage_pool(pool, size) is not None
 
     def _allocate_capacity(self, pool: MetaPool, size: tp.Optional[int] = None) -> None:
+        if self.storage_location:
+            return
         size = size if size is not None else self.size
         storage_pool = self._find_storage_pool(pool, size)
         storage_pool.allocate_capacity(size)
@@ -1083,6 +1173,8 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
             "tier",
             "ephemeral",
             "storage_pool",
+            "storage_location",
+            "storage_policy",
             "project_id",
         }
 
@@ -1094,11 +1186,20 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
             # The volume already exists in the data plane
             # Reuse it
             dp_volume = pool.dp_volume_map[self.uuid]
+            # storage_location isn't discoverable by the driver (unlike
+            # storage_pool, it has no physical signature to probe) - self
+            # is always the authority, overlay it before any driver call.
+            dp_volume.storage_location = self.storage_location
+            dp_volume.storage_policy = self.storage_policy
         else:
             # Find a storage pool matching this volume's tier/ephemeral
             # request with enough room for it.
-            storage_pool = self._find_storage_pool(pool, self.size)
-            if storage_pool is None:
+            storage_pool = (
+                None
+                if self.storage_location
+                else self._find_storage_pool(pool, self.size)
+            )
+            if storage_pool is None and not self.storage_location:
                 self.status = VolumeStatus.ERROR.value
                 return
 
@@ -1112,19 +1213,25 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
                 device_type=self.device_type,
                 tier=self.tier,
                 ephemeral=self.ephemeral,
-                storage_pool=storage_pool.name,
+                storage_pool=self.storage_pool
+                if self.storage_location
+                else storage_pool.name,
+                storage_location=self.storage_location,
+                storage_policy=self.storage_policy,
                 index=self.index,
                 # TODO(akremenetsky): Detect machine without volume name
                 machine=self.machine,
                 project_id=self.project_id,
             )
             self._create_volume(pool, driver, dp_volume)
-            storage_pool.allocate_capacity(self.size)
+            if storage_pool is not None:
+                storage_pool.allocate_capacity(self.size)
             # Only pin the pool on the meta model once creation actually
             # succeeded - otherwise a failed create would stay locked
             # onto a possibly-bad pool forever, unable to retry on
             # another one that may have room.
-            self.storage_pool = storage_pool.name
+            if storage_pool is not None:
+                self.storage_pool = storage_pool.name
 
         self._from_dp_volume(dp_volume)
 
@@ -1163,6 +1270,8 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
 
         driver: AbstractPoolDriver = pool.load_driver()
         dp_volume = pool.dp_volume_map[self.uuid]
+        dp_volume.storage_location = self.storage_location
+        dp_volume.storage_policy = self.storage_policy
         self._detach_volume(pool, driver, dp_volume)
         self._delete_volume(pool, driver, dp_volume)
 
@@ -1173,17 +1282,22 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
 
         driver: AbstractPoolDriver = pool.load_driver()
         dp_volume: MachineVolume = pool.dp_volume_map[self.uuid]
+        dp_volume.storage_location = self.storage_location
+        dp_volume.storage_policy = self.storage_policy
         machine = dp_volume.machine
         unknown_action = True
 
         # A resize must charge the actual pool. Never infer an existing
         # disk's placement from its requested policy or available capacity.
-        if dp_volume.storage_pool is None:
+        if dp_volume.storage_pool is None and not self.storage_location:
             LOG.error("Cannot determine the storage pool of volume %s", self.uuid)
             self._from_dp_volume(dp_volume)
             self.status = VolumeStatus.ERROR.value
             return
-        if self.storage_pool not in (None, dp_volume.storage_pool):
+        if dp_volume.storage_pool is not None and self.storage_pool not in (
+            None,
+            dp_volume.storage_pool,
+        ):
             LOG.error(
                 "Storage pool migration is unsupported for volume %s (%s -> %s)",
                 self.uuid,
@@ -1193,7 +1307,8 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
             self._from_dp_volume(dp_volume)
             self.status = VolumeStatus.ERROR.value
             return
-        self.storage_pool = dp_volume.storage_pool
+        if dp_volume.storage_pool is not None:
+            self.storage_pool = dp_volume.storage_pool
 
         # A special case for root volumes. If the condition is true, it
         # means the machine failed to be created on previous iteration.
