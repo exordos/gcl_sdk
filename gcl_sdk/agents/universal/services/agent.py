@@ -292,7 +292,10 @@ class UniversalAgentService(looper_basic.BasicService):
             actual_resource = actual_resources[uuid]
 
             # Nothing to do if the resources are the same
-            if target_resource["full_hash"] == actual_resource["full_hash"]:
+            if (
+                target_resource["full_hash"] == actual_resource["full_hash"]
+                and target_resource["hash"] == actual_resource["hash"]
+            ):
                 continue
 
             # Remove read-only fields
@@ -419,11 +422,13 @@ class UniversalAgentService(looper_basic.BasicService):
         # Calculate the hash of the collected payload
         collected_payload.calculate_hash()
 
-        # The payloads aren't the same. It means the facts were updated.
-        if collected_payload != payload:
-            self._actualize_facts(
-                collected_payload.facts, payload.facts, processed_capabilities
-            )
+        # Payload hashes include only the full hashes of facts. A changed
+        # target-field projection can alter a resource hash without altering
+        # its value/full_hash, so compare facts even when payload hashes match.
+        # Unchanged resources are skipped by _actualize_resource_facts.
+        self._actualize_facts(
+            collected_payload.facts, payload.facts, processed_capabilities
+        )
 
         # Save the collected payload after actualization. The hash is already
         # up to date (calculated above) and the payload isn't mutated

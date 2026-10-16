@@ -55,3 +55,16 @@ class TestHttpOrchClientAgentsUpdate:
             facts=agent.facts,
             name=agent.name,
         )
+
+
+def test_unencrypted_agent_identifies_itself():
+    import requests
+    from gcl_sdk.clients.http import base
+
+    node = sys_uuid.uuid4()
+    request = requests.Request(
+        "DELETE",
+        "http://boot/v1/kind/fact/resources/resource",
+        auth=base.NodeIdentityAuth(node),
+    ).prepare()
+    assert request.headers["X-Genesis-Node-UUID"] == str(node)

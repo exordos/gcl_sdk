@@ -27,6 +27,10 @@ class AbstractBackendClient(abc.ABC):
     An interface for clients to communicate with a backend side.
     """
 
+    def get_create_only_fields(self, kind: str) -> tp.Collection[str]:
+        """Fields passed on create and excluded from ongoing reconciliation."""
+        return ()
+
     @abc.abstractmethod
     def get(
         self, resource: models.Resource

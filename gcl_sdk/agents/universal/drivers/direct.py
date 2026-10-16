@@ -123,7 +123,14 @@ class DirectAgentDriver(base.AbstractCapabilityDriver):
         The key skeleton of the target value (``utils.value_shape``),
         which lets the nested fields the data plane adds be dropped too.
         """
-        return utils.value_shape(resource.value)
+        # Older backend clients expose only CRUD; their fields remain mutable.
+        create_only_resolver = getattr(self._client, "get_create_only_fields", None)
+        create_only = (
+            create_only_resolver(resource.kind) if create_only_resolver else ()
+        )
+        return utils.value_shape(
+            {k: v for k, v in resource.value.items() if k not in create_only}
+        )
 
     def _model_to_resource(
         self,

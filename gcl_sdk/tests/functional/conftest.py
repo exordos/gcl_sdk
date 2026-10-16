@@ -214,6 +214,11 @@ def orch_api_wsgi_app():
 
 @pytest.fixture(scope="module")
 def status_api_wsgi_app():
+    class TestEncryptionInformation(packers.NoEncryptionInformation):
+        @property
+        def node_uuid(self):
+            return sys_uuid.UUID("11111111-1111-4111-8111-111111111111")
+
     class StatusApiApp(routes.RootRoute):
         pass
 
@@ -239,7 +244,7 @@ def status_api_wsgi_app():
             functools.partial(
                 sdk_middlewares.SdkContextMiddleware,
                 context_kwargs={
-                    "encryption_information_class": (packers.NoEncryptionInformation)
+                    "encryption_information_class": TestEncryptionInformation
                 },
             ),
             errors_mw.ErrorsHandlerMiddleware,

@@ -31,6 +31,22 @@ from gcl_sdk.agents.universal.storage import base as storage_base
 LOG = logging.getLogger(__name__)
 
 
+def merge_declared_object(current: tp.Any, patch: tp.Any) -> tp.Any:
+    """Merge declared dictionary keys; scalars and lists replace atomically.
+
+    Only schema-declared model fields opt in. A new discriminator starts a
+    new object, rather than carrying properties from the previous variant.
+    """
+    if not isinstance(current, dict) or not isinstance(patch, dict):
+        return patch
+    if "kind" in patch and patch["kind"] != current.get("kind"):
+        return patch
+    result = current.copy()
+    for key, value in patch.items():
+        result[key] = merge_declared_object(current.get(key), value)
+    return result
+
+
 class ModelSpec(tp.NamedTuple):
     model: type[ra_storage.AbstractStorableMixin]
     kind: str
@@ -73,6 +89,9 @@ class ModelSpec(tp.NamedTuple):
 
 class DatabaseBackendClient(base.AbstractBackendClient):
     """Database backend client."""
+
+    def get_create_only_fields(self, kind: str) -> tp.Collection[str]:
+        return getattr(self._model_spec_map[kind].model, "__create_only_fields__", ())
 
     def __init__(
         self,
@@ -159,6 +178,9 @@ class DatabaseBackendClient(base.AbstractBackendClient):
             raise client_exc.ResourceAlreadyExists(resource=resource)
 
         # Inject filter fields into the resource value if they are not present
+        validator = getattr(model_spec.model, "validate_create_input", None)
+        if validator is not None:
+            validator(resource.value)
         if model_spec.inject_filter_fields and model_spec.filters:
             value = resource.value.copy()
             for field, _filter in model_spec.filters.items():
@@ -196,10 +218,29 @@ class DatabaseBackendClient(base.AbstractBackendClient):
             LOG.warning("The resource does not exist: %s", resource.uuid)
             raise client_exc.ResourceNotFound(resource=resource)
 
-        updated_obj = model_spec.model.from_ua_resource(resource)
+        create_only = self.get_create_only_fields(resource.kind)
+        value = {k: v for k, v in resource.value.items() if k not in create_only}
+        validator = getattr(model_spec.model, "validate_update_input", None)
+        if validator is not None:
+            validator(value, obj)
+        for field in getattr(model_spec.model, "__partial_update_fields__", ()):
+            if field in value:
+                current = (
+                    obj.properties[field]
+                    .get_property_type()
+                    .to_simple_type(getattr(obj, field))
+                )
+                value[field] = merge_declared_object(current, value[field])
+        current_view = {
+            name: prop.get_property_type().to_simple_type(getattr(obj, name))
+            for name, prop in obj.properties.properties.items()
+        }
+        updated_obj = model_spec.model.from_ua_resource(
+            resource.replace_value({**current_view, **value})
+        )
 
         # Update the object
-        for field_name in resource.value:
+        for field_name in value:
             prop = obj.properties.get(field_name)
             if not prop or prop.is_read_only():
                 continue

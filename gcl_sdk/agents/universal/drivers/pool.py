@@ -414,6 +414,20 @@ class AbstractPoolDriverSpec(
 ):
     """Base class for all pool driver specs."""
 
+    #: Fields added after release, with their "not asked for" value. At that
+    #: value they are left out of the simple view so older peers (which
+    #: refuse unknown kind fields) and newer ones hash the same view.
+    OMITTED_AT_DEFAULT = {}
+
+    def omit_defaults(self, view: dict[str, tp.Any]) -> dict[str, tp.Any]:
+        for name, default in self.OMITTED_AT_DEFAULT.items():
+            if name in view and view[name] == default:
+                del view[name]
+        return view
+
+    def dump_to_simple_view(self, *args, **kwargs):
+        return self.omit_defaults(super().dump_to_simple_view(*args, **kwargs))
+
 
 class LibvirtPoolDriverSpec(AbstractPoolDriverSpec):
     KIND = "libvirt"
@@ -450,6 +464,14 @@ class LibvirtPoolDriverSpec(AbstractPoolDriverSpec):
         types.AllowNone(types.String(max_length=255)),
         default=None,
     )
+    # Plug overlay ports into the OVS br-int (iface-id = port uuid);
+    # flat/boot ports keep the classic libvirt network path.
+    ovs = properties.property(
+        types.Boolean(),
+        default=False,
+    )
+
+    OMITTED_AT_DEFAULT = {"ovs": False}
 
 
 class StoragePoolEntry(common_types.SchematicType):
@@ -487,6 +509,16 @@ class DummyPoolDriverSpec(AbstractPoolDriverSpec):
     KIND = "dummy"
 
 
+class PoolDriverSpecType(types_dynamic.KindModelType):
+    """Kind type that serialises through the spec's `omit_defaults`.
+
+    The stock kind type walks the properties itself and never reaches it.
+    """
+
+    def to_simple_type(self, value):
+        return value.omit_defaults(super().to_simple_type(value))
+
+
 class MachinePool(
     models.ModelWithUUID,
     models.ModelWithNameDesc,
@@ -496,8 +528,8 @@ class MachinePool(
 
     driver_spec = properties.property(
         types_dynamic.KindModelSelectorType(
-            types_dynamic.KindModelType(LibvirtPoolDriverSpec),
-            types_dynamic.KindModelType(ExordosLocalHyperDriverSpec),
+            PoolDriverSpecType(LibvirtPoolDriverSpec),
+            PoolDriverSpecType(ExordosLocalHyperDriverSpec),
             types_dynamic.KindModelType(DummyPoolDriverSpec),
         ),
         required=True,
@@ -778,8 +810,8 @@ class MetaPool(meta.MetaCoordinatorDataPlaneModel):
 
     driver_spec = properties.property(
         types_dynamic.KindModelSelectorType(
-            types_dynamic.KindModelType(LibvirtPoolDriverSpec),
-            types_dynamic.KindModelType(ExordosLocalHyperDriverSpec),
+            PoolDriverSpecType(LibvirtPoolDriverSpec),
+            PoolDriverSpecType(ExordosLocalHyperDriverSpec),
             types_dynamic.KindModelType(DummyPoolDriverSpec),
         ),
         required=True,
@@ -875,6 +907,13 @@ class MetaPool(meta.MetaCoordinatorDataPlaneModel):
         # Actually we do nothing to configure or dump to pool at the moment
         # but we need to synchronize the pool state since it will be used by
         # machines and volumes as their dependencies.
+        self.restore_from_dp(**kwargs)
+
+    def update_on_dp(self, **kwargs) -> None:
+        """Update the pool."""
+        # Nothing to configure, but an update is built from the target alone:
+        # without this the pool reports zero cores and every machine and
+        # volume resolving through it is reported missing.
         self.restore_from_dp(**kwargs)
 
 
@@ -1241,6 +1280,9 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
 class MetaMachine(meta.MetaCoordinatorDataPlaneModel):
     """Machine meta model."""
 
+    #: `port_info` keys the data plane cannot observe; kept as-is on refresh.
+    DP_OPAQUE_PORT_INFO = ("ipv4", "mask", "uuid", "overlay")
+
     name = properties.property(types.String(max_length=255), default="")
     cores = properties.property(types.Integer(min_value=0, max_value=4096), default=0)
     ram = properties.property(types.Integer(min_value=0), default=0)
@@ -1263,6 +1305,9 @@ class MetaMachine(meta.MetaCoordinatorDataPlaneModel):
     )
     project_id = properties.property(types.UUID(), required=True, read_only=True)
     port_info = properties.property(types.Dict(), default=dict)
+    ports_info = properties.property(
+        types.AllowNone(types.TypedList(types.Dict())), default=None
+    )
 
     @property
     def _is_core_machine(self) -> bool:
@@ -1275,27 +1320,35 @@ class MetaMachine(meta.MetaCoordinatorDataPlaneModel):
         core_machine_name_prefix = "core-set-node"
         return self.name.startswith(core_machine_name_prefix)
 
-    def _port(self) -> Port:
-        ipv4 = (
-            netaddr.IPAddress(self.port_info["ipv4"])
-            if self.port_info.get("ipv4")
-            else None
-        )
-        mask = (
-            netaddr.IPAddress(self.port_info["mask"])
-            if self.port_info.get("mask")
-            else None
-        )
+    def _port(self, port_info: dict | None = None) -> Port:
+        port_info = self.port_info if port_info is None else port_info
+        ipv4 = netaddr.IPAddress(port_info["ipv4"]) if port_info.get("ipv4") else None
+        mask = netaddr.IPAddress(port_info["mask"]) if port_info.get("mask") else None
 
-        return Port(
+        port = Port(
+            # The real uuid is the OVS iface-id the SDN agent resolves by.
+            uuid=(
+                sys_uuid.UUID(port_info["uuid"])
+                if port_info.get("uuid")
+                else sys_uuid.uuid4()
+            ),
             subnet=sys_uuid.uuid4(),
             ipv4=ipv4,
             mask=mask,
-            mac=self.port_info["mac"],
+            mac=port_info["mac"],
             status=PortStatus.ACTIVE,
             project_id=self.project_id,
-            source=self.port_info.get("source"),
+            source=port_info.get("source"),
         )
+        # `subnet` is a placeholder, so overlay-ness travels as an answer.
+        if "overlay" in port_info:
+            port.overlay = bool(port_info["overlay"])
+        return port
+
+    def _ports(self) -> tuple[Port, ...]:
+        if self.ports_info is None:
+            return (self._port(),)
+        return tuple(self._port(info) for info in self.ports_info)
 
     def _create_machine(
         self,
@@ -1318,13 +1371,50 @@ class MetaMachine(meta.MetaCoordinatorDataPlaneModel):
         self.status = dp_machine.status
         self.boot = dp_machine.boot
 
+        if self.ports_info is not None:
+            expected = {str(info["mac"]).lower(): info for info in self.ports_info}
+            observed = {str(port.mac).lower(): port for port in ports}
+            refreshed = []
+            for mac in [*expected, *(mac for mac in observed if mac not in expected)]:
+                if mac not in observed:
+                    continue
+                port = observed[mac]
+                info = expected.get(mac, {})
+                refreshed.append(
+                    {
+                        **info,
+                        "mac": port.mac,
+                        "source": info.get("source")
+                        if info.get("overlay")
+                        else port.source,
+                    }
+                )
+            self.ports_info = refreshed
+            # Preserve the compatibility primary projection by MAC, not row order.
+            ports = [
+                port
+                for port in ports
+                if str(port.mac).lower() == str(self.port_info.get("mac", "")).lower()
+            ]
+
         for port in ports:
-            # Only MAC and source are available in the data plane
+            # Only MAC and source are observable in the data plane; any other
+            # key dropped here leaves target != actual forever and the machine
+            # loops on update_on_dp without converging.
+            preserved = {
+                key: self.port_info[key]
+                for key in self.DP_OPAQUE_PORT_INFO
+                if key in self.port_info
+            }
+            # On an overlay port libvirt always reports `br-int` as source,
+            # never what the control plane sent (the subnet); taking it
+            # would loop the same way.
+            if self.port_info.get("overlay") and "source" in self.port_info:
+                preserved["source"] = self.port_info["source"]
             self.port_info = {
-                "ipv4": self.port_info.get("ipv4"),
-                "mask": self.port_info.get("mask"),
                 "mac": port.mac,
                 "source": port.source,
+                **preserved,
             }
 
             # TODO(akremenetsky): Support multiple interfaces
@@ -1383,6 +1473,7 @@ class MetaMachine(meta.MetaCoordinatorDataPlaneModel):
             "pool",
             "project_id",
             "port_info",
+            "ports_info",
             "image",
             "name",
         }
@@ -1443,7 +1534,7 @@ class MetaMachine(meta.MetaCoordinatorDataPlaneModel):
 
         # TODO(akremenetsky): This simplest implementation is fine while
         # we have only single flat network.
-        ports = (self._port(),)
+        ports = self._ports()
 
         self._create_machine(driver, dp_machine, pool_volumes, ports)
         self._allocate_resources(pool, self.cores, self.ram)
@@ -1465,7 +1556,8 @@ class MetaMachine(meta.MetaCoordinatorDataPlaneModel):
         # NOTE(akremenetsky): The current implementation support single connection
         # but machines in core set have two connections. They are for main and boot
         # network. So just trunk the second port due to current limitation.
-        dp_ports = dp_ports[:1]
+        if self.ports_info is None:
+            dp_ports = dp_ports[:1]
 
         self._from_dp_machine(dp_machine, dp_ports)
 
@@ -1488,6 +1580,16 @@ class MetaMachine(meta.MetaCoordinatorDataPlaneModel):
         dp_machine: Machine = pool.dp_machine_map[self.uuid]
         driver: AbstractPoolDriver = pool.load_driver()
         unknown_action = True
+
+        if self.ports_info is not None:
+            desired = {str(p.mac).lower(): p for p in self._ports()}
+            actual = {str(p.mac).lower(): p for p in pool.dp_port_map[self.uuid]}
+            for mac in actual.keys() - desired.keys():
+                driver.detach_port(dp_machine, actual[mac])
+                unknown_action = False
+            for mac in desired.keys() - actual.keys():
+                driver.attach_port(dp_machine, desired[mac])
+                unknown_action = False
 
         # Cores
         if self.cores != dp_machine.cores:
@@ -1553,7 +1655,7 @@ class MetaMachine(meta.MetaCoordinatorDataPlaneModel):
 
                 # The node is going to be updated. The update process requires
                 # to switch the node into the boot network.
-                driver.recreate_machine(dp_machine, ports=(self._port(),))
+                driver.recreate_machine(dp_machine, ports=self._ports())
                 LOG.info("The machine %s image updated.", self.uuid)
             else:
                 # TODO(akremenetsky): Update machine meta/description but don't recreate
@@ -1569,7 +1671,7 @@ class MetaMachine(meta.MetaCoordinatorDataPlaneModel):
             dp_machine.boot = self.boot
             # The node has been updated.
             # Switch back the node into the main network.
-            driver.recreate_machine(dp_machine, ports=(self._port(),))
+            driver.recreate_machine(dp_machine, ports=self._ports())
             LOG.info("The machine %s boot mode updated.", self.uuid)
 
         if unknown_action:

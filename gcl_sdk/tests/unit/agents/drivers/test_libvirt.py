@@ -370,3 +370,183 @@ def test_recreate_preserves_global_disk_order_across_pools():
         assert disk_paths() == before
     finally:
         driver.delete_machine(machine, delete_volumes=True)
+
+
+def test_interface_xml_ovs_virtualport_carries_iface_id():
+    xml = libvirt_driver.XMLLibvirtInstance.interface_xml(
+        iface_type="bridge",
+        source="br-int",
+        mac="52:54:00:aa:bb:cc",
+        interface_id="11111111-2222-3333-4444-555555555555",
+    )
+    iface = ET.fromstring(xml)
+    assert iface.find("source").get("bridge") == "br-int"
+    vport = iface.find("virtualport")
+    assert vport is not None and vport.get("type") == "openvswitch"
+    params = vport.find("parameters")
+    assert params.get("interfaceid") == "11111111-2222-3333-4444-555555555555"
+
+
+def test_an_overlay_port_is_plugged_parked_not_as_a_trunk():
+    """Untagged, an OVS port is a trunk: from the moment libvirt plugs the
+    tap until the evpn agent tags it, the guest could send into and hear
+    every tenant's VLAN on br-int. It waits on a VLAN the agent never
+    hands out."""
+    xml = libvirt_driver.XMLLibvirtInstance.interface_xml(
+        iface_type="bridge",
+        source="br-int",
+        mac="52:54:00:aa:bb:cc",
+        interface_id="11111111-2222-3333-4444-555555555555",
+    )
+    tags = ET.fromstring(xml).findall("vlan/tag")
+    assert [t.get("id") for t in tags] == ["4095"]
+    assert libvirt_driver.OVS_PARKING_VLAN not in range(1, 4095)
+
+
+def test_interface_xml_without_id_has_no_virtualport():
+    xml = libvirt_driver.XMLLibvirtInstance.interface_xml(
+        iface_type="bridge", source="br0", mac="52:54:00:aa:bb:cc"
+    )
+    assert ET.fromstring(xml).find("virtualport") is None
+    assert ET.fromstring(xml).find("vlan") is None
+
+
+def _driver_with(spec_kwargs, existing_networks=()):
+    drv = object.__new__(libvirt_driver.LibvirtPoolDriver)
+    drv._spec = pool_base.LibvirtPoolDriverSpec(
+        network="exordos-core-net",
+        storage_pool="default",
+        connection_uri="qemu:///system",
+        **spec_kwargs,
+    )
+
+    client = mock.MagicMock()
+
+    def lookup(name):
+        if name in existing_networks:
+            return mock.MagicMock()
+        raise libvirt_driver.libvirt.libvirtError("no network")
+
+    client.networkLookupByName.side_effect = lookup
+    drv._client_instance = client
+    client.isAlive.return_value = 1
+    return drv
+
+
+def _port(source, overlay=False):
+    port = pool_base.Port(
+        project_id=sys_uuid.UUID("12345678-c625-4fee-81d5-f691897b8142"),
+        source=source,
+        mac=pool_base.Port.generate_mac(),
+    )
+    port.overlay = overlay
+    return port
+
+
+def test_iface_args_overlay_port_goes_to_br_int():
+    """A port of an overlay network: bridge br-int + openvswitch
+    virtualport (iface-id)."""
+
+    drv = _driver_with({"ovs": True})
+    port = _port("private", overlay=True)
+    args = drv._iface_args(port)
+    assert args["iface_type"] == "bridge"
+    assert args["source"] == "br-int"
+    assert args["interface_id"] == str(port.uuid)
+
+
+def test_iface_args_boot_port_keeps_network_path():
+    """A boot/flat port must NOT get a virtualport even on an ovs pool —
+    it would break the netboot NIC."""
+
+    drv = _driver_with({"ovs": True})
+    port = _port("exordos-core-boot-net")
+    args = drv._iface_args(port)
+    assert args["iface_type"] == "network"
+    assert args["source"] == "exordos-core-boot-net"
+    assert args["interface_id"] is None
+
+
+def test_iface_args_flat_subnet_without_libvirt_network_is_not_overlay():
+    """The regression that replaced a guess with an answer.
+
+    A subnet of a flat network that no libvirt network is named after used
+    to be mistaken for an overlay port and plugged into br-int, where
+    nothing is wired — silently, the guest simply unreachable. It has to
+    take the classic path, so libvirt refuses the unknown network aloud.
+    """
+
+    drv = _driver_with({"ovs": True})
+    port = _port("fip-pool")
+    args = drv._iface_args(port)
+    assert args["iface_type"] == "network"
+    assert args["source"] == "fip-pool"
+    assert args["interface_id"] is None
+
+
+def test_iface_args_non_ovs_pool_unchanged():
+    drv = _driver_with({})
+    port = _port("private", overlay=True)
+    args = drv._iface_args(port)
+    assert args["iface_type"] == "network"
+    assert args["interface_id"] is None
+
+
+def test_a_classic_port_without_a_source_takes_the_fallback():
+    drv = _driver_with({})
+    port = _port(None)
+
+    assert drv._iface_args(port)["source"] is None
+    assert drv._iface_args(port, fallback_source="br-hot")["source"] == "br-hot"
+
+
+def test_attaching_a_port_without_a_source_uses_the_pools_iface_source():
+    drv = _driver_with({"iface_source": "br-hot"})
+    domain = drv._client_instance.lookupByUUIDString.return_value
+    machine = mock.MagicMock(uuid=sys_uuid.uuid4())
+
+    drv.attach_port(machine, _port(None))
+
+    iface = ET.fromstring(domain.attachDeviceFlags.call_args.args[0])
+    assert iface.find("source").get("network") == "br-hot"
+
+
+def _rendered_iface(drv, port, rom_on_host):
+    with mock.patch.object(libvirt_driver.os.path, "exists", return_value=rom_on_host):
+        args = drv._iface_args(port)
+    return ET.fromstring(libvirt_driver.XMLLibvirtInstance.interface_xml(**args))
+
+
+def test_a_flat_guest_of_an_sdn_pool_boots_from_the_pools_rom():
+    """The iPXE ROM is an overlay guest's; a flat guest of the same pool
+    renders what it did before the pool served an overlay."""
+    port = _port("exordos-core-net")
+    for spec in ({"ovs": True}, {}):
+        assert _rendered_iface(_driver_with(spec), port, True).find("rom") is None
+
+    drv = _driver_with({"ovs": True, "iface_rom_file": "/pool.rom"})
+    rom = _rendered_iface(drv, port, True).find("rom")
+    assert rom.get("file") == "/pool.rom"
+
+
+def test_an_overlay_guest_boots_from_the_ipxe_rom_the_host_has():
+    drv = _driver_with({"ovs": True, "iface_rom_file": "/pool.rom"})
+    port = _port("private", overlay=True)
+
+    rom = _rendered_iface(drv, port, True).find("rom")
+    assert rom.get("file") == libvirt_driver.OVERLAY_IPXE_ROM
+    assert _rendered_iface(drv, port, False).find("rom").get("file") == "/pool.rom"
+
+
+def test_a_port_without_the_overlay_answer_takes_the_classic_path():
+    """The agent rebuilds a port from a few fields and a placeholder
+    subnet, so the answer has to travel with it. Absent, the classic
+    path is the safe reading."""
+    drv = _driver_with({"ovs": True})
+
+    bare = pool_base.Port(
+        project_id=sys_uuid.UUID("12345678-c625-4fee-81d5-f691897b8142"),
+        source="private",
+        mac=pool_base.Port.generate_mac(),
+    )
+    assert drv._iface_args(bare)["interface_id"] is None

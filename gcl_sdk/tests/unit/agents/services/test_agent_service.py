@@ -599,3 +599,46 @@ class TestReadFailureProtection:
         result = agent._cap_driver_iteration(driver, payload, collected_payload)
 
         assert result == set()
+
+
+class TestFactProjectionUpdate:
+    def test_iteration_updates_hash_when_only_target_fields_change(self):
+        resource_uuid = sys_uuid.uuid4()
+        value = {"uuid": str(resource_uuid), "network": "net", "subnet": "subnet"}
+        previous = models.Resource.from_value(
+            value, KIND, target_fields=frozenset({"uuid", "network"})
+        )
+        current = models.Resource.from_value(
+            value, KIND, target_fields=frozenset({"uuid", "subnet"})
+        )
+        assert previous.full_hash == current.full_hash
+        assert previous.hash != current.hash
+
+        payload = models.Payload.empty()
+        payload.add_caps_resources([current])
+        payload.add_facts_resources([previous])
+        payload.calculate_hash()
+        driver = MagicMock()
+        driver.get_capabilities.return_value = [KIND]
+        driver.dependent_capabilities.return_value = False
+        driver.list.return_value = [current]
+        orch = MagicMock()
+        orch.agents_get_payload.return_value = payload
+        agent = _make_service(caps_drivers=[driver], orch_client=orch)
+
+        agent._iteration()
+
+        orch.resources_update.assert_called_once()
+        args, kwargs = orch.resources_update.call_args
+        assert args == (KIND, str(resource_uuid))
+        assert kwargs["hash"] == current.hash
+        assert kwargs["full_hash"] == previous.full_hash
+
+        # The next poll sees the updated fact and performs no further update.
+        orch.reset_mock()
+        payload.facts = {}
+        payload.add_facts_resources([current])
+        payload.calculate_hash()
+        orch.agents_get_payload.return_value = payload
+        agent._iteration()
+        orch.resources_update.assert_not_called()

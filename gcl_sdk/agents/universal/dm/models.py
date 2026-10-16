@@ -878,7 +878,12 @@ class TargetResourceMixin(ResourceMixin):
         extract_status: bool = True,
     ) -> TargetResource:
         tracked_at = tracked_at or datetime.datetime.now(datetime.timezone.utc)
-        _, target_data = self.get_ua_all_and_target_values()
+        all_data, target_data = self.get_ua_all_and_target_values()
+        create_only = getattr(self, "__create_only_fields__", ())
+        request = dict(target_data)
+        for field in create_only:
+            if all_data.get(field) is not None:
+                request[field] = all_data[field]
 
         if extract_status and hasattr(self, "status"):
             status = self.status
@@ -889,7 +894,7 @@ class TargetResourceMixin(ResourceMixin):
             uuid=self.get_resource_uuid(),
             kind=kind,
             res_uuid=TargetResource.gen_res_uuid(self.get_resource_uuid(), kind),
-            value=target_data,
+            value=request,
             hash=utils.calculate_hash(target_data),
             full_hash="",
             master=master,
