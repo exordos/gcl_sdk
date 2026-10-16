@@ -370,3 +370,77 @@ def test_recreate_preserves_global_disk_order_across_pools():
         assert disk_paths() == before
     finally:
         driver.delete_machine(machine, delete_volumes=True)
+
+
+class TestPowerState:
+    @pytest.mark.parametrize(
+        ("state", "expected"),
+        [
+            (libvirt_driver.libvirt.VIR_DOMAIN_RUNNING, pool_base.PowerState.ON),
+            (libvirt_driver.libvirt.VIR_DOMAIN_BLOCKED, pool_base.PowerState.ON),
+            (libvirt_driver.libvirt.VIR_DOMAIN_SHUTOFF, pool_base.PowerState.OFF),
+            (libvirt_driver.libvirt.VIR_DOMAIN_SHUTDOWN, pool_base.PowerState.UNKNOWN),
+            (libvirt_driver.libvirt.VIR_DOMAIN_PAUSED, pool_base.PowerState.UNKNOWN),
+            (libvirt_driver.libvirt.VIR_DOMAIN_CRASHED, pool_base.PowerState.UNKNOWN),
+        ],
+    )
+    def test_domain_state_to_power_state(self, state, expected):
+        domain = mock.Mock()
+        domain.state.return_value = (state, 0)
+
+        assert libvirt_driver.LibvirtPoolDriver._domain_power_state(domain) == (
+            expected
+        )
+
+    def test_shutdown_and_start_are_idempotent(self):
+        driver = _local_driver()
+        # The built-in domain of the libvirt "test" driver, it's running
+        domain = driver._client.lookupByName("test")
+        machine = pool_base.Machine(
+            uuid=sys_uuid.UUID(domain.UUIDString()),
+            project_id=sys_uuid.uuid4(),
+            name="test",
+            cores=1,
+            ram=512,
+        )
+
+        driver.shutdown_machine(machine, force=True)
+        driver.shutdown_machine(machine, force=True)
+        assert not domain.isActive()
+
+        driver.start_machine(machine)
+        driver.start_machine(machine)
+        assert domain.isActive()
+
+    def test_start_resumes_paused_domain(self):
+        driver = _local_driver()
+        # The built-in domain of the libvirt "test" driver, it's running
+        domain = driver._client.lookupByName("test")
+        machine = pool_base.Machine(
+            uuid=sys_uuid.UUID(domain.UUIDString()),
+            project_id=sys_uuid.uuid4(),
+            name="test",
+            cores=1,
+            ram=512,
+        )
+        domain.suspend()
+
+        driver.start_machine(machine)
+
+        assert domain.state()[0] == libvirt_driver.libvirt.VIR_DOMAIN_RUNNING
+
+    def test_start_wakes_up_suspended_domain(self):
+        # The "test" driver doesn't support PM suspend
+        driver = _local_driver()
+        driver._client_instance = mock.Mock()
+        domain = driver._client.lookupByUUIDString.return_value
+        domain.state.return_value = (
+            libvirt_driver.libvirt.VIR_DOMAIN_PMSUSPENDED,
+            0,
+        )
+        machine = mock.Mock(uuid=sys_uuid.uuid4())
+
+        driver.start_machine(machine)
+
+        domain.pMWakeup.assert_called_once()
+        domain.create.assert_not_called()
