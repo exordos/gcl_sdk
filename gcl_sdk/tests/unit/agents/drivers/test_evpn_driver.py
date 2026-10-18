@@ -1469,18 +1469,24 @@ def test_egress_transfer_is_deterministic_30():
     assert hostns.egress_transfer(10001)[0] != cidr
 
 
-def test_port_with_gateway_installs_vni_egress(dirs):
+@pytest.mark.parametrize("default_route", [True, False])
+def test_port_with_gateway_installs_vni_egress(dirs, default_route):
     port = _port(
+        fips=[{"public": "203.0.113.7"}],
         dhcp={
+            "default_route": default_route,
             "cidr": "10.42.0.0/24",
             "routers": [{"to": "0.0.0.0/0", "via": "10.42.0.1"}],
             "mtu": 1450,
-        }
+        },
     )
     calls = []
     with mock.patch.object(sh, "run", side_effect=_two_bridge_run(calls=calls)):
         port.dump_to_dp()
 
+    assert any("DNAT" in c and "203.0.113.7" in c for c in calls)
+    record = json.loads(Path(port._nf_record_path).read_text())
+    assert record["default_route"] is default_route
     ns = hostns.vni_ns(port.vni)
     assert any(c[:3] == ["ip", "netns", "add"] and ns in c for c in calls)
     # gateway leg plugged into the EVPN bridge with a high per-VNI ofport
