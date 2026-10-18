@@ -101,7 +101,7 @@ def _options(reply_payload):
         if code == 255:
             break
         length = data[i + 1]
-        opts[code] = data[i + 2 : i + 2 + length]
+        opts[code] = opts.get(code, b"") + data[i + 2 : i + 2 + length]
         i += 2 + length
     return opts
 
@@ -156,6 +156,77 @@ def test_record_without_default_router_omits_router_and_dns():
         )
     )
     assert 3 not in opts and 6 not in opts
+
+
+@pytest.mark.parametrize("primary", [True, False, None])
+def test_two_nic_dhcp_policy_preserves_static_routes_and_services(primary):
+    routes = [
+        {"to": "10.77.129.255/25", "via": "10.42.0.2"},
+        {"to": "0.0.0.0/0", "via": "10.42.0.254"},
+    ]
+    rec = _rec(routers=routes)
+    if primary is not None:
+        rec["default_route"] = primary
+    frame = _udp_frame(MAC_B, "0.0.0.0", "255.255.255.255", 68, 67, _dhcp_payload())
+    reply = nf.handle_dhcp(frame, 14, {MAC: rec})
+    assert reply is not None
+    payload = reply[42:]
+    opts = _options(payload)
+    assert socket.inet_ntoa(payload[16:20]) == rec["ipv4"]
+    assert socket.inet_ntoa(opts[6]) == "10.42.0.254"
+    assert struct.unpack("!H", opts[26])[0] == 1450
+    encoded = bytes([25, 10, 77, 129, 128]) + socket.inet_aton("10.42.0.2")
+    if primary is not False:
+        assert socket.inet_ntoa(opts[3]) == "10.42.0.254"
+        encoded += bytes([0]) + socket.inet_aton("10.42.0.254")
+    else:
+        assert 3 not in opts
+    assert opts[121] == encoded
+    assert rec["routers"] == routes
+
+
+@pytest.mark.parametrize("routers", [[], [{"to": "0.0.0.0/0", "via": "10.42.0.254"}]])
+def test_secondary_without_static_routes_omits_both_route_options(routers):
+    opts = _options(
+        nf.build_reply(
+            b"\x00" * 4,
+            0x8000,
+            MAC,
+            nf.ACK,
+            _rec(routers=routers, default_route=False),
+            "10.42.0.0/24",
+            "10.42.0.254",
+        )
+    )
+    assert 3 not in opts and 121 not in opts
+
+
+def test_classless_routes_over_255_octets_are_concatenated_without_loss():
+    routes = [
+        {"to": "10.77.0.%d/32" % index, "via": "10.42.0.2"} for index in range(40)
+    ]
+    reply = nf.build_reply(
+        b"\x00" * 4,
+        0x8000,
+        MAC,
+        nf.ACK,
+        _rec(routers=routes),
+        "10.42.0.0/24",
+        "10.42.0.254",
+    )
+    encoded = _options(reply)[121]
+    assert encoded == b"".join(
+        bytes([32, 10, 77, 0, index]) + socket.inet_aton("10.42.0.2")
+        for index in range(40)
+    )
+    chunks = []
+    position = 240
+    while reply[position] != 255:
+        code, length = reply[position : position + 2]
+        if code == 121:
+            chunks.append(length)
+        position += length + 2
+    assert chunks == [255, 105]
 
 
 def test_handle_dhcp_discover_yields_offer():
@@ -1378,9 +1449,17 @@ def test_nf_intercepts_only_claim_the_responder_addresses():
     destinations = ["169.254.169.254", "10.120.0.1"]
     with mock.patch.object(flows.sh, "run_flow_bundle") as bundle:
         flows.ensure_port_nf_intercepts(
-            {"dhcp": {}, "dns": {"destinations": destinations},
-             "proxy": {"ports": [33118], "destinations": destinations}},
-            7, 42, MAC, "0x1", sources=["10.120.0.2"], zone=5,
+            {
+                "dhcp": {},
+                "dns": {"destinations": destinations},
+                "proxy": {"ports": [33118], "destinations": destinations},
+            },
+            7,
+            42,
+            MAC,
+            "0x1",
+            sources=["10.120.0.2"],
+            zone=5,
         )
     intercepts = [line for line in bundle.call_args.args[0] if "tp_dst=" in line]
     for line in intercepts:
@@ -1403,9 +1482,15 @@ def test_explicit_invalid_nf_destinations_do_not_claim_arbitrary_peers(destinati
 
     with mock.patch.object(flows.sh, "run_flow_bundle") as bundle:
         flows.ensure_port_nf_intercepts(
-            {"dns": {"destinations": destinations},
-             "proxy": {"destinations": destinations}},
-            7, 42, MAC, "0x1", sources=["10.120.0.2"],
+            {
+                "dns": {"destinations": destinations},
+                "proxy": {"destinations": destinations},
+            },
+            7,
+            42,
+            MAC,
+            "0x1",
+            sources=["10.120.0.2"],
         )
     intercepts = [line for line in bundle.call_args.args[0] if "tp_dst=" in line]
     assert len(intercepts) == 1

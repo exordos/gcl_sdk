@@ -172,7 +172,11 @@ def parse_request(data):
 
 
 def _opt(code, value):
-    return bytes([code, len(value)]) + value
+    # RFC 3396 concatenates repeated instances, including splits within a route.
+    return b"".join(
+        bytes([code, len(value[offset : offset + 255])]) + value[offset : offset + 255]
+        for offset in range(0, len(value) or 1, 255)
+    )
 
 
 def _lease_seconds(rec):
@@ -215,8 +219,23 @@ def build_reply(xid, flags, client_mac, reply_type, rec, cidr, server_ip, dhcp=N
     opts += _opt(51, struct.pack("!I", _lease_seconds(dhcp or {})))
     opts += _opt(1, socket.inet_aton(str(net.netmask)))
     router = evpn_records.default_gateway(rec.get("routers"))
-    if router:
+    default_route = rec.get("default_route", True)
+    if router and default_route:
         opts += _opt(3, socket.inet_aton(router))
+    routes = bytearray()
+    for route in rec.get("routers") or []:
+        destination = route["to"]
+        network = ipaddress.IPv4Network(
+            "0.0.0.0/0" if str(destination) == "default" else str(destination),
+            strict=False,
+        )
+        if network.prefixlen == 0 and not default_route:
+            continue
+        width = network.prefixlen
+        routes += bytes([width]) + network.network_address.packed[: (width + 7) // 8]
+        routes += socket.inet_aton(str(route["via"]))
+    if routes:
+        opts += _opt(121, routes)
     # The gateway is the resolver: br-int punts its port 53 to this NF.
     dns = rec.get("dns_servers") or ([router] if router else [])
     if dns:
