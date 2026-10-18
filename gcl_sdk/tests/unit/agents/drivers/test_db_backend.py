@@ -315,3 +315,47 @@ class TestDatabaseBackendClient:
         )
         client.delete(resource)
         # No exception raised
+
+
+@pytest.mark.parametrize("method", ["get", "list", "create", "update"])
+def test_projection_runs_in_the_read_or_write_session(method):
+    obj = MagicMock()
+    obj.is_dirty.return_value = False
+    model = MagicMock()
+    model.objects.get_one.return_value = obj
+    model.objects.get_all.return_value = [obj]
+    model.objects.get_one_or_none.return_value = None if method == "create" else obj
+    model.from_ua_resource.return_value = obj
+    session = object()
+    calls = []
+
+    def project(rows, session=None):
+        calls.append((rows, session))
+        for row in rows:
+            row.observed = "ready"
+
+    model.project_observations = project
+    spec = ModelSpec(model, "node", filters={})
+    client = DatabaseBackendClient([spec], MagicMock(), session=session)
+    if method == "list":
+        # An explicit nonempty filter enables listing.
+        spec = spec._replace(filters={"project_id": dm_filters.EQ("p1")})
+        client = DatabaseBackendClient([spec], MagicMock(), session=session)
+        result = client.list("node")
+        assert result == [obj]
+    else:
+        result = getattr(client, method)(_make_resource("node"))
+        assert result is obj
+    assert calls == [([obj], session)]
+    assert obj.observed == "ready"
+
+
+def test_collection_specs_pick_up_the_models_explicit_projector():
+    class Model:
+        @classmethod
+        def project_observations(cls, rows, session=None):
+            return rows
+
+    (spec,) = ModelSpec.from_collection([(Model, "node")], {})
+    assert len(spec) == 4
+    DatabaseBackendClient._project(spec, [], None)
