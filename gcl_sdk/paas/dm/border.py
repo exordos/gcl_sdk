@@ -33,5 +33,6 @@ class Border(models.ModelWithRequiredUUID):
     snat_rules = properties.property(ra_types.List(), default=list)
     # [{proto, public_ip, listen_port, to_host, to_port}]
     forwards = properties.property(ra_types.List(), default=list)
-    # [{to, via}]
+    # [{to, via}] — unused, but kept so the agent's hash matches the core's
+    # and borders are not re-applied every iteration.
     routes = properties.property(ra_types.List(), default=list)
