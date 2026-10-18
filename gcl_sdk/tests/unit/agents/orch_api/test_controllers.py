@@ -50,7 +50,9 @@ class TestUniversalAgentsControllerCreate:
         # A client-supplied status (e.g. from an older client that still
         # sends one) must not be rejected - it's simply overridden, same
         # end result as on update.
-        controller = controllers.UniversalAgentsController(mock.MagicMock())
+        request = mock.MagicMock()
+        request.context.encryption_information.node_uuid = sys_uuid.uuid4()
+        controller = controllers.UniversalAgentsController(request)
 
         with mock.patch.object(models.UniversalAgent, "insert"):
             result = controller.create(
@@ -71,7 +73,9 @@ class TestUniversalAgentsControllerUpdate:
         # `status` is read-only over the API (see the controller's
         # fields_permissions) even though the underlying model field itself
         # stays freely writable for other in-process code (builders, etc).
-        controller = controllers.UniversalAgentsController(mock.MagicMock())
+        request = mock.MagicMock()
+        request.context.encryption_information.node_uuid = sys_uuid.uuid4()
+        controller = controllers.UniversalAgentsController(request)
         agent = mock.MagicMock()
         uuid = sys_uuid.uuid4()
 
@@ -80,7 +84,21 @@ class TestUniversalAgentsControllerUpdate:
 
         mock_get.assert_called_once_with(uuid=uuid)
         agent.update_dm.assert_called_once_with(
-            values={"name": "new-name", "status": c.AgentStatus.ACTIVE.value}
+            values={
+                "name": "new-name",
+                "status": c.AgentStatus.ACTIVE.value,
+                "node": request.context.encryption_information.node_uuid,
+            }
         )
         agent.update.assert_called_once_with()
         assert result is agent
+
+
+def test_agent_lookup_is_scoped_to_authenticated_node():
+    request = mock.MagicMock()
+    caller = sys_uuid.uuid4()
+    request.context.encryption_information.node_uuid = caller
+    controller = controllers.UniversalAgentsController(request)
+    with mock.patch.object(models.UniversalAgent, "objects") as objects:
+        controller.get(uuid=sys_uuid.uuid4())
+    assert objects.get_one.call_args.kwargs["filters"]["node"].value == caller

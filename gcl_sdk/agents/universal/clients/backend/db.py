@@ -118,10 +118,12 @@ class DatabaseBackendClient(base.AbstractBackendClient):
         filters = self._get_resource_filters(resource)
 
         try:
-            return model_spec.model.objects.get_one(
+            obj = model_spec.model.objects.get_one(
                 session=session,
                 filters=filters,
             )
+            self._project(model_spec, [obj], session)
+            return obj
         except ra_exc.RecordNotFound:
             LOG.exception("Unable to find %s %s", str(model_spec), resource.uuid)
             raise client_exc.ResourceNotFound(resource=resource)
@@ -135,10 +137,12 @@ class DatabaseBackendClient(base.AbstractBackendClient):
             return []
 
         # Get all objects for the project from the database
-        return model_spec.model.objects.get_all(
+        objects = model_spec.model.objects.get_all(
             session=session,
             filters=filters,
         )
+        self._project(model_spec, objects, session)
+        return objects
 
     def _create(
         self, session: tp.Any, resource: models.Resource
@@ -178,6 +182,7 @@ class DatabaseBackendClient(base.AbstractBackendClient):
         # Save to db
         obj.insert(session=session)
 
+        self._project(model_spec, [obj], session)
         return obj
 
     def _update(
@@ -216,7 +221,14 @@ class DatabaseBackendClient(base.AbstractBackendClient):
         if obj.is_dirty():
             obj.update(session=session)
 
+        self._project(model_spec, [obj], session)
         return obj
+
+    @staticmethod
+    def _project(spec, objects, session):
+        project = getattr(spec.model, "project_observations", None)
+        if project is not None:
+            project(objects, session=session)
 
     def _delete(self, session: tp.Any, resource: models.Resource) -> None:
         """Delete the resource."""
