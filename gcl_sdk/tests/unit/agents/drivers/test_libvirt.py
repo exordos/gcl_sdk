@@ -292,6 +292,172 @@ class TestRemoveDirectChildren:
         assert element.find(".//currentMemory").text == "2048"
 
 
+class TestResizeMachine:
+    @pytest.fixture
+    def resize_domain(self):
+        driver = _local_driver()
+        machine = pool_base.Machine(
+            uuid=sys_uuid.uuid4(),
+            project_id=sys_uuid.uuid4(),
+            name="cassi-resize",
+            cores=1,
+            ram=512,
+        )
+        xml = libvirt_driver.XMLLibvirtInstance(libvirt_driver.domain_template)
+        xml.set_uuid(machine.uuid)
+        xml.set_name(driver._machine2domain_name(machine))
+        xml.set_vcpu(machine.cores)
+        xml.set_memory(machine.ram)
+        xml.set_image("test-image")
+        xml.add_disk("/test-root.qcow2", "vda")
+        xml.add_disk("/test-data.qcow2", "vdc")
+        xml.add_interface("network", source="default", mac="52:54:00:11:22:55")
+        domain = mock.Mock()
+        domain.isActive.return_value = 1
+        client = mock.Mock()
+        client.lookupByUUIDString.return_value = domain
+        client.defineXML.return_value = domain
+        driver._client_instance = client
+        with (
+            mock.patch.object(driver, "_list_interfaces", return_value=[]),
+            mock.patch.object(driver, "list_volumes", return_value=[]),
+        ):
+            yield driver, machine, domain, client, xml
+
+    @pytest.mark.parametrize("resource,value", [("ram", 1024), ("cores", 2)])
+    @pytest.mark.parametrize("firmware", ["bios", "uefi", "uefi-source"])
+    @pytest.mark.parametrize("active", [False, True])
+    def test_resize_preserves_persistent_configuration(
+        self, resize_domain, resource, value, firmware, active
+    ):
+        driver, machine, domain, client, xml = resize_domain
+        element = ET.fromstring(xml.xml)
+        if firmware != "bios":
+            # QEMU rejects plain undefine for persistent UEFI/NVRAM.
+            domain.undefine.side_effect = libvirt.libvirtError(
+                "cannot undefine domain with nvram"
+            )
+            os = element.find("os")
+            os.set("firmware", "efi")
+            ET.SubElement(
+                os, "loader", readonly="yes", secure="yes", type="pflash"
+            ).text = "/test-firmware.fd"
+            nvram = ET.SubElement(os, "nvram", template="/test-vars.fd", format="raw")
+            if firmware == "uefi-source":
+                nvram.set("type", "file")
+                ET.SubElement(nvram, "source", file="/test-nvram.fd")
+            else:
+                nvram.text = "/test-nvram.fd"
+        # Keep the namespace prefix used by the SDK's metadata helpers.
+        ET.register_namespace("genesis", libvirt_driver.GENESIS_NS)
+        original = ET.tostring(element, encoding="unicode")
+        domain.XMLDesc.return_value = original
+        domain.isActive.return_value = int(active)
+        calls = mock.Mock()
+        calls.attach_mock(client.defineXML, "define")
+        calls.attach_mock(domain.destroy, "destroy")
+        calls.attach_mock(domain.create, "start")
+
+        getattr(driver, f"set_machine_{resource}")(machine, value)
+
+        domain.XMLDesc.assert_called_once_with(
+            libvirt.VIR_DOMAIN_XML_INACTIVE | libvirt.VIR_DOMAIN_XML_SECURE
+        )
+        domain.undefine.assert_not_called()
+        domain.undefineFlags.assert_not_called()
+        assert calls.mock_calls == [mock.call.define(mock.ANY)] + (
+            [mock.call.destroy()] if active else []
+        ) + [mock.call.start()]
+        updated = ET.fromstring(client.defineXML.call_args.args[0])
+        assert getattr(machine, resource) == value
+        if resource == "ram":
+            assert updated.find("memory").text == str(value)
+            assert updated.find("memory").get("unit") == "MiB"
+            assert updated.find("currentMemory").text == str(value)
+            assert updated.find(f".//{{{libvirt_driver.GENESIS_NS}}}mem").text == str(
+                value
+            )
+            tags = ["memory", "currentMemory", f"{{{libvirt_driver.GENESIS_NS}}}mem"]
+        else:
+            assert updated.find("vcpu").text == str(value)
+            assert updated.find(f".//{{{libvirt_driver.GENESIS_NS}}}vcpu").text == str(
+                value
+            )
+            tags = ["vcpu", f"{{{libvirt_driver.GENESIS_NS}}}vcpu"]
+        # Everything except the requested resource and its SDK metadata
+        # must survive, including firmware, disk order and device addresses.
+        for root in (element, updated):
+            for parent in root.iter():
+                for child in list(parent):
+                    if child.tag in tags:
+                        parent.remove(child)
+        assert ET.tostring(updated) == ET.tostring(element)
+
+    @pytest.mark.parametrize("resource,value", [("ram", 1024), ("cores", 2)])
+    def test_invalid_definition_does_not_stop_guest(
+        self, resize_domain, resource, value
+    ):
+        driver, machine, domain, client, xml = resize_domain
+        domain.XMLDesc.return_value = xml.xml
+        client.defineXML.side_effect = libvirt.libvirtError("invalid configuration")
+        original = getattr(machine, resource)
+
+        with pytest.raises(libvirt.libvirtError, match="invalid configuration"):
+            getattr(driver, f"set_machine_{resource}")(machine, value)
+
+        domain.destroy.assert_not_called()
+        domain.create.assert_not_called()
+        domain.undefine.assert_not_called()
+        assert getattr(machine, resource) == original
+
+    def test_stop_failure_is_not_ignored(self, resize_domain):
+        driver, machine, domain, client, xml = resize_domain
+        domain.XMLDesc.return_value = xml.xml
+        domain.destroy.side_effect = libvirt.libvirtError("cannot stop domain")
+
+        with pytest.raises(libvirt.libvirtError, match="cannot stop domain"):
+            driver.set_machine_ram(machine, 1024)
+
+        domain.create.assert_not_called()
+        domain.undefine.assert_not_called()
+        assert machine.ram == 512
+
+    @pytest.mark.parametrize("resource,value", [("ram", 1024), ("cores", 2)])
+    def test_libvirt_round_trip_preserves_pending_config(self, resource, value):
+        driver = _local_driver()
+        machine = pool_base.Machine(
+            uuid=sys_uuid.uuid4(),
+            project_id=sys_uuid.uuid4(),
+            name="cassi-resize-round-trip",
+            cores=1,
+            ram=512,
+        )
+        driver.create_machine(machine, volumes=[], ports=[])
+        domain = driver._client.lookupByUUIDString(str(machine.uuid))
+        try:
+            domain.setAutostart(False)
+            persistent = ET.fromstring(domain.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE))
+            ET.SubElement(persistent, "description").text = "pending configuration"
+            driver._client.defineXML(ET.tostring(persistent, encoding="unicode"))
+            assert ET.fromstring(domain.XMLDesc()).find("description") is None
+
+            getattr(driver, f"set_machine_{resource}")(machine, value)
+
+            updated = driver._client.lookupByUUIDString(str(machine.uuid))
+            assert updated.isActive()
+            assert updated.isPersistent()
+            assert not updated.autostart()
+            assert (
+                ET.fromstring(updated.XMLDesc()).find("description").text
+                == "pending configuration"
+            )
+            actual, _ = driver.get_machine(machine.uuid)
+            assert getattr(actual, resource) == value
+            assert actual.uuid == machine.uuid
+        finally:
+            driver.delete_machine(machine, delete_volumes=False)
+
+
 def test_domain_console_logs_to_file():
     log_path = "/var/log/libvirt/qemu/test-vm.console.log"
 
