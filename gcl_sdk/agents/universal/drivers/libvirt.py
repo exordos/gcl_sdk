@@ -1453,48 +1453,41 @@ class LibvirtPoolDriver(pool_base.AbstractPoolDriver):
     @dry_run_decorator()
     def set_machine_cores(self, machine: pool_base.Machine, cores: int) -> None:
         """Set machine cores."""
-        ports = self._list_interfaces(machine)
-        volumes = self.list_volumes(machine)
-
-        # TODO(akremenetsky): It's only for backward compatibility
-        # This part has to be removed once all machines are migrated.
-        # Or this part can be reworked to convert legacy to new format.
         domain = self._client.lookupByUUIDString(str(machine.uuid))
-        legacy_domain = self._is_legacy_domain(ET.fromstring(domain.XMLDesc()))
-
-        self.delete_machine(machine, delete_volumes=False)
-
-        machine.cores = cores
-        self.create_machine(
-            machine,
-            volumes=volumes,
-            ports=ports,
-            legacy_machine=legacy_domain,
+        xml = XMLLibvirtInstance(
+            domain.XMLDesc(
+                libvirt.VIR_DOMAIN_XML_INACTIVE | libvirt.VIR_DOMAIN_XML_SECURE
+            )
         )
+        xml.set_vcpu(cores)
+        self._resize_machine(domain, xml)
+        machine.cores = cores
         LOG.debug("The domain %s was updated with cores %s", machine.uuid, cores)
 
     @dry_run_decorator()
     def set_machine_ram(self, machine: pool_base.Machine, ram: int) -> None:
         """Set machine ram."""
-        ports = self._list_interfaces(machine)
-        volumes = self.list_volumes(machine)
-
-        # TODO(akremenetsky): It's only for backward compatibility
-        # This part has to be removed once all machines are migrated.
-        # Or this part can be reworked to convert legacy to new format.
         domain = self._client.lookupByUUIDString(str(machine.uuid))
-        legacy_domain = self._is_legacy_domain(ET.fromstring(domain.XMLDesc()))
-
-        self.delete_machine(machine, delete_volumes=False)
-
-        machine.ram = ram
-        self.create_machine(
-            machine,
-            volumes=volumes,
-            ports=ports,
-            legacy_machine=legacy_domain,
+        xml = XMLLibvirtInstance(
+            domain.XMLDesc(
+                libvirt.VIR_DOMAIN_XML_INACTIVE | libvirt.VIR_DOMAIN_XML_SECURE
+            )
         )
+        xml.set_memory(ram)
+        self._resize_machine(domain, xml)
+        machine.ram = ram
         LOG.debug("The domain %s was updated with ram %s", machine.uuid, ram)
+
+    def _resize_machine(
+        self, domain: libvirt.virDomain, xml: XMLLibvirtInstance
+    ) -> None:
+        # Redefine before stopping the guest so invalid XML leaves it running.
+        # Keep the existing definition, including firmware, NVRAM and devices;
+        # undefine/recreate both rejects UEFI domains and loses their settings.
+        updated = self._client.defineXML(xml.xml)
+        if domain.isActive():
+            domain.destroy()
+        updated.create()
 
     @dry_run_decorator()
     def reset_machine(self, machine: pool_base.Machine) -> None:
