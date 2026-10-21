@@ -292,6 +292,37 @@ class TestRemoveDirectChildren:
         assert element.find(".//currentMemory").text == "2048"
 
 
+@pytest.mark.parametrize(
+    "image_path, disk_type, source_attribute, driver_attributes",
+    [
+        (
+            "/dev/zvol/pool/disk",
+            "block",
+            "dev",
+            {
+                "name": "qemu",
+                "type": "raw",
+                "discard": "unmap",
+                "cache": "none",
+                "error_policy": "enospace",
+            },
+        ),
+        (
+            "/var/lib/libvirt/images/disk.qcow2",
+            "file",
+            "file",
+            {"name": "qemu", "type": "qcow2", "discard": "unmap"},
+        ),
+    ],
+)
+def test_disk_device_xml(image_path, disk_type, source_attribute, driver_attributes):
+    disk = ET.fromstring(libvirt_driver.XMLLibvirtInstance.disk_device_xml(image_path))
+
+    assert disk.get("type") == disk_type
+    assert disk.find("source").get(source_attribute) == image_path
+    assert disk.find("driver").attrib == driver_attributes
+
+
 def test_domain_console_logs_to_file():
     log_path = "/var/log/libvirt/qemu/test-vm.console.log"
 
