@@ -396,11 +396,13 @@ class XMLLibvirtInstance(XMLLibvirtMixin):
         device: str = "vda",
         bus: str = "virtio",
     ) -> str:
+        driver_options = {}
         if image_path.startswith("/dev/zvol/"):
             base_xml = "<disk type='block' device='disk'></disk>"
             image_format = "raw"
             document = minidom.parseString(base_xml)
             cls.document_set_tag(document, "source", dev=image_path)
+            driver_options = {"cache": "none", "error_policy": "enospace"}
         else:
             base_xml = "<disk type='file' device='disk'></disk>"
             image_format = "qcow2"
@@ -414,6 +416,7 @@ class XMLLibvirtInstance(XMLLibvirtMixin):
             name="qemu",
             type=image_format,
             discard="unmap",  # Support trimming of unused blocks
+            **driver_options,
         )
 
         return document.firstChild.toxml()
