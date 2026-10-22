@@ -525,6 +525,9 @@ class NodeSet(
         default=pc.NodeSetType.SET.value,
     )
     nodes = properties.property(ra_types.Dict(), default=dict)
+    network_subnet = properties.property(
+        ra_types.AllowNone(ra_types.UUID()), default=None
+    )
 
     @classmethod
     def get_resource_kind(cls) -> str:
@@ -554,6 +557,60 @@ class NodeSet(
         if self.default_network is None:
             fields = fields - frozenset(("default_network",))
         return fields
+
+
+class SecurityGroup(
+    ra_models.ModelWithRequiredUUID,
+    ra_models.ModelWithProject,
+    ra_models.ModelWithNameDesc,
+    ua_models.TargetResourceKindAwareMixin,
+):
+    """A service-owned Core security group."""
+
+    @classmethod
+    def get_resource_kind(cls) -> str:
+        return "security_group"
+
+    def get_resource_target_fields(self) -> tp.Collection[str]:
+        return frozenset(("uuid", "project_id", "name", "description"))
+
+
+class SecurityGroupRule(
+    ra_models.ModelWithRequiredUUID,
+    ra_models.ModelWithProject,
+    ua_models.TargetResourceKindAwareMixin,
+):
+    """An independent allow rule of a Core security group."""
+
+    security_group = properties.property(ra_types.UUID(), required=True)
+    direction = properties.property(ra_types.Enum(("ingress", "egress")), required=True)
+    protocol = properties.property(
+        ra_types.Enum(("any", "tcp", "udp", "icmp")), default="any"
+    )
+    port = properties.property(
+        ra_types.AllowNone(ra_types.Integer(min_value=1, max_value=65535)), default=None
+    )
+    remote_ip = properties.property(
+        ra_types.AllowNone(ra_types.String(max_length=43)), default=None
+    )
+    remote_group_id = properties.property(
+        ra_types.AllowNone(ra_types.UUID()), default=None
+    )
+
+    @classmethod
+    def get_resource_kind(cls) -> str:
+        return "security_group_rule"
+
+    def get_resource_target_fields(self) -> tp.Collection[str]:
+        required = {"uuid", "project_id", "security_group", "direction", "protocol"}
+        return frozenset(
+            required
+            | {
+                key
+                for key in ("port", "remote_ip", "remote_group_id")
+                if getattr(self, key) is not None
+            }
+        )
 
 
 class AbstractTarget(types_dynamic.AbstractKindModel, ra_models.SimpleViewMixin):

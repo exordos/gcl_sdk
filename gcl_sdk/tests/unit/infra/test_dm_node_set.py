@@ -73,3 +73,13 @@ def test_node_and_nodeset_have_no_networking_field():
     for model in (models.Node, models.NodeSet):
         assert "networking" not in model.properties.properties
     assert "networking" not in _node_set().get_resource_target_fields()
+
+
+def test_resolved_subnet_is_observed_without_becoming_a_target():
+    node_set = _node_set(
+        network_subnet=sys_uuid.uuid4(),
+        default_network={"project_id": str(sys_uuid.uuid4())},
+    )
+    value, target = node_set.get_ua_all_and_target_values()
+    assert value["network_subnet"] == str(node_set.network_subnet)
+    assert "network_subnet" not in target
