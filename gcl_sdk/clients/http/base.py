@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import abc
 import base64
-import http as httplib
 import typing as tp
 from urllib.parse import urljoin
 import uuid as sys_uuid
@@ -218,20 +217,20 @@ class CollectionBaseClient:
 
     def _request(
         self,
-        method: httplib.HTTPMethod,
+        method: str,
         url: str,
         data: dict[str, tp.Any] | None = None,
         json: dict[str, tp.Any] | None = None,
         params: dict[str, tp.Any] | None = None,
         headers: dict[str, str] | None = None,
     ) -> req_models.Response:
-        if method == httplib.HTTPMethod.POST:
+        if method == "POST":
             requester = self._http_client.post
-        elif method == httplib.HTTPMethod.GET:
+        elif method == "GET":
             requester = self._http_client.get
-        elif method == httplib.HTTPMethod.PUT:
+        elif method == "PUT":
             requester = self._http_client.put
-        elif method == httplib.HTTPMethod.DELETE:
+        elif method == "DELETE":
             requester = self._http_client.delete
         else:
             raise ValueError(f"Method {method} is not supported")
@@ -267,14 +266,14 @@ class CollectionBaseClient:
 
     def get(self, collection: str, uuid: sys_uuid.UUID) -> dict[str, tp.Any]:
         url = self.resource_url(collection, uuid)
-        resp = self._request(httplib.HTTPMethod.GET, url)
+        resp = self._request("GET", url)
         return resp.json()
 
     def filter(
         self, collection: str, **filters: dict[str, tp.Any]
     ) -> list[dict[str, tp.Any]]:
         resp = self._request(
-            httplib.HTTPMethod.GET,
+            "GET",
             self._collection_url(collection),
             params=filters,
         )
@@ -282,7 +281,7 @@ class CollectionBaseClient:
 
     def create(self, collection: str, data: dict[str, tp.Any]) -> dict[str, tp.Any]:
         resp = self._request(
-            httplib.HTTPMethod.POST,
+            "POST",
             self._collection_url(collection),
             json=data,
         )
@@ -295,12 +294,12 @@ class CollectionBaseClient:
         **params: dict[str, tp.Any],
     ) -> dict[str, tp.Any]:
         url = self.resource_url(collection, uuid)
-        resp = self._request(httplib.HTTPMethod.PUT, url, json=params)
+        resp = self._request("PUT", url, json=params)
         return resp.json()
 
     def delete(self, collection: str, uuid: sys_uuid.UUID) -> None:
         url = self.resource_url(collection, uuid)
-        self._request(httplib.HTTPMethod.DELETE, url)
+        self._request("DELETE", url)
 
     def do_action(
         self,
@@ -315,9 +314,9 @@ class CollectionBaseClient:
 
         if invoke:
             action_url = urljoin(action_url + "/", self.INVOKE_KEY)
-            resp = self._request(httplib.HTTPMethod.POST, action_url, json=kwargs)
+            resp = self._request("POST", action_url, json=kwargs)
         else:
-            resp = self._request(httplib.HTTPMethod.GET, action_url, params=kwargs)
+            resp = self._request("GET", action_url, params=kwargs)
 
         # Try to convert response to json
         resp.raise_for_status()
