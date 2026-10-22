@@ -593,6 +593,16 @@ class LibvirtPoolDriver(pool_base.AbstractPoolDriver):
     def _console_log_path(self, machine: pool_base.Machine) -> str:
         return f"{CONSOLE_LOG_DIR}/{self._machine2domain_name(machine)}.console.log"
 
+    @staticmethod
+    def _domain_power_state(domain: libvirt.virDomain) -> pool_base.PowerState:
+        state, _ = domain.state()
+        if state in (libvirt.VIR_DOMAIN_RUNNING, libvirt.VIR_DOMAIN_BLOCKED):
+            return pool_base.PowerState.ON
+        if state == libvirt.VIR_DOMAIN_SHUTOFF:
+            return pool_base.PowerState.OFF
+        # Shutting down, paused, crashed, suspended and so on
+        return pool_base.PowerState.UNKNOWN
+
     def _domain2machine(
         self, domain: libvirt.virDomain, element: tp.Optional[ET.Element] = None
     ) -> tp.Tuple[pool_base.Machine, tp.Tuple[pool_base.Port, ...]]:
@@ -648,6 +658,7 @@ class LibvirtPoolDriver(pool_base.AbstractPoolDriver):
             image=image,
             # TODO(akremenetsky): Form status from domain state
             status=pool_base.MachineStatus.ACTIVE.value,
+            power_state=self._domain_power_state(domain).value,
             # These fields don't make sense for data plane entities
             pool=self._pool.uuid,
             project_id=pool_base.SYSTEM_PROJECT_ID,
@@ -1516,6 +1527,10 @@ class LibvirtPoolDriver(pool_base.AbstractPoolDriver):
     def shutdown_machine(self, machine: pool_base.Machine, force: bool = False) -> None:
         """Shutdown the machine."""
         domain = self._client.lookupByUUIDString(str(machine.uuid))
+        if not domain.isActive():
+            LOG.debug("The domain %s is already shut off", machine.uuid)
+            return
+
         if force:
             domain.destroy()
         else:
@@ -1526,6 +1541,10 @@ class LibvirtPoolDriver(pool_base.AbstractPoolDriver):
     def start_machine(self, machine: pool_base.Machine) -> None:
         """Start the machine."""
         domain = self._client.lookupByUUIDString(str(machine.uuid))
+        if domain.isActive():
+            LOG.debug("The domain %s is already running", machine.uuid)
+            return
+
         domain.create()
         LOG.debug("The domain %s was started", machine.uuid)
 

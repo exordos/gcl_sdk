@@ -44,6 +44,19 @@ class NodeType(str, enum.Enum):
     HW = "HW"
 
 
+class PowerState(str, enum.Enum):
+    ON = "ON"
+    OFF = "OFF"
+    # Target only. A request to reboot the node.
+    REBOOT = "REBOOT"
+    # Actual only. The reboot is in progress.
+    REBOOTING = "REBOOTING"
+    # Actual only. The reboot has been performed.
+    REBOOTED = "REBOOTED"
+    # Actual only. Paused, crashed, shutting down and so on.
+    UNKNOWN = "UNKNOWN"
+
+
 class NodeSetType(str, enum.Enum):
     SET = "SET"
 
