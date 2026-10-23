@@ -15,9 +15,13 @@
 #    under the License.
 from __future__ import annotations
 
+import re
 import typing as tp
 import uuid as sys_uuid
 
+from cryptography import x509
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives import serialization
 from gcl_iam import algorithms as iam_algorithms
 from restalchemy.dm import models as ra_models
 from restalchemy.dm import properties
@@ -44,7 +48,7 @@ class PlainSecretConstructor(AbstractSecretConstructor):
         return plain_secret
 
 
-class Secret(
+class AbstractSecret(
     ra_models.ModelWithUUID,
     ra_models.ModelWithTimestamp,
     ra_models.ModelWithProject,
@@ -74,8 +78,58 @@ class Secret(
     )
 
 
+class Secret(
+    AbstractSecret,
+    ra_models.ModelWithTags,
+):
+    """An opaque secret whose value the platform does not interpret."""
+
+    __tablename__ = "secret_secrets"
+
+    value = properties.property(
+        ra_types.AllowNone(ra_types.String(min_length=1, max_length=10240)),
+        default=None,
+    )
+    default_value = properties.property(
+        ra_types.AllowNone(ra_types.String(min_length=1, max_length=10240)),
+        default=None,
+    )
+
+    @property
+    def effective_value(self) -> str | None:
+        """The value in effect: the explicit one, or the default behind it."""
+        return self.value if self.value is not None else self.default_value
+
+    def dump_to_simple_view(self, *args: tp.Any, **kwargs: tp.Any) -> dict[str, tp.Any]:
+        """Report the effective value as the value of the secret.
+
+        Every consumer reads the secret through this view: the agent
+        reports it as the actual state an element renders `:value` from,
+        and the builder cuts the data plane target out of it. Resolving
+        the default here is what makes a manifest default reach them all.
+        """
+        view = super().dump_to_simple_view(*args, **kwargs)
+        if "value" in view and view["value"] is None:
+            view["value"] = self.default_value
+        return view
+
+    def get_resource_target_fields(self) -> tp.Collection[str]:
+        """Return the collection of target fields.
+
+        Refer to the Resource model for more details about target fields.
+        """
+        return {
+            "uuid",
+            "name",
+            "description",
+            "project_id",
+            "constructor",
+            "value",
+        }
+
+
 class Password(
-    Secret,
+    AbstractSecret,
     ra_models.ModelWithTags,
 ):
     __tablename__ = "secret_passwords"
@@ -124,8 +178,12 @@ class DNSCoreCertificateMethod(AbstractCertificateMethod):
     KIND = "dns_core"
 
 
+class ManualCertificateMethod(AbstractCertificateMethod):
+    KIND = "manual"
+
+
 class Certificate(
-    Secret,
+    AbstractSecret,
     ra_models.ModelWithTags,
 ):
     __tablename__ = "secret_certificates"
@@ -133,6 +191,7 @@ class Certificate(
     method = properties.property(
         types_dynamic.KindModelSelectorType(
             types_dynamic.KindModelType(DNSCoreCertificateMethod),
+            types_dynamic.KindModelType(ManualCertificateMethod),
         ),
         required=True,
         default=DNSCoreCertificateMethod,
@@ -164,12 +223,48 @@ class Certificate(
     # - DP: Is the threshold overcame?
     overcome_threshold = properties.property(ra_types.Boolean(), default=False)
 
+    @staticmethod
+    def validate_manual_certificate(key: str, cert: str) -> x509.Certificate:
+        """Validate an imported PEM pair and return its leaf certificate."""
+        if not isinstance(key, str) or not isinstance(cert, str):
+            raise ValueError("manual certificates require string key and cert")
+        if not key or not cert:
+            raise ValueError("manual certificates require both key and cert")
+        private_key = serialization.load_pem_private_key(key.encode(), password=None)
+        chain = x509.load_pem_x509_certificates(cert.encode())
+        remainder = re.sub(
+            r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----",
+            "",
+            cert,
+            flags=re.DOTALL,
+        )
+        if remainder.strip():
+            raise ValueError("certificate chain contains non-certificate data")
+        for child, issuer in zip(chain, chain[1:]):
+            try:
+                child.verify_directly_issued_by(issuer)
+            except InvalidSignature as exc:
+                raise ValueError("certificate chain has an invalid signature") from exc
+        certificate = chain[0]
+        encoding = serialization.Encoding.DER
+        form = serialization.PublicFormat.SubjectPublicKeyInfo
+        if private_key.public_key().public_bytes(
+            encoding, form
+        ) != certificate.public_key().public_bytes(encoding, form):
+            raise ValueError("certificate and private key do not match")
+        return certificate
+
+    def validate(self) -> None:
+        super().validate()
+        if self.method.KIND == "manual":
+            self.validate_manual_certificate(self.key, self.cert)
+
     def get_resource_target_fields(self) -> tp.Collection[str]:
         """Return the collection of target fields.
 
         Refer to the Resource model for more details about target fields.
         """
-        return {
+        fields = {
             "method",
             "email",
             "domains",
@@ -182,9 +277,13 @@ class Certificate(
             "overcome_threshold",
         }
 
+        if self.method.KIND == "manual":
+            fields.update({"key", "cert"})
+        return fields
+
 
 class RSAKey(
-    Secret,
+    AbstractSecret,
     ra_models.ModelWithTags,
 ):
     __tablename__ = "secret_rsa_keys"
@@ -259,7 +358,7 @@ class RSAKey(
 
 
 class SSHKey(
-    Secret,
+    AbstractSecret,
     ra_models.ModelWithTags,
 ):
     """SSH key secret to be placed on the target nodes.

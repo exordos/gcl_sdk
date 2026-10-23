@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import enum
 
+SECRET_KIND = "secret"
 PASSWORD_KIND = "password"
 CERTIFICATE_KIND = "certificate"
 RSA_KEY_KIND = "rsa_key"
