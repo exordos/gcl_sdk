@@ -58,6 +58,14 @@ class AbstractCapabilityDriver(abc.ABC):
     def delete(self, resource: models.Resource) -> None:
         """Delete the resource."""
 
+    def list_lost(self, capability: str) -> list[models.Resource]:
+        """Lists resources the driver tracks but the last `list` didn't find.
+
+        They are gone from the data plane. The agent deletes those the
+        control plane no longer targets, so the driver can forget them.
+        """
+        return []
+
     def start_capability(self, capability: str) -> None:
         """Perform `capability` initialization.
 
