@@ -269,7 +269,7 @@ def cfg_load_section_map(config_file: str, section: str) -> dict[str, str]:
     Returns: {"option1": "value1", "option2": "value2"}
     """
     params = {}
-    parser = configparser.ConfigParser()
+    parser = configparser.ConfigParser(interpolation=None)
     parser.read(config_file)
 
     if not parser.has_section(section):
