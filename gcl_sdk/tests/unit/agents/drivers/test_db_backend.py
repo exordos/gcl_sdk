@@ -177,6 +177,26 @@ class TestDatabaseBackendClient:
         model_instance.insert.assert_called_once()
         assert actual is model_instance
 
+    def test_create_uses_model_converter_without_filter_injection(self):
+        kind = "config"
+        resource = _make_resource(kind)
+        model_instance = MagicMock()
+        model = MagicMock()
+        model.objects.get_one_or_none.return_value = None
+        model.from_ua_resource.return_value = model_instance
+
+        client = DatabaseBackendClient(
+            model_specs=[ModelSpec(model=model, kind=kind, filters={})],
+            tf_storage=MagicMock(),
+        )
+        client.set_session(object())
+
+        actual = client.create(resource)
+
+        model.from_ua_resource.assert_called_once_with(resource)
+        model_instance.insert.assert_called_once()
+        assert actual is model_instance
+
     def test_create_raises_already_exists(self):
         kind = "config"
         resource = _make_resource(kind)
