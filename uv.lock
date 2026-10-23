@@ -609,6 +609,7 @@ name = "gcl-sdk"
 source = { editable = "." }
 dependencies = [
     { name = "bjoern" },
+    { name = "cryptography" },
     { name = "gcl-iam" },
     { name = "gcl-looper" },
     { name = "importlib-metadata" },
@@ -654,6 +655,7 @@ test = [
 requires-dist = [
     { name = "bjoern", specifier = ">=3.2.2" },
     { name = "coverage", marker = "extra == 'test'", specifier = ">=4.0" },
+    { name = "cryptography", specifier = ">=45.0.5,<50.0.0" },
     { name = "gcl-iam", specifier = ">=1.4.0,<2.0.0" },
     { name = "gcl-looper", specifier = ">=1.0.1,<2.0.0" },
     { name = "importlib-metadata" },

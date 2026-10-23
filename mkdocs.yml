@@ -84,6 +84,7 @@ markdown_extensions:
 nav:
   - Audit: audit/audit.md
   - Events: events/events.md
+  - Secrets: secret/secret.md
   - Universal Agent:
     - Universal Agent: universal_agent/universal_agent.md
     - Universal Agent Quick start: universal_agent/universal_agent_quick_start.md

@@ -585,6 +585,38 @@ class NodeTarget(AbstractTarget):
         return [self.node]
 
 
+class NodeSetTarget(AbstractTarget):
+    KIND = "node_set"
+
+    node_set = properties.property(ra_types.UUID(), required=True)
+
+    @classmethod
+    def from_node_set(cls, node_set: sys_uuid.UUID) -> NodeSetTarget:
+        return cls(node_set=node_set)
+
+    def _fetch_nodes(self) -> list[sys_uuid.UUID]:
+        """Resolve the uuids of the nodes the set is spread over.
+
+        The SDK does not own the node inventory, so it cannot resolve
+        the set members on its own. Consumers that keep nodes in their
+        own storage must override this method.
+        """
+        raise NotImplementedError()
+
+    def target_nodes(self) -> list[sys_uuid.UUID]:
+        return self._fetch_nodes()
+
+    def owners(self) -> list[sys_uuid.UUID]:
+        """The owner of a node set config is the node set itself.
+
+        If the set is deleted, the config will be deleted as well.
+        """
+        return [self.node_set]
+
+    def are_owners_alive(self) -> bool:
+        return bool(self._fetch_nodes())
+
+
 class TextBodyConfig(AbstractContentor):
     KIND = "text"
 
