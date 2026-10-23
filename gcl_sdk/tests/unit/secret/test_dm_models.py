@@ -14,8 +14,13 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import datetime
 import uuid as sys_uuid
 
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec
 import pytest
 
 from gcl_sdk.agents.universal.drivers import ssh_key as ssh_key_driver
@@ -25,6 +30,48 @@ from gcl_sdk.secret.dm import models
 
 PROJECT = sys_uuid.uuid4()
 PUBLIC_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOSomeTestKey comment"
+
+
+def _make_pem_pair(
+    common_name: str = "example.com",
+    issuer_key: ec.EllipticCurvePrivateKey | None = None,
+    issuer_name: str | None = None,
+) -> tuple[ec.EllipticCurvePrivateKey, str, str]:
+    key = ec.generate_private_key(ec.SECP256R1())
+    now = datetime.datetime.now(datetime.timezone.utc)
+    subject = x509.Name([x509.NameAttribute(x509.NameOID.COMMON_NAME, common_name)])
+    issuer = x509.Name(
+        [x509.NameAttribute(x509.NameOID.COMMON_NAME, issuer_name or common_name)]
+    )
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(issuer)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now)
+        .not_valid_after(now + datetime.timedelta(days=1))
+        .sign(issuer_key or key, hashes.SHA256())
+    )
+    key_pem = key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    ).decode()
+    cert_pem = cert.public_bytes(serialization.Encoding.PEM).decode()
+    return key, key_pem, cert_pem
+
+
+def _make_manual_certificate(key: str | None, cert: str | None) -> models.Certificate:
+    return models.Certificate(
+        name="cert",
+        project_id=PROJECT,
+        email="hostmaster@example.com",
+        domains=["example.com"],
+        method=models.ManualCertificateMethod(),
+        key=key,
+        cert=cert,
+    )
 
 
 def _make_ssh_key(**overrides) -> models.SSHKey:
@@ -145,7 +192,90 @@ def test_certificate_builds_and_dumps():
 
     assert cert.method.kind == "dns_core"
     assert cert.expiration_threshold == 14
-    assert set(cert.get_resource_target_fields()) >= {"email", "domains", "method"}
+    fields = set(cert.get_resource_target_fields())
+    assert fields >= {"email", "domains", "method"}
+    assert not fields & {"key", "cert"}
+
+
+def test_manual_certificate_targets_key_material():
+    _, key_pem, cert_pem = _make_pem_pair()
+
+    cert = _make_manual_certificate(key_pem, cert_pem)
+
+    assert cert.method.kind == "manual"
+    assert set(cert.get_resource_target_fields()) >= {"key", "cert"}
+
+    view = cert.dump_to_simple_view()
+    assert view["method"] == {"kind": "manual"}
+    restored = models.Certificate.restore_from_simple_view(**view)
+    assert restored.method.kind == "manual"
+    assert restored.cert == cert_pem
+
+
+def test_manual_certificate_accepts_valid_chain():
+    ca_key, _, ca_pem = _make_pem_pair(common_name="ca")
+    _, key_pem, leaf_pem = _make_pem_pair(issuer_key=ca_key, issuer_name="ca")
+
+    cert = _make_manual_certificate(key_pem, leaf_pem + ca_pem)
+
+    assert cert.cert == leaf_pem + ca_pem
+
+
+def test_manual_certificate_requires_key_material():
+    _, key_pem, _ = _make_pem_pair()
+
+    with pytest.raises(ValueError, match="require string key and cert"):
+        _make_manual_certificate(key_pem, None)
+
+
+def test_manual_certificate_rejects_mismatched_pair():
+    _, key_pem, _ = _make_pem_pair()
+    _, _, other_cert_pem = _make_pem_pair()
+
+    with pytest.raises(ValueError, match="do not match"):
+        _make_manual_certificate(key_pem, other_cert_pem)
+
+
+def test_manual_certificate_rejects_broken_chain():
+    _, key_pem, leaf_pem = _make_pem_pair()
+    # Same subject as the leaf issuer, but signed by an unrelated key
+    _, _, unrelated_pem = _make_pem_pair()
+
+    with pytest.raises(ValueError, match="invalid signature"):
+        _make_manual_certificate(key_pem, leaf_pem + unrelated_pem)
+
+
+def test_manual_certificate_rejects_non_certificate_data():
+    _, key_pem, cert_pem = _make_pem_pair()
+
+    with pytest.raises(ValueError, match="non-certificate data"):
+        _make_manual_certificate(key_pem, cert_pem + "garbage\n")
+
+
+def test_secret_target_fields():
+    secret = models.Secret(name="token", project_id=PROJECT, value="v")
+
+    assert secret.status == sc.SecretStatus.NEW.value
+    assert set(secret.get_resource_target_fields()) == {
+        "uuid",
+        "name",
+        "description",
+        "project_id",
+        "constructor",
+        "value",
+    }
+
+
+def test_secret_effective_value_falls_back_to_default():
+    secret = models.Secret(name="token", project_id=PROJECT, default_value="def")
+
+    assert secret.value is None
+    assert secret.effective_value == "def"
+    assert secret.dump_to_simple_view()["value"] == "def"
+
+    secret.value = "explicit"
+    assert secret.effective_value == "explicit"
+    assert secret.dump_to_simple_view()["value"] == "explicit"
 
 
 def test_plain_secret_constructor_passthrough():
