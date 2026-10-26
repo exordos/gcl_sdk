@@ -59,10 +59,11 @@ LOCATION_TYPE_MAPPING = {
 ADD_HEADERS_MAPPING = {
     "Host": "proxy_set_header Host $host;",
     "X-Forwarded-For": "proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;",
-    "X-Forwarded-Proto": "proxy_set_header X-Forwarded-Proto $scheme;",
-    "X-Forwarded-Port": (
-        lambda vhost, route: f'proxy_set_header X-Forwarded-Port "{vhost["port"]}";'
-    ),
+    # Keep the scheme and port the client used when the request already
+    # passed another LB hop (e.g. https:443 -> http:80), see
+    # FORWARDED_HEADERS_MAPS.
+    "X-Forwarded-Proto": "proxy_set_header X-Forwarded-Proto $exordos_fwd_proto;",
+    "X-Forwarded-Port": "proxy_set_header X-Forwarded-Port $exordos_fwd_port;",
     "X-Forwarded-Prefix": (
         lambda vhost, route: (
             f'proxy_set_header X-Forwarded-Prefix "{route["value"]}";'
@@ -71,6 +72,19 @@ ADD_HEADERS_MAPPING = {
         )
     ),
 }
+# Pass through a valid incoming X-Forwarded-Proto/Port (set by a previous
+# LB hop), otherwise use the values of this hop.
+FORWARDED_HEADERS_MAPS = """\
+map $http_x_forwarded_proto $exordos_fwd_proto {
+    "~^(?<fwd_proto>https?)$" $fwd_proto;
+    default $scheme;
+}
+
+map $http_x_forwarded_port $exordos_fwd_port {
+    "~^(?<fwd_port>[0-9]+)$" $fwd_port;
+    default $server_port;
+}
+"""
 AUTH_LOCATION_PREFIX = "/_exordos_auth_"
 # These values are rendered unquoted, so only a safe subset is accepted.
 DAV_METHODS = frozenset({"PUT", "DELETE", "MKCOL", "COPY", "MOVE"})
@@ -514,7 +528,8 @@ deny all;
 """
 
     def _gen_http_defaults(self) -> str:
-        return """\
+        return (
+            """\
 ssl_session_timeout 10m;
 ssl_session_cache shared:SSL:10m;
 
@@ -524,6 +539,8 @@ map $http_upgrade $connection_upgrade {
 }
 
 """
+            + FORWARDED_HEADERS_MAPS
+        )
 
     def _gen_file_content_l7(self, vhosts, pools) -> str:
         backends = "\n".join(b for b in self._gen_backends(pools, proto_lvl="l7"))
