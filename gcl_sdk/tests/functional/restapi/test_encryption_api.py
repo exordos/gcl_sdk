@@ -22,19 +22,23 @@ import uuid as sys_uuid
 
 import pytest
 import requests
+from bazooka import exceptions as bazooka_exc
 from restalchemy.api import applications
 from restalchemy.api import controllers
 from restalchemy.api import middlewares
 from restalchemy.api import routes
 from restalchemy.api.middlewares import errors as errors_mw
 from restalchemy.api.middlewares import logging as logging_mw
+from restalchemy.dm import filters
 
 from gcl_sdk.agents.universal.api import crypto as sdk_crypto
 from gcl_sdk.agents.universal.api import middlewares as sdk_middlewares
 from gcl_sdk.agents.universal.api import packers
+from gcl_sdk.agents.universal.clients.http import status as status_client
 from gcl_sdk.agents.universal.dm import models
 from gcl_sdk.agents.universal.orch_api import routes as orch_routes
 from gcl_sdk.agents.universal.status_api import routes as status_routes
+from gcl_sdk.clients.http import base as client_base
 from gcl_sdk.tests.functional import conftest
 from gcl_sdk.tests.functional import utils as test_utils
 
@@ -237,6 +241,37 @@ class TestEncryptedStatusApi:
         yield status_api_service
 
         status_api_service.teardown_method()
+
+    def test_encrypted_client_deletes_resource_with_no_content(self, status_api):
+        key, encoded_key = sdk_crypto.generate_key_base64()
+        node = sys_uuid.uuid4()
+        models.NodeEncryptionKey(
+            uuid=node,
+            private_key=encoded_key,
+            encryption_disabled_until=datetime.datetime.now(datetime.timezone.utc)
+            - datetime.timedelta(hours=1),
+        ).insert()
+        agent = models.UniversalAgent(uuid=node, node=node, name="Encrypted agent")
+        agent.insert()
+        resource = models.Resource(
+            uuid=sys_uuid.uuid4(), kind="foo", node=node, value={"name": "foo"}
+        )
+        resource.save()
+        client = status_client.StatusAPI(
+            status_api.get_endpoint(), encryptor=client_base.Encryptor(key, node)
+        ).resources("foo")
+
+        assert client.get(resource.uuid).uuid == resource.uuid
+        client.delete(resource.uuid)
+
+        assert (
+            models.Resource.objects.get_one_or_none(
+                filters={"res_uuid": filters.EQ(resource.res_uuid)}
+            )
+            is None
+        )
+        with pytest.raises(bazooka_exc.NotFoundError):
+            client.get(resource.uuid)
 
     def test_encryption_disabled_allows_json(
         self,

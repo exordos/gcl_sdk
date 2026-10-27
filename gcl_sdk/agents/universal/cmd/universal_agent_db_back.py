@@ -27,6 +27,7 @@ from restalchemy.storage.sql import engines
 
 from gcl_sdk.agents.universal import constants as c
 from gcl_sdk.agents.universal import utils as ua_utils
+from gcl_sdk.clients.http import base as http_base
 from gcl_sdk.agents.universal.clients.backend import db as db_back
 from gcl_sdk.agents.universal.clients.orch import db as orch_db
 from gcl_sdk.agents.universal.clients.orch import http as orch_http
@@ -204,7 +205,12 @@ def main():
         else:
             encryptor = None
 
-        http_client = bazooka.Client(default_timeout=20)
+        http_client = bazooka.Client(
+            default_timeout=20,
+            auth=http_base.NodeIdentityAuth(ua_utils.node_uuid())
+            if encryptor is None
+            else None,
+        )
         orch_client = orch_http.HttpOrchClient(
             orch_endpoint=CONF[DOMAIN].orch_endpoint,
             status_endpoint=CONF[DOMAIN].status_endpoint,
