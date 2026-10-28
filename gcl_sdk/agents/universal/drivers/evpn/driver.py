@@ -30,6 +30,7 @@ Renders the control plane's `evpn_port`, `evpn_host`, `evpn_nf` and
 Tests must rebind a value (a path, `sh.run`) where it lives, not here.
 """
 
+import ipaddress
 import json
 import logging
 import os
@@ -140,9 +141,21 @@ class EvpnPort(evpn_models.EvpnPort, meta.MetaDataPlaneModel):
         return ofport
 
     def _render_client_conf(self, ofport: int) -> str:
-        # What the fabric announces for this guest: its own /32.
+        # A routed fabric resolves destination prefixes, not the guest's ARP
+        # next hop. Publish routes whose next hop is this forwarding port.
+        routes = {"%s/32" % self.ipv4}
+        if not self.port_security:
+            for route in (self.dhcp or {}).get("routers", []):
+                if str(route["via"]) != self.ipv4:
+                    continue
+                network = ipaddress.IPv4Network(str(route["to"]))
+                if (
+                    network.prefixlen
+                    and ipaddress.IPv4Address(self.ipv4) not in network
+                ):
+                    routes.add(str(network))
         return hostns.client_conf(
-            self.mac, ["%s/32" % self.ipv4], self.vni, ofport, self.imp_rt, self.exp_rt
+            self.mac, sorted(routes), self.vni, ofport, self.imp_rt, self.exp_rt
         )
 
     def _apply(self) -> None:
@@ -271,6 +284,15 @@ class EvpnPort(evpn_models.EvpnPort, meta.MetaDataPlaneModel):
         missing = []
         if not os.path.exists(self._client_conf_path):
             missing.append("client config")
+        else:
+            try:
+                with open(self._client_conf_path) as config:
+                    current = json.load(config)
+                expected = json.loads(self._render_client_conf(0))
+                if current.get("routes") != expected["routes"]:
+                    missing.append("client routes")
+            except (OSError, ValueError):
+                missing.append("client config")
         kinds = nf.nf_by_kind(self.nfs)
         if nf.serves_guests(kinds):
             if not os.path.exists(self._nf_record_path):

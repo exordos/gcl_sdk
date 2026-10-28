@@ -1853,3 +1853,22 @@ def test_boot_transport_follows_the_route_even_on_a_custom_backend_port(
     request = seen["request"]
     assert b"sentinel" not in request.data
     assert request.selector == boot_identity.RELAY_PATH
+
+
+@pytest.mark.parametrize("primary", [True, False])
+def test_metadata_netboot_has_an_on_link_route_with_multiple_nics(primary):
+    rec = _rec(default_route=primary)
+    original = list(rec["routers"])
+    reply = nf.build_reply(
+        b"\x00" * 4,
+        0x8000,
+        MAC,
+        nf.ACK,
+        rec,
+        "10.42.0.0/24",
+        "10.42.0.254",
+        dhcp={"filename": "http://169.254.169.254/boot/boot.ipxe"},
+    )
+    metadata_route = bytes([32, 169, 254, 169, 254]) + socket.inet_aton("0.0.0.0")
+    assert metadata_route in _options(reply).get(121, b"")
+    assert rec["routers"] == original
