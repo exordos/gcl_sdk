@@ -22,11 +22,31 @@ from gcl_sdk.cloud.drivers.openstack import OpenStackDriver
 
 @pytest.fixture
 def driver():
-    return OpenStackDriver(CloudConfig(uuid.uuid4(), "test"), connection=mock.Mock())
+    return OpenStackDriver(
+        CloudConfig(
+            uuid.uuid4(),
+            "https://identity.example/v3",
+            {
+                "application_credential_id": "test",
+                "application_credential_secret": "secret",
+            },
+        ),
+        connection=mock.Mock(),
+    )
 
 
 def test_connection_cannot_adopt_or_delete_another_connections_network(driver):
-    other = OpenStackDriver(CloudConfig(uuid.uuid4(), "test"), connection=driver.api)
+    other = OpenStackDriver(
+        CloudConfig(
+            uuid.uuid4(),
+            "https://identity.example/v3",
+            {
+                "application_credential_id": "test",
+                "application_credential_secret": "secret",
+            },
+        ),
+        connection=driver.api,
+    )
     network = Network(
         id=str(uuid.uuid4()), description=other.marker("network", uuid.uuid4())
     )
@@ -191,7 +211,17 @@ def test_cloud_extensions_reject_incompatible_provider_apis(monkeypatch):
         base.importlib.metadata, "entry_points", lambda **kwargs: [extension]
     )
     with pytest.raises(TypeError, match="OpenStackDriver subclass"):
-        base.load_driver(CloudConfig(uuid.uuid4(), "test", driver="incompatible"))
+        base.load_driver(
+            CloudConfig(
+                uuid.uuid4(),
+                "https://identity.example/v3",
+                {
+                    "application_credential_id": "test",
+                    "application_credential_secret": "secret",
+                },
+                driver="incompatible",
+            )
+        )
 
 
 def test_cloud_installer_recovers_from_a_failed_download_and_then_skips(tmp_path):
@@ -392,7 +422,16 @@ def test_owned_provider_session_is_closed_when_driver_is_released():
 
     connection = mock.Mock()
     with mock.patch("openstack.connect", return_value=connection):
-        driver = OpenStackDriver(CloudConfig(uuid.uuid4(), "test"))
+        driver = OpenStackDriver(
+            CloudConfig(
+                uuid.uuid4(),
+                "https://identity.example/v3",
+                {
+                    "application_credential_id": "test",
+                    "application_credential_secret": "secret",
+                },
+            )
+        )
     reference = weakref.ref(driver)
     del driver
     gc.collect()
@@ -404,7 +443,17 @@ def test_injected_provider_session_remains_owned_by_the_caller():
     import gc
 
     connection = mock.Mock()
-    driver = OpenStackDriver(CloudConfig(uuid.uuid4(), "test"), connection=connection)
+    driver = OpenStackDriver(
+        CloudConfig(
+            uuid.uuid4(),
+            "https://identity.example/v3",
+            {
+                "application_credential_id": "test",
+                "application_credential_secret": "secret",
+            },
+        ),
+        connection=connection,
+    )
     del driver
     gc.collect()
     connection.close.assert_not_called()
@@ -435,3 +484,75 @@ def test_agent_start_is_queued_before_cloud_final_for_preinstalled_images():
     )
     assert "systemctl enable --now --no-block exordos-agent.service" in command[-1]
     assert "cloud-final" not in command[-1]
+
+
+def test_provider_uses_api_credentials_without_yaml_or_environment(monkeypatch):
+    monkeypatch.setenv("OS_CLOUD", "must-not-be-loaded")
+    monkeypatch.setenv("OS_CLIENT_CONFIG_FILE", "/nonexistent/clouds.yaml")
+    monkeypatch.setenv("OS_AUTH_URL", "https://wrong.example/v3")
+    config = CloudConfig(
+        uuid.uuid4(),
+        "https://identity.example/v3",
+        {
+            "application_credential_id": "application",
+            "application_credential_secret": "private-sentinel",
+        },
+    )
+    with mock.patch(
+        "openstack.service_description.ServiceDescription._make_proxy",
+        return_value=mock.Mock(),
+    ):
+        driver = OpenStackDriver(config)
+    assert driver.api.config.get_auth_args()["auth_url"] == config.auth_url
+    assert (
+        driver.api.config.get_auth_args()["application_credential_secret"]
+        == "private-sentinel"
+    )
+    assert "private-sentinel" not in repr(config)
+
+
+@pytest.mark.parametrize(
+    "auth_type,auth",
+    [
+        ("v3applicationcredential", {}),
+        (
+            "v3applicationcredential",
+            {"application_credential_id": "id", "application_credential_secret": ""},
+        ),
+        (
+            "v3applicationcredential",
+            {
+                "application_credential_id": "id",
+                "application_credential_secret": "secret",
+                "endpoint_override": "http://other",
+            },
+        ),
+        ("v3password", {"username": "user", "password": "secret"}),
+    ],
+)
+def test_provider_rejects_incomplete_or_unknown_auth_fields(auth_type, auth):
+    with pytest.raises(ValueError):
+        CloudConfig(
+            uuid.uuid4(), "https://identity.example/v3", auth, auth_type=auth_type
+        )
+
+
+def test_provider_accepts_project_scoped_password_authentication():
+    config = CloudConfig(
+        uuid.uuid4(),
+        "https://identity.example/v3",
+        {
+            "username": "user",
+            "password": "private-sentinel",
+            "user_domain_name": "Default",
+            "project_id": "project",
+        },
+        auth_type="v3password",
+    )
+    with mock.patch(
+        "openstack.service_description.ServiceDescription._make_proxy",
+        return_value=mock.Mock(),
+    ):
+        driver = OpenStackDriver(config)
+    assert driver.api.config.get_auth_args()["project_id"] == "project"
+    assert "private-sentinel" not in repr(config)

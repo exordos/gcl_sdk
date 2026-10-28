@@ -24,7 +24,11 @@ class OpenStackDriver(CloudDriver):
             import openstack
 
             connection = openstack.connect(
-                cloud=config.cloud,
+                auth_type=config.auth_type,
+                auth=dict(config.auth, auth_url=config.auth_url),
+                interface=config.interface,
+                load_yaml_config=False,
+                load_envvars=False,
                 region_name=config.region,
                 app_name="exordos",
                 app_version="1",
