@@ -57,6 +57,59 @@ def bundles(material):
     }
 
 
+@pytest.mark.parametrize(
+    ("own_role", "peer_role", "serves"),
+    [
+        ("auto", "auto", True),
+        ("server", "client", True),
+        ("client", "server", False),
+        ("server", "auto", True),
+        ("auto", "server", False),
+        ("client", "auto", False),
+        ("auto", "client", True),
+    ],
+)
+def test_explicit_roles_override_uuid_order(own_role, peer_role, serves):
+    first, second = uuid.UUID(int=1), uuid.UUID(int=2)
+    assert openvpn.serves(first, second, own_role, peer_role) is serves
+    assert openvpn.serves(second, first, peer_role, own_role) is not serves
+
+
+@pytest.mark.parametrize(
+    ("own_role", "peer_role"),
+    [("client", "client"), ("server", "server"), ("invalid", "auto"), ([], "auto")],
+)
+def test_incompatible_roles_are_rejected(own_role, peer_role):
+    with pytest.raises(ValueError):
+        openvpn.serves(uuid.uuid4(), uuid.uuid4(), own_role, peer_role)
+
+
+def test_outbound_only_endpoint_has_no_listener_or_advertised_address(material):
+    _, nodes = material
+    first, middle, last = sorted(nodes)
+    for own, role in zip((first, middle, last), ("client", "auto", "server")):
+        nodes[own]["role"] = role
+    nodes[first]["endpoint"] = None
+    for client, server in ((first, middle), (first, last), (middle, last)):
+        nodes[client]["tls_clients"][server.hex] = openvpn.tls_key(
+            nodes[server]["tls_server_key"]
+        )
+    configs = bundles(material)
+    assert "server" not in configs[first]["services"]
+    assert configs[last]["services"] == ["server"]
+    for own, bundle in configs.items():
+        assert len(bundle["peers"]) == 2
+        for peer, state in bundle["peers"].items():
+            other = configs[uuid.UUID(peer)]["peers"][own.hex]
+            assert ("client" in state) != ("client" in other)
+    first_client = configs[first]["files"]["client-" + last.hex + ".conf"]
+    assert f"remote {nodes[last]['endpoint']} 443" in first_client
+    assert (
+        "iroute 10.250.0.0 255.255.255.0"
+        in configs[last]["files"]["ccd/" + first.hex + "-client"]
+    )
+
+
 def test_three_sites_have_one_direct_connection_for_each_pair(material):
     configs = bundles(material)
     assert (

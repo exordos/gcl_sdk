@@ -28,12 +28,17 @@ def run(*command, check=True):
     return subprocess.run(list(command), check=check, capture_output=True, text=True)
 
 
+@pytest.mark.parametrize(
+    "roles", [("auto", "auto", "auto"), ("client", "auto", "server")]
+)
 def test_full_mesh_bootstraps_without_core_and_survives_one_site_loss(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, roles
 ):
     monkeypatch.setattr(openvpn, "ROOT", tmp_path / "network-links")
     tag = uuid.uuid4().hex[:6]
     bridge = "cb" + tag
+    nat_gateway = "cn" + tag if roles[0] == "client" else None
+    nat_host = "cnw" + tag
     gateways = ["cg" + tag + str(i) for i in range(3)]
     guests = ["cv" + tag + str(i) for i in range(3)]
     ids = sorted([uuid.uuid4() for _ in range(3)])
@@ -42,6 +47,92 @@ def test_full_mesh_bootstraps_without_core_and_survives_one_site_loss(
     try:
         run("ip", "link", "add", bridge, "type", "bridge")
         run("ip", "link", "set", bridge, "up")
+        if nat_gateway:
+            run("ip", "netns", "add", nat_gateway)
+            run(
+                "ip",
+                "link",
+                "add",
+                nat_host,
+                "type",
+                "veth",
+                "peer",
+                "name",
+                "wan0",
+                "netns",
+                nat_gateway,
+            )
+            run("ip", "link", "set", nat_host, "master", bridge)
+            run("ip", "link", "set", nat_host, "up")
+            run(
+                "ip",
+                "-n",
+                nat_gateway,
+                "addr",
+                "add",
+                "198.18.230.254/24",
+                "dev",
+                "wan0",
+            )
+            run("ip", "-n", nat_gateway, "link", "set", "wan0", "up")
+            run("ip", "-n", nat_gateway, "link", "set", "lo", "up")
+            run(
+                "ip",
+                "netns",
+                "exec",
+                nat_gateway,
+                "sysctl",
+                "-qw",
+                "net.ipv4.ip_forward=1",
+            )
+            run("ip", "netns", "exec", nat_gateway, "iptables", "-P", "FORWARD", "DROP")
+            run(
+                "ip",
+                "netns",
+                "exec",
+                nat_gateway,
+                "iptables",
+                "-A",
+                "FORWARD",
+                "-m",
+                "conntrack",
+                "--ctstate",
+                "RELATED,ESTABLISHED",
+                "-j",
+                "ACCEPT",
+            )
+            run(
+                "ip",
+                "netns",
+                "exec",
+                nat_gateway,
+                "iptables",
+                "-A",
+                "FORWARD",
+                "-s",
+                "172.29.0.0/24",
+                "-o",
+                "wan0",
+                "-j",
+                "ACCEPT",
+            )
+            run(
+                "ip",
+                "netns",
+                "exec",
+                nat_gateway,
+                "iptables",
+                "-t",
+                "nat",
+                "-A",
+                "POSTROUTING",
+                "-s",
+                "172.29.0.0/24",
+                "-o",
+                "wan0",
+                "-j",
+                "MASQUERADE",
+            )
         for index, (gateway, guest, own) in enumerate(zip(gateways, guests, ids)):
             run("ip", "netns", "add", gateway)
             run("ip", "netns", "add", guest)
@@ -59,19 +150,37 @@ def test_full_mesh_bootstraps_without_core_and_survives_one_site_loss(
                 "netns",
                 gateway,
             )
-            run("ip", "link", "set", wan_host, "master", bridge)
-            run("ip", "link", "set", wan_host, "up")
+            if nat_gateway and index == 0:
+                run("ip", "link", "set", wan_host, "netns", nat_gateway)
+                run(
+                    "ip",
+                    "-n",
+                    nat_gateway,
+                    "addr",
+                    "add",
+                    "172.29.0.1/24",
+                    "dev",
+                    wan_host,
+                )
+                run("ip", "-n", nat_gateway, "link", "set", wan_host, "up")
+            else:
+                run("ip", "link", "set", wan_host, "master", bridge)
+                run("ip", "link", "set", wan_host, "up")
             run(
                 "ip",
                 "-n",
                 gateway,
                 "addr",
                 "add",
-                f"198.18.230.{index + 11}/24",
+                "172.29.0.2/24"
+                if nat_gateway and index == 0
+                else f"198.18.230.{index + 11}/24",
                 "dev",
                 wan,
             )
             run("ip", "-n", gateway, "link", "set", wan, "up")
+            if nat_gateway and index == 0:
+                run("ip", "-n", gateway, "route", "add", "default", "via", "172.29.0.1")
             run(
                 "ip",
                 "link",
@@ -110,9 +219,32 @@ def test_full_mesh_bootstraps_without_core_and_survives_one_site_loss(
                 "-j",
                 "REJECT",
             )
+            if roles[index] == "client":
+                run(
+                    "ip",
+                    "netns",
+                    "exec",
+                    gateway,
+                    "iptables",
+                    "-A",
+                    "INPUT",
+                    "-p",
+                    "tcp",
+                    "--dport",
+                    "443",
+                    "-m",
+                    "conntrack",
+                    "--ctstate",
+                    "NEW",
+                    "-j",
+                    "REJECT",
+                )
             nodes[own] = {
+                "role": roles[index],
                 "cidr": f"10.250.{index}.0/24",
-                "endpoint": f"198.18.230.{index + 11}",
+                "endpoint": None
+                if roles[index] == "client"
+                else f"198.18.230.{index + 11}",
                 "tunnel_cidr": f"100.127.{240 + index}.0/24",
                 "server": openvpn.certificate(own.hex + "-server", ca, server=True),
                 "client": openvpn.certificate(own.hex + "-client", ca),
@@ -121,7 +253,9 @@ def test_full_mesh_bootstraps_without_core_and_survives_one_site_loss(
             }
         for own in ids:
             for peer in ids:
-                if peer < own:
+                if peer != own and openvpn.serves(
+                    peer, own, nodes[peer]["role"], nodes[own]["role"]
+                ):
                     nodes[own]["tls_clients"][peer.hex] = openvpn.tls_key(
                         nodes[peer]["tls_server_key"]
                     )
@@ -190,6 +324,71 @@ def test_full_mesh_bootstraps_without_core_and_survives_one_site_loss(
                         "2",
                         f"10.250.{remote}.10",
                     )
+        # A cloud-side HTTP proxy reaches a backend behind an outbound-only
+        # gateway. The backend sees the proxy's private address, without SNAT.
+        handler = """from http.server import BaseHTTPRequestHandler
+from socketserver import TCPServer
+import urllib.request
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if {proxy}:
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({{}}))
+            body = opener.open('http://10.250.0.10:18081/', timeout=1).read()
+        else:
+            body = self.client_address[0].encode()
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(body)
+TCPServer(('{address}', {port}), Handler).serve_forever()
+"""
+        for index, port, proxy in [(0, 18081, False), (2, 18080, True)]:
+            handle = (tmp_path / (guests[index] + "-http.log")).open("w+")
+            logs.append(handle)
+            process = subprocess.Popen(
+                [
+                    "ip",
+                    "netns",
+                    "exec",
+                    guests[index],
+                    sys.executable,
+                    "-c",
+                    handler.format(
+                        proxy=proxy, address=f"10.250.{index}.10", port=port
+                    ),
+                ],
+                stdout=handle,
+                stderr=subprocess.STDOUT,
+            )
+            processes.append((gateways[index], process))
+        request = (
+            "import urllib.request; "
+            "opener=urllib.request.build_opener(urllib.request.ProxyHandler({})); "
+            "print(opener.open('http://10.250.2.10:18080/', timeout=1).read().decode())"
+        )
+        for _ in range(20):
+            response = run(
+                "ip",
+                "netns",
+                "exec",
+                guests[1],
+                sys.executable,
+                "-c",
+                request,
+                check=False,
+            )
+            if response.returncode == 0:
+                assert response.stdout.strip() == "10.250.2.10"
+                break
+            time.sleep(0.1)
+        else:
+            for log in logs:
+                log.flush()
+                log.seek(0)
+                print(log.read()[-4000:])
+            pytest.fail(
+                "Cloud proxy could not reach the on-premises backend: "
+                + response.stderr
+            )
         # Routed workloads can communicate, but a tunnel must not expose the
         # gateway host's own management listeners to another site.
         listener = subprocess.Popen(
@@ -291,6 +490,9 @@ def test_full_mesh_bootstraps_without_core_and_survives_one_site_loss(
             log.close()
         for ns in [*guests, *gateways]:
             run("ip", "netns", "del", ns, check=False)
+        if nat_gateway:
+            run("ip", "netns", "del", nat_gateway, check=False)
+            run("ip", "link", "del", nat_host, check=False)
         run("ip", "link", "del", bridge, check=False)
         for own, bundle in bundles.items():
             for path, _, _ in openvpn.service_files(own, bundle):

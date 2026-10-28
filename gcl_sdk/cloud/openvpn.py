@@ -28,10 +28,24 @@ from cryptography.x509.oid import NameOID
 import yaml
 
 ROOT = Path("/var/lib/exordos/network-links")
+ROLES = ("auto", "server", "client")
 
 
 def identity(value):
     return uuid.UUID(str(value)).hex
+
+
+def serves(own, peer, role="auto", peer_role="auto"):
+    """Choose the accepting endpoint for one direct connection."""
+    if role not in ROLES or peer_role not in ROLES:
+        raise ValueError("Endpoint role must be auto, server or client")
+    if role == peer_role and role != "auto":
+        raise ValueError(f"Full mesh cannot connect two {role} endpoints")
+    if role == "server" or peer_role == "client":
+        return True
+    if role == "client" or peer_role == "server":
+        return False
+    return identity(own) < identity(peer)
 
 
 def _key_pem(key):
@@ -144,7 +158,7 @@ def _route(cidr, directive="route"):
 
 
 def render(resource, own, peers, ca_cert, protocol="tcp", port=443, mtu=1380):
-    """Render one listener and one client per lower-UUID peer."""
+    """Render a shared listener and outgoing connections for the chosen roles."""
     own_id = identity(resource)
     if protocol not in {"tcp", "udp"} or not 1 <= int(port) <= 65535:
         raise ValueError("Invalid OpenVPN transport")
@@ -184,9 +198,17 @@ def render(resource, own, peers, ca_cert, protocol="tcp", port=443, mtu=1380):
         "auth-nocache",
         "verb 3",
     ]
-    higher = [p for p in peers if identity(p["id"]) > own_id]
-    lower = [p for p in peers if identity(p["id"]) < own_id]
-    if higher:
+    incoming, outgoing = [], []
+    for peer in peers:
+        selected = (
+            incoming
+            if serves(
+                resource, peer["id"], own.get("role", "auto"), peer.get("role", "auto")
+            )
+            else outgoing
+        )
+        selected.append(peer)
+    if incoming:
         name = "server"
         subnet = ipaddress.IPv4Network(own["tunnel_cidr"])
         lines = [line for line in common if line != "nobind"] + [
@@ -212,7 +234,7 @@ def render(resource, own, peers, ca_cert, protocol="tcp", port=443, mtu=1380):
                 "tls-server.key": own["tls_server_key"],
             }
         )
-        for index, peer in enumerate(sorted(higher, key=lambda p: identity(p["id"]))):
+        for index, peer in enumerate(sorted(incoming, key=lambda p: identity(p["id"]))):
             peer_id = identity(peer["id"])
             lines.append(_route(peer["cidr"]))
             files[f"ccd/{peer_id}-client"] = (
@@ -221,10 +243,10 @@ def render(resource, own, peers, ca_cert, protocol="tcp", port=443, mtu=1380):
                 + "\n"
             )
             expected[peer_id] = {"service": name, "client": peer_id + "-client"}
-        lines += route_source(name, higher)
+        lines += route_source(name, incoming)
         files[name + ".conf"] = "\n".join(lines) + "\n"
         services.append(name)
-    for index, peer in enumerate(sorted(lower, key=lambda p: identity(p["id"]))):
+    for index, peer in enumerate(sorted(outgoing, key=lambda p: identity(p["id"]))):
         peer_id = identity(peer["id"])
         host = str(ipaddress.IPv4Address(peer["endpoint"]))
         name = "client-" + peer_id
