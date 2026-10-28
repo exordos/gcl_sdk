@@ -61,6 +61,8 @@ FLOW_BUNDLE_FILE = os.path.join(constants.WORK_DIR, "evpn_flow_bundle.tmp")
 # are kept on disk and survive an agent restart.
 PUBLISHED_FILE = os.path.join(constants.WORK_DIR, "evpn_published.json")
 
+EGRESS_POLICY_FILE = os.path.join(constants.WORK_DIR, "evpn_egress_policy.json")
+
 # Each port's last installed allow-list: a revocation must flush the sessions
 # the withdrawn rule held open, which needs knowing which rules left.
 SG_RULES_PATH = os.path.join(constants.WORK_DIR, "evpn_sg_rules.json")
@@ -128,3 +130,5 @@ IP_BIN = "ip"
 IPTABLES_BIN = "iptables"
 
 IPTABLES_SAVE_BIN = "iptables-save"
+
+IPTABLES_RESTORE_BIN = "iptables-restore"
