@@ -523,9 +523,6 @@ class CloudPoolDriverSpec(AbstractPoolDriverSpec):
     KIND = "cloud"
 
     connection = properties.property(types.UUID(), required=True)
-    cloud = properties.property(types.String(), default="")
-    driver = properties.property(types.String(min_length=1), default="openstack")
-    region = properties.property(types.AllowNone(types.String()), default=None)
     volume_type = properties.property(types.String(), default="__DEFAULT__")
     key_name = properties.property(types.AllowNone(types.String()), default=None)
 

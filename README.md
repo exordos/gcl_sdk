@@ -23,6 +23,7 @@ Key components:
 - **Universal Builder** — a framework for describing and building infrastructure and application topologies in a declarative way.
 - **Universal Scheduler** — a scheduling component for orchestrating element lifecycle operations.
 - **Events** — a unified API for publishing and consuming Exordos events with pluggable payload models.
+- **Cloud drivers** — manage OpenStack resources using credentials supplied by Core; provider secrets stay out of agent targets.
 - **Audit** — built-in support for recording and exporting audit trails.
 
 > **For a full overview of components, quick start guides, and advanced usage, visit the [documentation](https://exordos.github.io/gcl_sdk/).**

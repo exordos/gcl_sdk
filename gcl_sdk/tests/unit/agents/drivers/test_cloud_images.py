@@ -26,7 +26,17 @@ def driver():
         ["https://repo.example", "http://repo.example"],
         group="openstack_cloud",
     )
-    value = OpenStackDriver(CloudConfig(uuid.uuid4(), "lab"), connection=mock.Mock())
+    value = OpenStackDriver(
+        CloudConfig(
+            uuid.uuid4(),
+            "https://identity.example/v3",
+            {
+                "application_credential_id": "test",
+                "application_credential_secret": "secret",
+            },
+        ),
+        connection=mock.Mock(),
+    )
     value.api.image.images.return_value = []
     yield value
     images.CONF.clear_override("image_origins", group="openstack_cloud")

@@ -7,7 +7,6 @@
 import uuid
 
 from gcl_sdk.agents.universal.drivers import pool as models
-from gcl_sdk.cloud.drivers import base
 
 
 class ControllerPoolAgentDriver(models.PoolAgentDriver):
@@ -23,7 +22,7 @@ class CloudPoolDriver(models.AbstractPoolDriver):
 
     native_provisioning = True
 
-    def __init__(self, pool, dry_run=False):
+    def __init__(self, pool, dry_run=False, provider=None):
         if pool.driver_spec.KIND != "cloud":
             raise ValueError("Not a cloud pool")
         if dry_run:
@@ -31,14 +30,9 @@ class CloudPoolDriver(models.AbstractPoolDriver):
         super().__init__(dry_run=dry_run)
         self.pool = pool
         self.spec = pool.driver_spec
-        self.cloud = base.load_driver(
-            base.CloudConfig(
-                connection=self.spec.connection,
-                cloud=self.spec.cloud,
-                driver=self.spec.driver,
-                region=self.spec.region,
-            )
-        )
+        if provider is None:
+            raise ValueError("Cloud pool credentials must be resolved by Core")
+        self.cloud = provider
 
     def _machine(self, server):
         flavor = server.flavor
