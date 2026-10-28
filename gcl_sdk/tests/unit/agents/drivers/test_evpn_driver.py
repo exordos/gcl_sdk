@@ -345,6 +345,9 @@ def dirs(monkeypatch, tmp_path):
     monkeypatch.setattr(base, "VLAN_MAP_PATH", str(tmp_path / "vlan_map.json"))
     monkeypatch.setattr(base, "FLOW_BUNDLE_FILE", str(tmp_path / "flow_bundle.tmp"))
     monkeypatch.setattr(base, "PUBLISHED_FILE", str(tmp_path / "published.json"))
+    monkeypatch.setattr(
+        base, "EGRESS_POLICY_FILE", str(tmp_path / "egress_policy.json")
+    )
     monkeypatch.setattr(base, "SG_RULES_PATH", str(tmp_path / "sg_rules.json"))
     monkeypatch.setattr(base, "NF_UNIT_PATH", str(tmp_path / "nf.service"))
     monkeypatch.setattr(
@@ -2613,6 +2616,50 @@ def _inserted(calls):
     ]
 
 
+@pytest.mark.parametrize(
+    "prefix", ["not-a-prefix", "::/0", "10.0.0.0/33", "10.0.0.0/24 -j ACCEPT"]
+)
+@pytest.mark.parametrize("field", ["flat_prefixes", "protected_prefixes"])
+def test_invalid_egress_policy_does_not_replace_existing_policy(dirs, prefix, field):
+    hostns.set_egress_policy(["10.66.0.0/24"], ["10.65.0.0/24"])
+    previous = Path(base.EGRESS_POLICY_FILE).read_bytes()
+    policy = {"flat_prefixes": [], "protected_prefixes": []}
+    policy[field] = [prefix]
+    with pytest.raises(ValueError):
+        hostns.set_egress_policy(**policy)
+    assert Path(base.EGRESS_POLICY_FILE).read_bytes() == previous
+
+
+@pytest.mark.parametrize(
+    "record", ["{broken", "{}", '{"flat_prefixes": ["::/0"], "protected_prefixes": []}']
+)
+def test_corrupt_egress_policy_is_repaired_from_the_target(dirs, record):
+    host = _host(flat_prefixes=["10.66.0.0/24"], protected_prefixes=["10.65.0.0/24"])
+    host._write_part("10.77.0.11")
+    Path(base.CONNECTOR_CONF_FILE).write_text(host._render_connector_conf("10.77.0.11"))
+    Path(base.CONNECTOR_RUN_DIR).mkdir()
+    Path(base.EGRESS_POLICY_FILE).write_text(record)
+    with mock.patch.object(hostns, "vnis_on_host", return_value=[]):
+        with pytest.raises(driver_exc.InvalidDataPlaneObjectError):
+            host._restore_extra()
+        host._ensure_published()
+        host._restore_extra()
+    assert hostns.egress_policy()["flat_prefixes"] == ["10.66.0.0/24"]
+
+
+def test_host_records_and_restores_the_operator_egress_policy(dirs):
+    host = _host(flat_prefixes=["10.66.0.0/24"], protected_prefixes=["10.65.0.0/24"])
+    with mock.patch.object(hostns, "vnis_on_host", return_value=[]):
+        host._ensure_published()
+    assert hostns.egress_policy() == {
+        "flat_prefixes": ["10.66.0.0/24"],
+        "protected_prefixes": ["10.65.0.0/24"],
+    }
+    restored = evpn.EvpnHost.restore_from_simple_view(**host.dump_to_simple_view())
+    assert restored.flat_prefixes == host.flat_prefixes
+    assert restored.protected_prefixes == host.protected_prefixes
+
+
 def test_the_egress_keeps_a_guest_out_of_everything_internal(dirs):
     """The overlay's isolation is worth nothing while the guest can address
     the transport that carries it — and "the transport" is not only what
@@ -4122,3 +4169,14 @@ def test_withdrawing_last_nf_writer_restores_surviving_settings(dirs):
     second.delete_from_dp()
     path = dirs / "nf" / "10005" / "nf-dns.json"
     assert json.loads(path.read_text())["zone_suffix"] == "first"
+
+
+def test_flat_policy_accepts_iptables_save_selector_order():
+    actual = (
+        "-A EVPN-FLAT -d 192.0.2.1/32 -i gw10000 -p tcp -m tcp --dport 443 -j ACCEPT"
+    )
+    desired = "-i gw10000 -d 192.0.2.1/32 -p tcp --dport 443 -j ACCEPT"
+    assert hostns._flat_rule_key(actual) == hostns._flat_rule_key(desired)
+    assert hostns._flat_rule_key(actual.replace("443", "444")) != hostns._flat_rule_key(
+        desired
+    )
