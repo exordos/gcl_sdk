@@ -226,6 +226,8 @@ class Machine(
 ):
     """Data plane representation of a pool machine (VM)."""
 
+    user_data = properties.property(types.AllowNone(types.String()), default=None)
+
     cores = properties.property(
         types.Integer(min_value=0, max_value=4096), required=True
     )
@@ -517,6 +519,17 @@ class DummyPoolDriverSpec(AbstractPoolDriverSpec):
     KIND = "dummy"
 
 
+class CloudPoolDriverSpec(AbstractPoolDriverSpec):
+    KIND = "cloud"
+
+    connection = properties.property(types.UUID(), required=True)
+    cloud = properties.property(types.String(), default="")
+    driver = properties.property(types.String(min_length=1), default="openstack")
+    region = properties.property(types.AllowNone(types.String()), default=None)
+    volume_type = properties.property(types.String(), default="__DEFAULT__")
+    key_name = properties.property(types.AllowNone(types.String()), default=None)
+
+
 class MachinePool(
     models.ModelWithUUID,
     models.ModelWithNameDesc,
@@ -529,6 +542,7 @@ class MachinePool(
             types_dynamic.KindModelType(LibvirtPoolDriverSpec),
             types_dynamic.KindModelType(ExordosLocalHyperDriverSpec),
             types_dynamic.KindModelType(DummyPoolDriverSpec),
+            types_dynamic.KindModelType(CloudPoolDriverSpec),
         ),
         required=True,
     )
@@ -812,6 +826,7 @@ class MetaPool(meta.MetaCoordinatorDataPlaneModel):
             types_dynamic.KindModelType(LibvirtPoolDriverSpec),
             types_dynamic.KindModelType(ExordosLocalHyperDriverSpec),
             types_dynamic.KindModelType(DummyPoolDriverSpec),
+            types_dynamic.KindModelType(CloudPoolDriverSpec),
         ),
         required=True,
     )
@@ -851,7 +866,7 @@ class MetaPool(meta.MetaCoordinatorDataPlaneModel):
 
         The driver is restored from the cache if it is already loaded.
         """
-        driver_key = str(self.driver_spec)
+        driver_key = f"{self.uuid}/{self.driver_spec}"
 
         if driver_key in self.__driver_map__:
             return self.__driver_map__[driver_key]
@@ -900,6 +915,12 @@ class MetaPool(meta.MetaCoordinatorDataPlaneModel):
             m.cores for m in self.dp_machine_map.values()
         )
         self.avail_ram = self.all_ram - sum(m.ram for m in self.dp_machine_map.values())
+        if getattr(driver, "native_provisioning", False):
+            self.all_cores, self.all_ram = pool_info.all_cores, pool_info.all_ram
+            self.avail_cores, self.avail_ram = (
+                pool_info.avail_cores,
+                pool_info.avail_ram,
+            )
 
     def dump_to_dp(self, **kwargs) -> None:
         """Configure the pool."""
@@ -1483,6 +1504,7 @@ class MetaMachine(meta.MetaCoordinatorDataPlaneModel):
     image = properties.property(
         types.AllowNone(types.String(max_length=512)), default=None
     )
+    user_data = properties.property(types.AllowNone(types.String()), default=None)
     project_id = properties.property(types.UUID(), required=True, read_only=True)
     # The target power state from the control plane or the actual one
     # from the data plane. `None` means the control plane doesn't manage
@@ -1647,6 +1669,7 @@ class MetaMachine(meta.MetaCoordinatorDataPlaneModel):
             "project_id",
             "image",
             "name",
+            "user_data",
         }
 
     def _ports_ready(self, ports: tp.Collection[MetaPort]) -> bool:
@@ -1702,6 +1725,7 @@ class MetaMachine(meta.MetaCoordinatorDataPlaneModel):
         dp_machine = Machine(
             uuid=self.uuid,
             name=self.name,
+            user_data=self.user_data,
             cores=self.cores,
             ram=self.ram,
             machine_type=self.machine_type,
@@ -1801,6 +1825,16 @@ class MetaMachine(meta.MetaCoordinatorDataPlaneModel):
             # Machine and port targets can arrive in separate control-plane iterations.
             self._from_dp_machine(dp_machine)
             return
+
+        if getattr(driver, "native_provisioning", False) and (
+            self.cores != dp_machine.cores or self.ram != dp_machine.ram
+        ):
+            driver.resize_machine(dp_machine, self.cores, self.ram)
+            self._allocate_resources(
+                pool, self.cores - dp_machine.cores, self.ram - dp_machine.ram
+            )
+            dp_machine, _ = driver.get_machine(self.uuid)
+            unknown_action = False
 
         # Cores
         if self.cores != dp_machine.cores:
