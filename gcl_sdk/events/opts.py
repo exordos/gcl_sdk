@@ -55,8 +55,12 @@ def register_event_opts(conf=None):
         ),
         cfg.StrOpt(
             "exordos_api_token",
-            default="<inser token here>",
-            help=("API token for authentication with the Genesis Notificatio service"),
+            secret=True,
+            help="IAM access token for Notification (prefer notification_auth_file)",
+        ),
+        cfg.StrOpt(
+            "notification_auth_file",
+            help="Private JSON credentials for CoreIamAuthenticator; tokens refresh in memory",
         ),
         cfg.StrOpt(
             "project_id",

@@ -15,10 +15,10 @@
 #    under the License.
 
 import abc
+import json
 import uuid as sys_uuid
 
 from bazooka import client as bzk_client
-from bazooka import common as bzk_common
 from bazooka import exceptions as bzk_exceptions
 from izulu import root
 from oslo_config import cfg
@@ -26,6 +26,7 @@ from restalchemy.dm import filters as ra_filters
 from restalchemy.storage import exceptions as ra_exceptions
 import yaml
 
+from gcl_sdk.clients.http import base as http_base
 from gcl_sdk.events import constants as event_c
 from gcl_sdk.events.dm import models
 
@@ -93,7 +94,27 @@ class DummyEventClient(AbstractEventClient):
         return sys_uuid.uuid4()
 
 
-class HttpEventClient(AbstractEventClient, bzk_common.RESTClientMixIn):
+class EventHttpSession(bzk_client.Client.SESSION):
+    def _sanitize_body(self, body):
+        return "[REDACTED]"
+
+    @staticmethod
+    def _response_body_for_log(response):
+        return "[REDACTED]"
+
+
+class EventHttpClient(bzk_client.Client):
+    SESSION = EventHttpSession
+
+    def request(self, method, url, **kwargs):
+        kwargs["allow_redirects"] = False
+        response = super().request(method, url, **kwargs)
+        if 300 <= response.status_code < 400:
+            raise ValueError("Event delivery does not follow redirects")
+        return response
+
+
+class HttpEventClient(AbstractEventClient):
     def __init__(
         self,
         event_type_mapping,
@@ -102,19 +123,27 @@ class HttpEventClient(AbstractEventClient, bzk_common.RESTClientMixIn):
         auth_token,
         project_id,
         timeout=5,
+        auth=None,
+        http_client=None,
     ):
         super().__init__(event_type_mapping=event_type_mapping)
-        self._endpoint = endpoint
+        if auth is None and not auth_token:
+            raise ValueError(
+                "Event delivery requires IAM credentials or an access token"
+            )
         self._version = version
-        self._auth_token = auth_token
         self._project_id = project_id
-        self._client = bzk_client.Client(default_timeout=timeout)
-
-    def _get_headers(self):
-        return {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self._auth_token}",
-        }
+        http_client = http_client or EventHttpClient(default_timeout=timeout)
+        auth = auth or http_base.CoreIamAuthenticator(
+            base_url=endpoint,
+            access_token=auth_token,
+            http_client=http_client,
+        )
+        self._client = http_base.CollectionBaseClient(
+            base_url=endpoint.rstrip("/"),
+            http_client=http_client,
+            auth=auth,
+        )
 
     def send_event(self, event):
         exchange = {}
@@ -131,17 +160,14 @@ class HttpEventClient(AbstractEventClient, bzk_common.RESTClientMixIn):
             "project_id": self._project_id,
         }
 
-        url = self._build_collection_uri([self._version, "events"])
-
-        self._client.post(url, json=body, headers=self._get_headers())
+        self._client.create(f"/{self._version}/events/", data=body)
 
         return event
 
     def get_event_status(self, event_uuid):
-        url = self._build_resource_uri([self._version, "events", event_uuid])
         try:
-            result = self._client.get(url, headers=self._get_headers())
-            return result.json()["status"]
+            result = self._client.get(f"/{self._version}/events/", event_uuid)
+            return result["status"]
         except bzk_exceptions.NotFoundError:
             raise EventNotFound(event_uuid=event_uuid)
 
@@ -153,6 +179,14 @@ class HttpEventClient(AbstractEventClient, bzk_common.RESTClientMixIn):
         version = conf[event_c.DOMAIN].exordos_api_version
         auth_token = conf[event_c.DOMAIN].exordos_api_token
         project_id = conf[event_c.DOMAIN].project_id
+        http_client = EventHttpClient(default_timeout=5)
+        auth = None
+        if conf[event_c.DOMAIN].notification_auth_file:
+            with open(conf[event_c.DOMAIN].notification_auth_file) as stream:
+                auth = http_base.CoreIamAuthenticator(
+                    **json.load(stream),
+                    http_client=http_client,
+                )
 
         return super().build_from_config(
             conf=conf,
@@ -160,6 +194,9 @@ class HttpEventClient(AbstractEventClient, bzk_common.RESTClientMixIn):
             version=version,
             auth_token=auth_token,
             project_id=project_id,
+            auth=auth,
+            http_client=http_client,
+            **kwargs,
         )
 
 
