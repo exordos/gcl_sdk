@@ -14,11 +14,13 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import datetime
 from unittest import mock
 import uuid as sys_uuid
 
 import pytest
 
+from gcl_sdk.agents.universal import operations
 from gcl_sdk.agents.universal.dm import models
 from gcl_sdk.agents.universal.drivers import pool as pool_driver
 from gcl_sdk.infra import constants as ic
@@ -582,3 +584,312 @@ def test_resize_with_unknown_actual_pool_does_not_touch_driver():
     assert actual.size == 10
     assert volume.status == "ERROR"
 
+
+class _PowerPoolDriver(pool_driver.DummyPoolDriver):
+    """DummyPoolDriver with a machine whose power state the test controls.
+
+    Power calls are only recorded, the machine doesn't change its state by
+    itself, like a real hypervisor in the middle of a shutdown.
+    """
+
+    def __init__(self, pool, dp_machine):
+        super().__init__(pool)
+        self.dp_machine = dp_machine
+        self.calls = []
+
+    def get_machine(self, machine):
+        return self.dp_machine, ()
+
+    def shutdown_machine(self, machine, force=False):
+        self.calls.append(("shutdown", force))
+
+    def start_machine(self, machine):
+        self.calls.append(("start",))
+
+    def set_machine_cores(self, machine, cores):
+        self.calls.append(("cores", cores))
+
+
+class TestMachinePowerState:
+    @pytest.fixture(autouse=True)
+    def _setup(self):
+        self.clock_now = datetime.datetime(
+            2026, 10, 15, 12, 0, tzinfo=datetime.timezone.utc
+        )
+        self.catalog = operations.OperationCatalog()
+        with (
+            mock.patch.object(operations, "now", lambda: self.clock_now),
+            mock.patch.object(pool_driver.MetaMachine, "__operations__", self.catalog),
+        ):
+            yield
+
+    def _tick(self, seconds):
+        self.clock_now += datetime.timedelta(seconds=seconds)
+
+    def _machine(self, dp_power_state):
+        meta_pool = pool_driver.MetaPool(
+            uuid=sys_uuid.uuid4(),
+            driver_spec=pool_driver.DummyPoolDriverSpec(),
+        )
+        machine_uuid = sys_uuid.uuid4()
+        dp_machine = pool_driver.Machine(
+            uuid=machine_uuid,
+            name="vm",
+            cores=1,
+            ram=1024,
+            power_state=dp_power_state,
+            project_id=pool_driver.SYSTEM_PROJECT_ID,
+        )
+        meta_pool.dp_machine_map = {machine_uuid: dp_machine}
+        meta_pool.dp_port_map = {machine_uuid: ()}
+        meta_pool.all_cores = meta_pool.avail_cores = 16
+        meta_pool.all_ram = meta_pool.avail_ram = 16384
+        driver = _PowerPoolDriver(meta_pool, dp_machine)
+        return meta_pool, driver, dp_machine, machine_uuid
+
+    def _iterate(self, meta_pool, driver, machine_uuid, power_state, cores=1):
+        """Run an agent iteration for the machine and return the actual state.
+
+        Like the agent, restore the machine from the data plane first and
+        update it only if it differs from the target.
+        """
+        with mock.patch.object(
+            pool_driver.MetaPool, "load_driver", return_value=driver
+        ):
+            actual = pool_driver.MetaMachine(
+                uuid=machine_uuid,
+                name="vm",
+                pool=meta_pool.uuid,
+                project_id=sys_uuid.uuid4(),
+            )
+            actual.restore_from_dp(meta_pool, volumes=())
+
+            power_differs = power_state is not None and (
+                power_state != actual.power_state
+            )
+            if not power_differs and cores == actual.cores:
+                return actual.power_state
+
+            target = pool_driver.MetaMachine(
+                uuid=machine_uuid,
+                name="vm",
+                cores=cores,
+                ram=1024,
+                pool=meta_pool.uuid,
+                project_id=sys_uuid.uuid4(),
+                power_state=power_state,
+            )
+            target.update_on_dp(meta_pool, volumes=())
+            return target.power_state
+
+    def _op(self, uuid, op_class):
+        return self.catalog.get(uuid, op_class)
+
+    def test_power_off_is_graceful_then_forced(self):
+        pool, driver, dp_machine, uuid = self._machine("ON")
+
+        assert self._iterate(pool, driver, uuid, "OFF") == "ON"
+        assert driver.calls == [("shutdown", False)]
+
+        # The guest is still shutting down, nothing to do
+        self._tick(10)
+        self._iterate(pool, driver, uuid, "OFF")
+        assert driver.calls == [("shutdown", False)]
+
+        # The guest ignored the shutdown
+        self._tick(60)
+        self._iterate(pool, driver, uuid, "OFF")
+        assert driver.calls == [("shutdown", False), ("shutdown", True)]
+        op = self._op(uuid, pool_driver.PowerOffMachineOperation)
+        assert [r["action"] for r in op.journal] == [
+            "started",
+            "send_shutdown",
+            "send_force_shutdown",
+        ]
+
+        # The target is reached, the operation isn't requested anymore
+        # and it's dropped in an iteration
+        dp_machine.power_state = "OFF"
+        assert self._iterate(pool, driver, uuid, "OFF") == "OFF"
+        assert self._op(uuid, pool_driver.PowerOffMachineOperation) is not None
+        self._iterate(pool, driver, uuid, "OFF")
+        assert self._op(uuid, pool_driver.PowerOffMachineOperation) is None
+
+    def test_power_on(self):
+        pool, driver, dp_machine, uuid = self._machine("OFF")
+
+        self._iterate(pool, driver, uuid, "ON")
+        assert driver.calls == [("start",)]
+
+        dp_machine.power_state = "ON"
+        assert self._iterate(pool, driver, uuid, "ON") == "ON"
+        assert driver.calls == [("start",)]
+
+    def test_latest_target_wins(self):
+        pool, driver, dp_machine, uuid = self._machine("ON")
+
+        self._iterate(pool, driver, uuid, "OFF")
+        dp_machine.power_state = "UNKNOWN"
+        self._iterate(pool, driver, uuid, "ON")
+
+        assert self._op(uuid, pool_driver.PowerOffMachineOperation) is None
+        assert self._op(uuid, pool_driver.PowerOnMachineOperation) is not None
+        assert driver.calls == [("shutdown", False), ("start",)]
+
+    def test_power_off_starts_over_after_it_was_dropped(self):
+        """The machine was powered off, then started manually. The new
+        power off must start with a graceful shutdown rather than continue
+        by the old journal.
+        """
+        pool, driver, dp_machine, uuid = self._machine("ON")
+        self._iterate(pool, driver, uuid, "OFF")
+        dp_machine.power_state = "OFF"
+        self._iterate(pool, driver, uuid, "OFF")
+        self._iterate(pool, driver, uuid, "OFF")
+        assert self._op(uuid, pool_driver.PowerOffMachineOperation) is None
+
+        # Started manually an hour later
+        self._tick(3600)
+        dp_machine.power_state = "ON"
+        driver.calls.clear()
+        self._iterate(pool, driver, uuid, "OFF")
+
+        assert driver.calls == [("shutdown", False)]
+
+    def test_reboot_is_shutdown_and_start(self):
+        pool, driver, dp_machine, uuid = self._machine("ON")
+
+        # Intermediate states of the machine are hidden behind REBOOTING
+        assert self._iterate(pool, driver, uuid, "REBOOT") == "REBOOTING"
+        assert driver.calls == [("shutdown", False)]
+
+        dp_machine.power_state = "OFF"
+        assert self._iterate(pool, driver, uuid, "REBOOT") == "REBOOTING"
+        assert driver.calls == [("shutdown", False), ("start",)]
+
+        dp_machine.power_state = "ON"
+        assert self._iterate(pool, driver, uuid, "REBOOT") == "REBOOTED"
+
+    def test_finished_reboot_is_kept_while_requested(self):
+        pool, driver, dp_machine, uuid = self._machine("OFF")
+        self._iterate(pool, driver, uuid, "REBOOT")
+        dp_machine.power_state = "ON"
+        self._iterate(pool, driver, uuid, "REBOOT")
+
+        # The control plane hasn't switched the target back to `ON` yet
+        for _ in range(5):
+            self._tick(600)
+            assert self._iterate(pool, driver, uuid, "REBOOT") == "REBOOTED"
+
+        assert driver.calls == [("start",)]
+
+    def test_finished_reboot_is_dropped_once_target_is_on(self):
+        pool, driver, dp_machine, uuid = self._machine("OFF")
+        self._iterate(pool, driver, uuid, "REBOOT")
+        dp_machine.power_state = "ON"
+        self._iterate(pool, driver, uuid, "REBOOT")
+
+        # Nothing to do for the target `ON`, the reboot isn't requested
+        # anymore and it's dropped in an iteration
+        assert self._iterate(pool, driver, uuid, "ON") == "REBOOTED"
+        assert self._iterate(pool, driver, uuid, "ON") == "ON"
+        assert driver.calls == [("start",)]
+
+        # The next reboot starts at once
+        driver.calls.clear()
+        assert self._iterate(pool, driver, uuid, "REBOOT") == "REBOOTING"
+        assert driver.calls == [("shutdown", False)]
+
+    def test_reboot_of_powered_off_machine_starts_it(self):
+        pool, driver, dp_machine, uuid = self._machine("OFF")
+
+        self._iterate(pool, driver, uuid, "REBOOT")
+        assert driver.calls == [("start",)]
+
+        dp_machine.power_state = "ON"
+        assert self._iterate(pool, driver, uuid, "REBOOT") == "REBOOTED"
+
+    def test_target_off_in_the_middle_of_reboot(self):
+        pool, driver, dp_machine, uuid = self._machine("ON")
+        self._iterate(pool, driver, uuid, "REBOOT")
+        dp_machine.power_state = "OFF"
+
+        # The machine is already off, so nothing is done and the reboot
+        # is dropped in an iteration
+        assert self._iterate(pool, driver, uuid, "OFF") == "REBOOTING"
+        assert self._iterate(pool, driver, uuid, "OFF") == "OFF"
+        assert self._op(uuid, pool_driver.PowerOffMachineOperation) is None
+        assert driver.calls == [("shutdown", False)]
+
+    def test_target_on_in_the_middle_of_reboot(self):
+        pool, driver, dp_machine, uuid = self._machine("ON")
+        self._iterate(pool, driver, uuid, "REBOOT")
+        dp_machine.power_state = "OFF"
+
+        self._iterate(pool, driver, uuid, "ON")
+
+        assert self._op(uuid, pool_driver.RebootMachineOperation) is None
+        assert driver.calls == [("shutdown", False), ("start",)]
+
+    def test_no_power_management_without_target(self):
+        pool, driver, dp_machine, uuid = self._machine("OFF")
+
+        actual = self._iterate(pool, driver, uuid, None, cores=2)
+
+        assert driver.calls == [("cores", 2)]
+        assert actual == "OFF"
+
+    def test_other_changes_wait_for_power_operation(self):
+        pool, driver, dp_machine, uuid = self._machine("OFF")
+
+        self._iterate(pool, driver, uuid, "ON", cores=2)
+        assert driver.calls == [("start",)]
+
+        dp_machine.power_state = "ON"
+        self._iterate(pool, driver, uuid, "ON", cores=2)
+        assert driver.calls == [("start",), ("cores", 2)]
+
+    def test_powered_off_machine_is_updated_then_powered_off_again(self):
+        pool, driver, dp_machine, uuid = self._machine("OFF")
+
+        self._iterate(pool, driver, uuid, "OFF", cores=2)
+        assert driver.calls == [("cores", 2)]
+
+        # Recreation of the domain started the machine
+        dp_machine.cores = 2
+        dp_machine.power_state = "ON"
+        self._iterate(pool, driver, uuid, "OFF", cores=2)
+
+        assert driver.calls == [("cores", 2), ("shutdown", False)]
+
+    def test_vanished_machine_drops_its_operations(self):
+        pool, driver, dp_machine, uuid = self._machine("ON")
+        self._iterate(pool, driver, uuid, "OFF")
+        pool.dp_machine_map = {}
+
+        for _ in range(2):
+            listed = pool_driver.MetaMachine(
+                uuid=uuid, name="vm", pool=pool.uuid, project_id=sys_uuid.uuid4()
+            )
+            with pytest.raises(pool_driver.ua_driver_exc.ResourceNotFound):
+                listed.restore_from_dp(pool, volumes=())
+
+        assert self._op(uuid, pool_driver.PowerOffMachineOperation) is None
+
+    @pytest.mark.parametrize(
+        ("target", "expected"),
+        [("ON", "ON"), ("OFF", "ON"), ("REBOOT", "ON"), (None, None)],
+    )
+    def test_created_machine_reports_actual_power_state(self, target, expected):
+        pool, driver, dp_machine, uuid = self._machine("ON")
+        machine = pool_driver.MetaMachine(
+            uuid=uuid,
+            name="vm",
+            pool=pool.uuid,
+            project_id=sys_uuid.uuid4(),
+            power_state=target,
+        )
+
+        machine._create_machine(driver, dp_machine, (), ())
+
+        assert machine.power_state == expected
