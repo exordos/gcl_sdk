@@ -118,13 +118,17 @@ class HttpEventClient(AbstractEventClient, bzk_common.RESTClientMixIn):
         }
 
     def send_event(self, event):
+        self.send_event_body(self._build_event_body(event))
+        return event
+
+    def _build_event_body(self, event):
         exchange = {}
         if isinstance(event.event_type, models.UserEvent):
             exchange = {
                 "kind": "User",
                 "user_id": str(event.event_type.user_id),
             }
-        body = {
+        return {
             "uuid": str(event.uuid),
             "exchange": exchange,
             "event_type": (f"/{self._version}/event_types/{event.event_type.uuid}"),
@@ -132,14 +136,17 @@ class HttpEventClient(AbstractEventClient, bzk_common.RESTClientMixIn):
             "project_id": self._project_id,
         }
 
-        self.send_event_body(body)
-
-        return event
-
     def send_event_body(self, body):
         """Send an already prepared envelope without rebuilding encrypted fields."""
         url = self._build_collection_uri([self._version, "events"])
-        self._client.post(url, json=body, headers=self._get_headers())
+        try:
+            self._client.post(url, json=body, headers=self._get_headers())
+        except bzk_exceptions.ConflictError as error:
+            # A timed-out handoff may already be persisted under this UUID.
+            try:
+                self.get_event(body["uuid"])
+            except EventNotFound:
+                raise error
 
     def get_event(self, event_uuid):
         """Return the complete result, including per-device delivery errors."""
@@ -182,7 +189,7 @@ class AsyncEventClient(AbstractEventClient):
                 filters={
                     "uuid": ra_filters.EQ(event_uuid),
                 }
-            ).status.value
+            ).status
         except ra_exceptions.RecordNotFound:
             raise EventNotFound(event_uuid=event_uuid)
 
