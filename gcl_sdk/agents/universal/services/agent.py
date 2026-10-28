@@ -212,10 +212,9 @@ class UniversalAgentService(looper_basic.BasicService):
                 collected_resources.append(resource)
             except Exception:
                 LOG.exception(
-                    "Error creating resource %s with uuid (%s) and value (%s)",
+                    "Error creating resource %s with uuid (%s)",
                     capability,
                     r.uuid,
-                    str(r.value),
                 )
 
         # Delete outdated resources

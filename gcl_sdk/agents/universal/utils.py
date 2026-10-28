@@ -292,6 +292,6 @@ def get_encryptor(private_key_path: str) -> http_base.Encryptor:
         private_key_base64 = f.read()
 
     private_key = base64.b64decode(private_key_base64)
-    node = system_uuid()
+    node = node_uuid()
 
     return http_base.Encryptor(private_key, node)

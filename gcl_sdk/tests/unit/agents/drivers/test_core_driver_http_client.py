@@ -51,3 +51,20 @@ def test_driver_uses_given_http_client(tmp_path, driver_cls, spec):
 
     assert auth.call_args.kwargs["http_client"] is http
     assert client.call_args.kwargs["http_client"] is http
+
+
+def test_rest_driver_accepts_an_explicit_iam_client(tmp_path):
+    identity = sys_uuid.UUID(int=0)
+    with (
+        patch.object(core.base, "CoreIamAuthenticator") as auth,
+        patch.object(core.base, "CollectionBaseClient"),
+    ):
+        core.RestCoreCapabilityDriver(
+            username="operator",
+            password="secret",
+            user_api_base_url="http://core.test",
+            client_uuid=identity,
+            agent_work_dir=str(tmp_path),
+            node_set="/v1/compute/sets/",
+        )
+    assert auth.call_args.kwargs["client_uuid"] == identity

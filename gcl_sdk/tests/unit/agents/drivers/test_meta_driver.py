@@ -428,9 +428,7 @@ class _SpecDriver(meta.MetaFileStorageAgentDriver):
 
 def test_a_nested_default_the_data_plane_fills_in_settles(tmp_path):
     uuid = sys_uuid.uuid4()
-    target = _make_resource(
-        "dummy", uuid, {"uuid": str(uuid), "spec": {"kind": "foo"}}
-    )
+    target = _make_resource("dummy", uuid, {"uuid": str(uuid), "spec": {"kind": "foo"}})
     drv = _SpecDriver(meta_file=str(tmp_path / "meta.json"))
     drv.create(target)
 
@@ -451,3 +449,20 @@ def test_target_fields_of_an_older_meta_file_are_still_read(tmp_path):
     (actual,) = drv.list("dummy")
 
     assert actual.hash == target.hash
+
+
+def test_debug_meta_logging_does_not_include_resource_values(tmp_path, caplog):
+    class SensitiveModel(DummyModel):
+        user_data = properties.property(types.String(), default="")
+
+    class SensitiveDriver(meta.MetaFileStorageAgentDriver):
+        __model_map__ = {"dummy": SensitiveModel}
+
+    driver = SensitiveDriver(meta_file=str(tmp_path / "meta.json"))
+    secret = "test-node-encryption-key-must-not-be-logged"
+    resource = _make_resource(
+        "dummy", value={"uuid": str(sys_uuid.uuid4()), "user_data": secret}
+    )
+    with caplog.at_level(logging.DEBUG):
+        driver.create(resource)
+    assert secret not in caplog.text
