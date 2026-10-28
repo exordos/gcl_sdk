@@ -102,13 +102,14 @@ class HttpEventClient(AbstractEventClient, bzk_common.RESTClientMixIn):
         auth_token,
         project_id,
         timeout=5,
+        http_client=None,
     ):
         super().__init__(event_type_mapping=event_type_mapping)
         self._endpoint = endpoint
         self._version = version
         self._auth_token = auth_token
         self._project_id = project_id
-        self._client = bzk_client.Client(default_timeout=timeout)
+        self._client = http_client or bzk_client.Client(default_timeout=timeout)
 
     def _get_headers(self):
         return {
@@ -131,19 +132,26 @@ class HttpEventClient(AbstractEventClient, bzk_common.RESTClientMixIn):
             "project_id": self._project_id,
         }
 
-        url = self._build_collection_uri([self._version, "events"])
-
-        self._client.post(url, json=body, headers=self._get_headers())
+        self.send_event_body(body)
 
         return event
 
-    def get_event_status(self, event_uuid):
+    def send_event_body(self, body):
+        """Send an already prepared envelope without rebuilding encrypted fields."""
+        url = self._build_collection_uri([self._version, "events"])
+        self._client.post(url, json=body, headers=self._get_headers())
+
+    def get_event(self, event_uuid):
+        """Return the complete result, including per-device delivery errors."""
         url = self._build_resource_uri([self._version, "events", event_uuid])
         try:
             result = self._client.get(url, headers=self._get_headers())
-            return result.json()["status"]
+            return result.json()
         except bzk_exceptions.NotFoundError:
             raise EventNotFound(event_uuid=event_uuid)
+
+    def get_event_status(self, event_uuid):
+        return self.get_event(event_uuid)["status"]
 
     @classmethod
     def build_from_config(cls, conf=None, **kwargs):
