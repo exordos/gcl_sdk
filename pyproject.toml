@@ -157,6 +157,7 @@ exordos-universal-scheduler = "gcl_sdk.agents.universal.cmd.scheduler:main"
 DummyEventPayload = "gcl_sdk.events.dm.models:DummyEventPayload"
 
 [project.entry-points."gcl_sdk_universal_agent"]
+OpenVPNCapabilityDriver = "gcl_sdk.agents.universal.drivers.openvpn:OpenVPNCapabilityDriver"
 LBCapabilityDriver = "gcl_sdk.agents.universal.drivers.lb:LBCapabilityDriver"
 LBAgentCapabilityDriver = "gcl_sdk.agents.universal.drivers.lb:LBAgentCapabilityDriver"
 RenderAgentDriver = "gcl_sdk.agents.universal.drivers.render:RenderAgentDriver"

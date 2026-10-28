@@ -4171,6 +4171,24 @@ def test_withdrawing_last_nf_writer_restores_surviving_settings(dirs):
     assert json.loads(path.read_text())["zone_suffix"] == "first"
 
 
+@pytest.mark.parametrize("port_security", [False, True])
+def test_forwarding_port_advertises_only_routes_with_itself_as_next_hop(port_security):
+    port = _port(
+        port_security=port_security,
+        dhcp={
+            "routers": [
+                {"to": "10.90.0.0/24", "via": "10.42.0.7"},
+                {"to": "10.91.0.0/24", "via": "10.42.0.8"},
+                {"to": "0.0.0.0/0", "via": "10.42.0.7"},
+            ]
+        },
+    )
+    routes = json.loads(port._render_client_conf(101))["routes"]
+    assert routes == (
+        ["10.42.0.7/32"] if port_security else ["10.42.0.7/32", "10.90.0.0/24"]
+    )
+
+
 def test_flat_policy_accepts_iptables_save_selector_order():
     actual = (
         "-A EVPN-FLAT -d 192.0.2.1/32 -i gw10000 -p tcp -m tcp --dport 443 -j ACCEPT"

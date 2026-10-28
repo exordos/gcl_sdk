@@ -37,9 +37,10 @@ import os
 import socket
 import socketserver
 import struct
-import threading
 import sys
+import threading
 import time
+from urllib.parse import urlsplit
 
 from gcl_sdk.agents.universal.drivers import evpn_proxy
 from gcl_sdk.agents.universal.drivers import evpn_records
@@ -223,7 +224,12 @@ def build_reply(xid, flags, client_mac, reply_type, rec, cidr, server_ip, dhcp=N
     if router and default_route:
         opts += _opt(3, socket.inet_aton(router))
     routes = bytearray()
-    for route in rec.get("routers") or []:
+    advertised_routes = list(rec.get("routers") or [])
+    if urlsplit((dhcp or {}).get("filename") or "").hostname == METADATA_IP:
+        metadata_prefix = METADATA_IP + "/32"
+        if not any(str(route["to"]) == metadata_prefix for route in advertised_routes):
+            advertised_routes.append({"to": metadata_prefix, "via": "0.0.0.0"})
+    for route in advertised_routes:
         destination = route["to"]
         network = ipaddress.IPv4Network(
             "0.0.0.0/0" if str(destination) == "default" else str(destination),
