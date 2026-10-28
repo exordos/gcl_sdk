@@ -87,10 +87,11 @@ class RestCoreCapabilityDriver(direct.DirectAgentDriver):
         agent_work_dir: str = c.WORK_DIR,
         use_project_scope: bool = False,
         http_client: bazooka.Client | None = None,
+        client_uuid: sys_uuid.UUID | str = base.DEFAULT_CLIENT_ALIAS,
         **collection_map,
     ):
         http = http_client or bazooka.Client()
-        auth_kwargs = {}
+        auth_kwargs = {"client_uuid": client_uuid}
         if use_project_scope:
             auth_kwargs["scope"] = base.CoreIamAuthenticator.project_scope(project_id)
         auth = base.CoreIamAuthenticator(
