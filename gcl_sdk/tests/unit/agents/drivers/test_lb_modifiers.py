@@ -163,3 +163,36 @@ def test_cors_preflight_headers_survive_a_non_2xx_response(lb):
     mods = lb._gen_modifiers(VHOST, ROUTE, _cors_modifiers())
 
     assert all(m.endswith(" always;") for m in mods)
+
+
+# A request can pass two vhosts of the LB (https:443 -> http:80).
+# The inner hop must keep the scheme/port the client used, otherwise backends
+# build http://host:80 URLs (e.g. the OIDC issuer) behind an https vhost.
+AUTO_FWD = [
+    {"kind": "auto_header", "headers": ["X-Forwarded-Proto", "X-Forwarded-Port"]}
+]
+
+
+def test_forwarded_proto_and_port_use_hop_aware_variables(lb):
+    mods = lb._gen_modifiers(VHOST, ROUTE, AUTO_FWD)
+
+    assert mods == [
+        "proxy_set_header X-Forwarded-Proto $exordos_fwd_proto;",
+        "proxy_set_header X-Forwarded-Port $exordos_fwd_port;",
+    ]
+
+
+def test_forwarded_variables_are_defined_in_http_defaults(lb):
+    defaults = lb._gen_http_defaults()
+
+    assert "$exordos_fwd_proto {" in defaults
+    assert "$exordos_fwd_port {" in defaults
+    assert "default $scheme;" in defaults
+    assert "default $server_port;" in defaults
+
+
+def test_forwarded_maps_rendered_once_in_l7_config(lb):
+    content = lb._gen_file_content_l7([lb._gen_vhost_l7(_cors_vhost())], {})
+
+    assert content.count("$exordos_fwd_proto {") == 1
+    assert content.count("$exordos_fwd_port {") == 1
