@@ -4,8 +4,10 @@
 import http.server
 import json
 import threading
+from unittest import mock
 import uuid
 
+from bazooka import exceptions as bzk_exceptions
 import pytest
 
 from gcl_sdk.events import clients
@@ -33,7 +35,7 @@ def notification():
                     json.loads(self.rfile.read(int(self.headers["Content-Length"]))),
                 )
             )
-            self.send_response(201)
+            self.send_response(response.get("_post_status", 201))
             self.end_headers()  # A successful send does not require a JSON response.
 
         def do_GET(self):
@@ -106,6 +108,50 @@ def test_full_result_preserves_not_found_exception(notification):
     client, _, _ = notification
     with pytest.raises(clients.EventNotFound):
         client.get_event("missing")
+
+
+def test_already_accepted_uuid_recovers_after_a_repeated_post(notification):
+    client, received, response = notification
+    response["_post_status"] = 409
+    body = {"uuid": response["uuid"], "event_params": {"ciphertext": "unchanged"}}
+    client.send_event_body(body)
+    assert received == [
+        ("/v1/events/", "Bearer synthetic-token", body),
+        (f"/v1/events/{response['uuid']}", "Bearer synthetic-token"),
+    ]
+
+
+def test_uuid_conflict_is_not_accepted_when_the_event_cannot_be_read(notification):
+    client, _, response = notification
+    response["_post_status"] = 409
+    with pytest.raises(bzk_exceptions.ConflictError):
+        client.send_event_body({"uuid": "missing"})
+
+
+def test_async_client_uses_the_standard_model_save():
+    client = clients.AsyncEventClient({})
+    event = mock.Mock()
+    assert client.send_event(event) is event
+    event.save.assert_called_once_with()
+
+
+def test_typed_client_allows_payload_serialization_without_replacing_transport(
+    notification,
+):
+    original, received, response = notification
+    body = {"uuid": response["uuid"], "project_id": "own-project", "event_params": {}}
+
+    class Client(clients.HttpEventClient):
+        def _build_event_body(self, event):
+            return body
+
+    client = Client({}, original._endpoint, "v1", "synthetic-token", "default-project")
+    event = models.Event(
+        event_type=models.UserEvent(user_id=uuid.uuid4(), uuid=uuid.uuid4()),
+        event_data=models.DummyEventPayload(),
+    )
+    assert client.send_event(event) is event
+    assert received == [("/v1/events/", "Bearer synthetic-token", body)]
 
 
 def test_typed_event_keeps_legacy_serialization_and_return_value(notification):
