@@ -25,6 +25,7 @@ import bazooka
 from gcl_sdk.agents.universal import constants as c
 from gcl_sdk.agents.universal.clients.backend import core as core_rest_back
 from gcl_sdk.agents.universal.clients.backend import db as db_back
+from gcl_sdk.agents.universal.dm import models
 from gcl_sdk.agents.universal.drivers import direct
 from gcl_sdk.agents.universal.storage import fs
 from gcl_sdk.clients.http import base
@@ -128,11 +129,38 @@ class DatabaseCapabilityDriver(direct.DirectAgentDriver):
         target_fields_storage_path: str,
         transformer_map: dict[str, direct.ResourceTransformer] | None = None,
     ):
-
+        model_specs = tuple(model_specs)
         storage = fs.TargetFieldsFileStorage(target_fields_storage_path)
         client = db_back.DatabaseBackendClient(model_specs, storage)
 
-        self._kinds = {m.kind for m in model_specs}
+        specs_by_kind = {model_spec.kind: model_spec for model_spec in model_specs}
+        self._parent_fields = {
+            kind: spec.parent_field
+            for kind, spec in specs_by_kind.items()
+            if spec.parent_kind
+        }
+        ordered_kinds = []
+        visiting = set()
+        visited = set()
+
+        def add_parent_first(kind: str) -> None:
+            if kind in visited:
+                return
+            if kind in visiting:
+                raise ValueError(f"Cyclic model parent mapping involving {kind!r}.")
+
+            visiting.add(kind)
+            parent_kind = specs_by_kind[kind].parent_kind
+            if parent_kind:
+                add_parent_first(parent_kind)
+            visiting.remove(kind)
+            visited.add(kind)
+            ordered_kinds.append(kind)
+
+        for model_spec in model_specs:
+            add_parent_first(model_spec.kind)
+
+        self._kinds = tuple(ordered_kinds)
 
         super().__init__(
             storage=storage, client=client, transformer_map=transformer_map
@@ -141,6 +169,45 @@ class DatabaseCapabilityDriver(direct.DirectAgentDriver):
     def get_capabilities(self) -> list[str]:
         """Returns a list of capabilities supported by the driver."""
         return list(self._kinds)
+
+    def _model_to_resource(
+        self,
+        kind: str,
+        model: models.ResourceMixin,
+        target_fields: models.TargetFields | None = None,
+    ) -> models.Resource:
+        resource = super()._model_to_resource(kind, model, target_fields)
+        parent_field = self._parent_fields.get(kind)
+        if parent_field:
+            parent = getattr(model, parent_field)
+            parent_uuid = getattr(parent, "uuid", parent)
+            resource.master = str(parent_uuid) if parent_uuid is not None else None
+        return resource
+
+    @staticmethod
+    def _parent_uuid(resource: models.Resource, parent_field: str) -> str | None:
+        parent = resource.value.get(parent_field)
+        if parent is None:
+            parent = getattr(resource, "master", None)
+        elif isinstance(parent, dict):
+            parent = parent.get("uuid")
+        else:
+            parent = getattr(parent, "uuid", parent)
+        return str(parent) if parent is not None else None
+
+    def resources_equal(
+        self, target: models.Resource, actual: models.Resource
+    ) -> bool:
+        if target.hash != actual.hash:
+            return False
+
+        parent_field = self._parent_fields.get(target.kind)
+        if parent_field is None:
+            return True
+
+        return self._parent_uuid(target, parent_field) == self._parent_uuid(
+            actual, parent_field
+        )
 
 
 SECRET_TARGET_FIELDS_FILENAME = "core_secret_target_fields.json"

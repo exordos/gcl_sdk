@@ -54,6 +54,12 @@ class AbstractCapabilityDriver(abc.ABC):
     def list(self, capability: str) -> list[models.Resource]:
         """Lists all resources by capability."""
 
+    def resources_equal(
+        self, target: models.Resource, actual: models.Resource
+    ) -> bool:
+        """Whether an actual resource matches the target state."""
+        return target.hash == actual.hash
+
     @abc.abstractmethod
     def delete(self, resource: models.Resource) -> None:
         """Delete the resource."""
