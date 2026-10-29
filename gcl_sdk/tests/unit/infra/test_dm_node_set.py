@@ -83,3 +83,16 @@ def test_resolved_subnet_is_observed_without_becoming_a_target():
     value, target = node_set.get_ua_all_and_target_values()
     assert value["network_subnet"] == str(node_set.network_subnet)
     assert "network_subnet" not in target
+
+
+def test_optional_placement_round_trips_and_changes_the_target_hash():
+    original = _node_set()
+    assert "placement" not in original.to_ua_resource().value
+    value = original.dump_to_simple_view()
+    value["placement"] = {"kind": "anti-affinity", "scope": "site"}
+    declared = models.NodeSet.restore_from_simple_view(**value)
+    target = declared.to_ua_resource()
+    assert target.value["placement"] == value["placement"]
+    assert target.hash != original.to_ua_resource().hash
+    restored = models.NodeSet.restore_from_simple_view(**target.value)
+    assert restored.to_ua_resource().hash == target.hash

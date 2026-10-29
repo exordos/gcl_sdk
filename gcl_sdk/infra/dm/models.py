@@ -528,6 +528,7 @@ class NodeSet(
     network_subnet = properties.property(
         ra_types.AllowNone(ra_types.UUID()), default=None
     )
+    placement = properties.property(ra_types.AllowNone(ra_types.Dict()), default=None)
 
     @classmethod
     def get_resource_kind(cls) -> str:
@@ -556,6 +557,8 @@ class NodeSet(
         )
         if self.default_network is None:
             fields = fields - frozenset(("default_network",))
+        if self.placement is not None:
+            fields = fields | frozenset(("placement",))
         return fields
 
 
