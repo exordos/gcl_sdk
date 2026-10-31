@@ -18,6 +18,7 @@ from typing import Any
 import uuid as sys_uuid
 
 from gcl_iam import exceptions as iam_exceptions
+import netaddr
 from restalchemy.common import contexts
 from restalchemy.dm import models
 from restalchemy.dm import properties
@@ -55,6 +56,11 @@ class AuditEventBase(
     actor_user_uuid = properties.property(
         types.AllowNone(types.UUID()),
         default=None,
+        read_only=True,
+    )
+    actor = properties.property(
+        types.Dict(),
+        default=lambda: {"type": "system"},
         read_only=True,
     )
     action = properties.property(
@@ -168,6 +174,39 @@ class AuditLogSQLStorableMixin(orm.SQLStorableMixin):
         ):
             return None
 
+    def get_audit_actor(self) -> dict[str, Any]:
+        user_uuid = self.get_audit_actor_user_uuid()
+        actor: dict[str, Any] = {"type": "user" if user_uuid else "system"}
+        if user_uuid is not None:
+            actor["user_uuid"] = str(user_uuid)
+        try:
+            context = contexts.get_context()
+        except contexts.ContextIsNotExistsInStorage:
+            return actor
+
+        get_user_ip = getattr(context, "get_user_ip", None)
+        if get_user_ip is not None:
+            try:
+                user_ip = get_user_ip()
+                if user_ip is not None:
+                    actor["ip"] = str(user_ip)
+            except netaddr.AddrFormatError:
+                pass
+
+        if user_uuid is None and getattr(context, "request", None) is not None:
+            actor["type"] = "anonymous"
+
+        try:
+            iam_context = getattr(context, "iam_context", None)
+        except iam_exceptions.NoIamSessionStored:
+            iam_context = None
+        if iam_context is not None:
+            info = iam_context.introspection_info()
+            user_type = info.get("user_info", {}).get("type")
+            if user_type is not None:
+                actor["type"] = user_type
+        return actor
+
     def _get_audit_context_project_id(self) -> sys_uuid.UUID | None:
         try:
             return contexts.get_context().project_id
@@ -187,6 +226,7 @@ class AuditLogSQLStorableMixin(orm.SQLStorableMixin):
             resource_uuid=self.get_audit_resource_uuid(),
             project_id=self.get_audit_project_id(),
             actor_user_uuid=self.get_audit_actor_user_uuid(),
+            actor=self.get_audit_actor(),
             action=action,
             snapshot=snapshot,
         ).insert(session)

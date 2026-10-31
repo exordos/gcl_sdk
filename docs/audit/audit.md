@@ -25,6 +25,18 @@ transaction as the resource mutation. New rows start with delivery status
 local outbox row. A permanent central UUID/payload conflict is retained and
 marked `ERROR`.
 
+The immutable `actor` JSON object contains only `type`, optional `user_uuid`,
+and `ip`. The type comes from IAM when available, otherwise it is `user`,
+`anonymous` for requests without a user, or `system` for background work.
+`actor_user_uuid` remains available independently for filtering.
+
+Override `get_audit_actor()` to supply a custom JSON object. Background work
+without a user or request records `{"type": "system"}`. Forwarded IP accuracy
+depends on the proxy setup.
+
+Migration `0008` adds the JSON actor column and backfills existing events with
+the user UUID when present, otherwise `{"type": "system"}`.
+
 ## Local API
 
 Attach `AuditRoute` to the service route tree. Reads require

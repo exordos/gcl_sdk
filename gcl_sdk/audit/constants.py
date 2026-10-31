@@ -25,6 +25,7 @@ INGEST_FIELDS = (
     "resource_uuid",
     "project_id",
     "actor_user_uuid",
+    "actor",
     "action",
     "snapshot",
     "created_at",
