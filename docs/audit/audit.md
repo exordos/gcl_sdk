@@ -34,8 +34,10 @@ Override `get_audit_actor()` to supply a custom JSON object. Background work
 without a user or request records `{"type": "system"}`. Forwarded IP accuracy
 depends on the proxy setup.
 
-Migration `0008` adds the JSON actor column and backfills existing events with
-the user UUID when present, otherwise `{"type": "system"}`.
+Migration `0008` adds the JSON actor column. Existing events with an actor UUID
+are backfilled as `unknown` because the legacy column cannot distinguish user
+and service actors. A database trigger applies the same fallback to inserts
+from older application instances during a rolling upgrade.
 
 ## Local API
 
