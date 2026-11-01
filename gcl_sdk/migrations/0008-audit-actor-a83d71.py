@@ -41,52 +41,14 @@ class MigrationStep(migrations.AbstractMigrationStep):
             """
             UPDATE "gcl_sdk_audit_events"
                 SET "actor" = json_build_object(
-                    'type', 'unknown', 'user_uuid', "actor_user_uuid"::text
+                    'type', 'user', 'user_uuid', "actor_user_uuid"::text
                 )
                 WHERE "actor_user_uuid" IS NOT NULL;
             """,
             None,
         )
-        session.execute(
-            """
-            CREATE FUNCTION gcl_sdk_audit_actor_legacy_insert()
-            RETURNS trigger AS $$
-            BEGIN
-                IF NEW."actor"::jsonb = '{"type": "system"}'::jsonb
-                   AND NEW."actor_user_uuid" IS NOT NULL THEN
-                    NEW."actor" = json_build_object(
-                        'type', 'unknown',
-                        'user_uuid', NEW."actor_user_uuid"::text
-                    );
-                END IF;
-                RETURN NEW;
-            END;
-            $$ LANGUAGE plpgsql;
-            """,
-            None,
-        )
-        session.execute(
-            """
-            CREATE TRIGGER gcl_sdk_audit_actor_legacy_insert
-                BEFORE INSERT ON "gcl_sdk_audit_events"
-                FOR EACH ROW
-                EXECUTE FUNCTION gcl_sdk_audit_actor_legacy_insert();
-            """,
-            None,
-        )
 
     def downgrade(self, session):
-        session.execute(
-            """
-            DROP TRIGGER gcl_sdk_audit_actor_legacy_insert
-                ON "gcl_sdk_audit_events";
-            """,
-            None,
-        )
-        session.execute(
-            "DROP FUNCTION gcl_sdk_audit_actor_legacy_insert();",
-            None,
-        )
         session.execute(
             'ALTER TABLE "gcl_sdk_audit_events" DROP COLUMN "actor";',
             None,
