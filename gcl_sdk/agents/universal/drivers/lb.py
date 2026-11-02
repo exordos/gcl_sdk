@@ -675,11 +675,11 @@ map $http_upgrade $connection_upgrade {
             stderr=subprocess.PIPE,
         )
         tar_rc = tarps.wait()
-        download_rc = wgetps.wait()
-        if tar_rc != 0 or download_rc != 0:
+        wget_rc = wgetps.wait()
+        if tar_rc != 0 or wget_rc != 0:
             wgetps.kill()
             tarps.kill()
-            return f"{command[0]}({download_rc}):{wgetps.stderr.read()}\ntar({tar_rc}):{tarps.stderr.read()}"
+            return f"{command[0]}({wget_rc}):{wgetps.stderr.read()}\ntar({tar_rc}):{tarps.stderr.read()}"
         self._clean_external_symlinks(tmpdir)
         if os.path.exists(tgtdir):
             utils.swap_dirs(tmpdir, tgtdir)
