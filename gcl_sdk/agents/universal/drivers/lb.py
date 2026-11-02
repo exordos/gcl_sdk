@@ -25,6 +25,7 @@ import pathlib
 import re
 import shutil
 import subprocess
+import tempfile
 import uuid
 
 from gcl_sdk.agents.universal import constants
@@ -614,8 +615,7 @@ map $http_upgrade $connection_upgrade {
                 or re.search(r"[\x00-\x1f\x7f]", value)
             ):
                 raise ValueError("Invalid download HTTP header")
-            header = f"{name}: {value}".replace("\\", "\\\\").replace('"', '\\"')
-            config.append(f'header = "{header}"\n')
+            config.append(f"header = {name}: {value}\n")
         LOG.info("_download_url start: %s %s", path, url)
         key = "--zstd"
         if url.endswith(".gz"):
@@ -627,36 +627,36 @@ map $http_upgrade $connection_upgrade {
             os.makedirs(tmpdir, mode=0o775, exist_ok=True)
         shutil.chown(tmpdir, user="www-data", group="www-data")
         tgtdir = os.path.join(DOWNLOAD_DIR, path)
-        # curl can read headers from stdin; wget requires a regular config file.
-        # Refuse redirects with credentials rather than forward them to another
-        # origin. Public downloads retain wget's existing redirect behavior.
-        command = (
-            (
-                "curl",
-                "--config",
-                "-",
-                "--fail",
-                "--silent",
-                "--show-error",
-                "--location",
-                "--max-redirs",
-                "0",
-                "--max-time",
-                "60",
-                url,
+        # wget requires a seekable config file. An anonymous tmpfs file keeps
+        # credentials out of argv and disk; only wget inherits it. Refuse redirects
+        # with custom headers so credentials cannot reach another origin.
+        command = ("wget", "-O", "-", "--timeout=60", url)
+        config_file = tempfile.TemporaryFile(dir="/dev/shm") if headers else None
+        try:
+            pass_fds = ()
+            if config_file is not None:
+                config_file.write("".join(config).encode())
+                config_file.seek(0)
+                fd = config_file.fileno()
+                command = (
+                    "wget",
+                    f"--config=/proc/self/fd/{fd}",
+                    "--max-redirect=0",
+                    "-O",
+                    "-",
+                    "--timeout=60",
+                    url,
+                )
+                pass_fds = (fd,)
+            downloadps = subprocess.Popen(
+                command,
+                pass_fds=pass_fds,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
             )
-            if headers
-            else ("wget", "-O", "-", "--timeout=60", url)
-        )
-        downloadps = subprocess.Popen(
-            command,
-            stdin=subprocess.PIPE if headers else None,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        if headers:
-            downloadps.stdin.write("".join(config).encode())
-            downloadps.stdin.close()
+        finally:
+            if config_file is not None:
+                config_file.close()
         tarps = subprocess.Popen(
             (
                 "sudo",

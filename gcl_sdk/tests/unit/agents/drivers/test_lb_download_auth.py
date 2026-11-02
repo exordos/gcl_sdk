@@ -66,8 +66,8 @@ def server():
 
 @pytest.fixture
 def downloader(tmp_path, monkeypatch):
-    if not all(shutil.which(cmd) for cmd in ("wget", "curl", "tar")):
-        pytest.skip("wget, curl and tar are required")
+    if not all(shutil.which(cmd) for cmd in ("wget", "tar")):
+        pytest.skip("wget and tar are required")
     target, staging = tmp_path / "target", tmp_path / "staging"
     target.mkdir()
     staging.mkdir()
