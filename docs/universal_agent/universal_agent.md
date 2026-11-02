@@ -189,17 +189,3 @@ Direct driver gets resources directly from backend systems without a meta file. 
 See [Direct driver quick start](direct_driver_quick_start.md) for details, examples, and implementation guidance.
 
 ## Clients
-
-## Authenticated static downloads on load balancers
-
-The LB driver's `local_dir_download` action accepts an optional `headers` mapping,
-for example `{"Authorization": "Bearer <repository read token>"}`. Use a
-platform-managed read token in the route; do not embed a user's temporary
-installation token. Headers are for the agent's archive request only and are
-never written into nginx configuration or passed to site visitors.
-
-Authenticated downloads require `curl`, pass headers through stdin and refuse
-redirects. Use the final URL of the archive. A change in headers triggers a new
-download; only their digest is stored in the download cache. A failed download
-keeps the previous site's files. Without headers the driver retains the existing
-public `wget` download behavior.
