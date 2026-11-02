@@ -648,7 +648,7 @@ map $http_upgrade $connection_upgrade {
                     url,
                 )
                 pass_fds = (fd,)
-            downloadps = subprocess.Popen(
+            wgetps = subprocess.Popen(
                 command,
                 pass_fds=pass_fds,
                 stdout=subprocess.PIPE,
@@ -670,16 +670,16 @@ map $http_upgrade $connection_upgrade {
                 "-C",
                 tmpdir,
             ),
-            stdin=downloadps.stdout,
+            stdin=wgetps.stdout,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
         )
         tar_rc = tarps.wait()
-        download_rc = downloadps.wait()
+        download_rc = wgetps.wait()
         if tar_rc != 0 or download_rc != 0:
-            downloadps.kill()
+            wgetps.kill()
             tarps.kill()
-            return f"{command[0]}({download_rc}):{downloadps.stderr.read()}\ntar({tar_rc}):{tarps.stderr.read()}"
+            return f"{command[0]}({download_rc}):{wgetps.stderr.read()}\ntar({tar_rc}):{tarps.stderr.read()}"
         self._clean_external_symlinks(tmpdir)
         if os.path.exists(tgtdir):
             utils.swap_dirs(tmpdir, tgtdir)
