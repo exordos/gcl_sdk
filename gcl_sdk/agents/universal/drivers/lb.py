@@ -704,12 +704,15 @@ map $http_upgrade $connection_upgrade {
             for r in v["routes"].values():
                 c = r["cond"]
                 for a in c["actions"]:
-                    if a["kind"] != "local_dir_download":
-                        continue
-                    target_paths[self._route_key(v, c)] = (
-                        a["url"],
-                        a.get("headers", {}),
-                    )
+                    # Match the first applicable action rendered by nginx.
+                    if a["kind"] in {"backend", "redirect", "local_dir"}:
+                        break
+                    if a["kind"] == "local_dir_download":
+                        target_paths[self._route_key(v, c)] = (
+                            a["url"],
+                            a.get("headers", {}),
+                        )
+                        break
         return target_paths
 
     def _actualize_downloaded_dirs(self, agg_vhosts):

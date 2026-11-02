@@ -178,7 +178,8 @@ def test_rotated_credentials_trigger_download(downloader, monkeypatch):
     assert submitted == [(lb._download_url, "site", url, new)]
 
 
-def test_route_headers_are_download_only(downloader):
+@pytest.mark.parametrize("preceding_kind", [None, "backend", "redirect", "local_dir"])
+def test_route_headers_are_download_only(downloader, preceding_kind):
     lb, _, _ = downloader
     url = "https://example.com/site.tar.gz"
     condition = {
@@ -205,9 +206,30 @@ def test_route_headers_are_download_only(downloader):
         "proxy_proto_from": None,
         "routes": {"site": {"cond": condition}},
     }
+    condition["actions"].append(
+        {
+            "kind": "local_dir_download",
+            "url": "https://example.com/wrong.tar.gz",
+            "headers": {"Authorization": "Bearer wrong"},
+        }
+    )
+    preceding_actions = {
+        "backend": {
+            "kind": "backend",
+            "protocol": {"kind": "http"},
+            "pool": "upstream",
+        },
+        "redirect": {"kind": "redirect", "code": 302, "url": "https://example.com"},
+        "local_dir": {"kind": "local_dir", "path": "/var/www/existing"},
+    }
+    if preceding_kind:
+        condition["actions"].insert(0, preceding_actions[preceding_kind])
     lb.vhosts = [vhost]
     targets = lb._get_target_paths([vhost])
-    assert list(targets.values()) == [(url, {"Authorization": TOKEN})]
+    if preceding_kind:
+        assert targets == {}
+    else:
+        assert list(targets.values()) == [(url, {"Authorization": TOKEN})]
     _, rendered, _ = lb._gen_vhosts([vhost])
     config = lb._gen_file_content_l7(rendered, {})
     assert TOKEN not in config
