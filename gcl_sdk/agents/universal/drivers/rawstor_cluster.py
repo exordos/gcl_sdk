@@ -102,6 +102,11 @@ class RawstorStorageClusterDriver(AbstractStorageClusterDriver):
     def unit_name(self) -> str:
         return f"rawstor-mds@{self._cluster.uuid}.service"
 
+    def _witness_topology_line(self, bind: str) -> str:
+        witness_uuid = sys_uuid.uuid5(self._cluster.uuid, "mds-witness")
+        host = urlparse(f"ost://{bind}").hostname
+        return f"{witness_uuid} ost://{bind} 100 witness mds-{host}\n"
+
     def configure(self) -> None:
         if not self._spec.endpoint.startswith("mds://"):
             return
@@ -153,6 +158,7 @@ class RawstorStorageClusterDriver(AbstractStorageClusterDriver):
             )
         host = f"[{address}]" if address.version == 6 else str(address)
         bind = f"{host}:{mds.port}"
+        lines.append(self._witness_topology_line(bind))
         content = f"BIND_ADDR={bind}\n"
         config_changed = _write_if_changed(config, content)
         topology = MDS_CONFIG_DIR / f"{self._cluster.uuid}.topology"
@@ -193,10 +199,15 @@ class RawstorStorageClusterDriver(AbstractStorageClusterDriver):
         if actual_bind not in expected_binds:
             self._spec.endpoint = f"mds://{actual_bind}/"
         nodes = {}
+        witness = self._witness_topology_line(actual_bind).split()
+        witness_found = False
         for line in topology.read_text().splitlines():
             if not line.strip():
                 continue
             fields = line.split()
+            if fields == witness:
+                witness_found = True
+                continue
             if len(fields) != 5 or fields[3] not in ("data,witness", "witness,data"):
                 raise driver_exc.ResourceNotFound(resource=self._cluster)
             node_uuid, endpoint, weight, _role, path = fields
@@ -205,6 +216,8 @@ class RawstorStorageClusterDriver(AbstractStorageClusterDriver):
                 "weight": int(weight),
                 "failure_domain_path": path,
             }
+        if not witness_found:
+            raise driver_exc.ResourceNotFound(resource=self._cluster)
         self._spec.nodes = nodes
         active = subprocess.run(
             ["systemctl", "is-active", "--quiet", self.unit_name], check=False

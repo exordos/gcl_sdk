@@ -51,8 +51,11 @@ and completed MDS objects; `storage_capacity.available_by_policy` derives a
 placement upper bound accounting for mirrors, failure domains and pending disks.
 Pool figures are not additive. Each OST needs a dedicated backing filesystem.
 Unreachable OSTs contribute zero free space. MDS remains the final placement
-authority. Even mirror counts require an extra failure domain for the automatic
-witness; managed OSTs use the `data,witness` topology role.
+authority. The agent adds its MDS endpoint to topology as `ost://` with role
+`witness`, a stable cluster-derived UUID and a server-domain label derived from
+the resolved bind address. Managed OSTs use `data,witness`. The MDS witness is
+not a DATA node and does not contribute to capacity; two OSTs can therefore
+host two DATA copies with the MDS supplying the witness vote.
 
 `MachineVolume.storage_policy` preserves the assigned pool UUID, mirrors,
 chunk size and failure domain across reconciliation. `ExordosLocalHyperDriver`
@@ -63,7 +66,7 @@ consume the hypervisor's local qcow2 budget. Implicit qcow2 pool attributes and
 new disk requests default to WARM ephemeral; explicit pool attributes override them.
 
 Set `RAWSTOR_TEST_MDS` and `RAWSTOR_TEST_OST` to daemon paths to run the native
-integration in `test_rawstor_cluster.py`. It checks two MDS instances, three OSTs
+integration in `test_rawstor_cluster.py`. It checks two MDS instances, two OSTs
 per cluster, rack replication, topology reload and recovery. Set
 `RAWSTOR_TEST_ZFS_LOCATION` to an isolated test dataset and run the native node
 test as root to exercise zvol creation and snapshots through an OST.
