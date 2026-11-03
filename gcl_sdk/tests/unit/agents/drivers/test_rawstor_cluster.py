@@ -238,9 +238,10 @@ class TestCoreMDSLifecycle:
             driver.configure()
         cluster_uuid = driver._cluster.uuid
         topology = (tmp_path / "config" / f"{cluster_uuid}.topology").read_text()
-        assert (
-            topology
-            == f"{cluster_uuid} ost://10.0.0.5:7777 1 data,witness {cluster_uuid}\n"
+        witness_uuid = sys_uuid.uuid5(cluster_uuid, "mds-witness")
+        assert topology == (
+            f"{cluster_uuid} ost://10.0.0.5:7777 1 data,witness {cluster_uuid}\n"
+            f"{witness_uuid} ost://10.20.0.2:7776 100 witness mds-10.20.0.2\n"
         )
         config = (tmp_path / "config" / f"{cluster_uuid}.conf").read_text()
         assert config == "BIND_ADDR=10.20.0.2:7776\n"
@@ -264,9 +265,9 @@ class TestCoreMDSLifecycle:
         }
         with patch.object(rawstor_cluster.subprocess, "run"):
             driver.configure()
-        assert (tmp_path / "config" / f"{node_uuid}.topology").read_text() == (
-            f"{node_uuid} ost://10.0.0.5:7777 {int(weight)} data,witness dc/server\n"
-        )
+        assert (tmp_path / "config" / f"{node_uuid}.topology").read_text().splitlines()[
+            0
+        ] == (f"{node_uuid} ost://10.0.0.5:7777 {int(weight)} data,witness dc/server")
 
     @pytest.mark.parametrize("weight", [0, 1.5, float("inf"), 1 << 64])
     def test_topology_rejects_invalid_weights(self, tmp_path, monkeypatch, weight):
@@ -438,7 +439,7 @@ def test_two_core_mds_instances_create_enumerate_and_recover_disks(
                 rawstor_cluster.storage_capacity.default_policies(cluster.uuid)
             )
             nodes = {}
-            for member in range(3):
+            for member in range(2):
                 backing = tmp_path / f"ost{index}-{member}"
                 backing.mkdir()
                 ost_port = port()
@@ -479,7 +480,14 @@ def test_two_core_mds_instances_create_enumerate_and_recover_disks(
             assert target.spec().failure_domain == rawstor.OBJ_DOMAIN_RACK
             for chunk in target.chunks():
                 members = chunk.meta()
-                assert len(chunk.slots()) == 3
+                slots = chunk.slots()
+                assert len(slots) == 3
+                assert any(
+                    slot.uri.startswith(
+                        cluster.driver_spec.endpoint.replace("mds://", "ost://")
+                    )
+                    for slot in slots
+                )
                 assert sum(m.member_role == rawstor.MEMBER_DATA for m in members) == 2
                 assert (
                     sum(m.member_role == rawstor.MEMBER_WITNESS for m in members) == 1
@@ -586,7 +594,11 @@ def test_cluster_restore_only_reads_actual_topology(tmp_path, monkeypatch, role)
     monkeypatch.setattr(rawstor_cluster, "MDS_CONFIG_DIR", tmp_path)
     (tmp_path / f"{cluster.uuid}.conf").write_text("BIND_ADDR=127.0.0.1:7776\n")
     node_uuid = str(sys_uuid.uuid4())
-    content = f"{node_uuid} ost://127.0.0.1:7777 100 {role} dc/server\n"
+    witness_uuid = sys_uuid.uuid5(cluster.uuid, "mds-witness")
+    content = (
+        f"{node_uuid} ost://127.0.0.1:7777 100 {role} dc/server\n"
+        f"{witness_uuid} ost://127.0.0.1:7776 100 witness mds-127.0.0.1\n"
+    )
     topology = tmp_path / f"{cluster.uuid}.topology"
     topology.write_text(content)
     driver = rawstor_cluster.RawstorStorageClusterDriver(cluster)
@@ -641,7 +653,7 @@ def test_coordinator_observes_drift_and_applies_target_on_update(tmp_path, monke
         created = driver.create(resource)
         topology = rawstor_cluster.MDS_CONFIG_DIR / f"{cluster.uuid}.topology"
         original = topology.read_text()
-        topology.write_text(original.replace(" 100 ", " 200 "))
+        topology.write_text(original.replace(" 100 ", " 200 ", 1))
         run.reset_mock()
         [actual] = driver.list("storage_cluster")
         assert actual.value["driver_spec"]["nodes"][node_uuid]["weight"] == 200
@@ -680,3 +692,48 @@ def test_restore_rejects_topology_without_managed_roles(tmp_path, monkeypatch, r
     with pytest.raises(rawstor_cluster.driver_exc.ResourceNotFound):
         driver.restore()
     assert topology.read_text() == content
+
+
+def test_coordinator_recreates_missing_mds_witness_without_exposing_it_as_a_node(
+    tmp_path, monkeypatch
+):
+    cluster = _cluster(tmp_path)
+    cluster.driver_spec.endpoint = "mds://127.0.0.1:7776/"
+    cluster.driver_spec.ost_endpoint = ""
+    node_uuid = str(sys_uuid.uuid4())
+    cluster.driver_spec.nodes = {
+        node_uuid: {
+            "endpoint": "ost://127.0.0.1:7777",
+            "weight": 100,
+            "failure_domain_path": "server",
+        }
+    }
+    resource = cluster.to_ua_resource("storage_cluster")
+    monkeypatch.setattr(rawstor_cluster, "MDS_CONFIG_DIR", tmp_path / "config")
+    monkeypatch.setattr(
+        rawstor_cluster.RawstorStorageClusterDriver, "get_capacity", lambda self: []
+    )
+    driver = rawstor_cluster.StorageClusterAgentDriver(
+        meta_file=str(tmp_path / "meta.json")
+    )
+    driver.start()
+    with patch.object(
+        rawstor_cluster.subprocess,
+        "run",
+        return_value=subprocess.CompletedProcess([], 0),
+    ):
+        driver.create(resource)
+        topology = rawstor_cluster.MDS_CONFIG_DIR / f"{cluster.uuid}.topology"
+        expected = topology.read_text()
+        topology.write_text(
+            "\n".join(line for line in expected.splitlines() if " witness " not in line)
+            + "\n"
+        )
+        assert driver.list("storage_cluster") == []
+        driver.create(resource)
+        assert topology.read_text() == expected
+        [actual] = driver.list("storage_cluster")
+        assert (
+            actual.value["driver_spec"]["nodes"]
+            == resource.value["driver_spec"]["nodes"]
+        )
