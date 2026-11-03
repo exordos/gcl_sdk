@@ -428,9 +428,7 @@ class _SpecDriver(meta.MetaFileStorageAgentDriver):
 
 def test_a_nested_default_the_data_plane_fills_in_settles(tmp_path):
     uuid = sys_uuid.uuid4()
-    target = _make_resource(
-        "dummy", uuid, {"uuid": str(uuid), "spec": {"kind": "foo"}}
-    )
+    target = _make_resource("dummy", uuid, {"uuid": str(uuid), "spec": {"kind": "foo"}})
     drv = _SpecDriver(meta_file=str(tmp_path / "meta.json"))
     drv.create(target)
 

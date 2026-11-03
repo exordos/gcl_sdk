@@ -321,6 +321,8 @@ def test_disk_device_xml(image_path, disk_type, source_attribute, driver_attribu
     assert disk.get("type") == disk_type
     assert disk.find("source").get(source_attribute) == image_path
     assert disk.find("driver").attrib == driver_attributes
+
+
 class TestVhostuserDisk:
     def test_disk_xml_shape(self):
         # Shape validated against libvirt's RelaxNG schema

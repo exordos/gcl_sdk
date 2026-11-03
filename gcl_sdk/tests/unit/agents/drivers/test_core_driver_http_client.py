@@ -14,7 +14,6 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 from __future__ import annotations
-from __future__ import annotations
 
 from unittest.mock import MagicMock
 from unittest.mock import patch
