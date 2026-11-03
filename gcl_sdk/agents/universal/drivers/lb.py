@@ -17,12 +17,15 @@ from __future__ import annotations
 
 import concurrent
 import glob
+import hashlib
+import json
 import logging
 import os
 import pathlib
 import re
 import shutil
 import subprocess
+import tempfile
 import uuid
 
 from gcl_sdk.agents.universal import constants
@@ -591,7 +594,28 @@ map $http_upgrade $connection_upgrade {
                     # Handles broken links or infinite loops
                     path.unlink()
 
-    def _download_url(self, path, url):
+    @staticmethod
+    def _download_key(url, headers):
+        if not headers:
+            return url
+        # Detect credential rotation without copying secrets into the download cache.
+        digest = hashlib.sha256(
+            json.dumps(headers, sort_keys=True).encode()
+        ).hexdigest()
+        return {"url": url, "headers_sha256": digest}
+
+    def _download_url(self, path, url, headers=None):
+        headers = headers or {}
+        config = []
+        for name, value in headers.items():
+            if (
+                not isinstance(name, str)
+                or not re.fullmatch(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+", name)
+                or not isinstance(value, str)
+                or re.search(r"[\x00-\x1f\x7f]", value)
+            ):
+                raise ValueError("Invalid download HTTP header")
+            config.append(f"header = {name}: {value}\n")
         LOG.info("_download_url start: %s %s", path, url)
         key = "--zstd"
         if url.endswith(".gz"):
@@ -603,11 +627,36 @@ map $http_upgrade $connection_upgrade {
             os.makedirs(tmpdir, mode=0o775, exist_ok=True)
         shutil.chown(tmpdir, user="www-data", group="www-data")
         tgtdir = os.path.join(DOWNLOAD_DIR, path)
-        wgetps = subprocess.Popen(
-            ("wget", "-O", "-", "--timeout=60", url),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
+        # wget requires a seekable config file. An anonymous tmpfs file keeps
+        # credentials out of argv and disk; only wget inherits it. Refuse redirects
+        # with custom headers so credentials cannot reach another origin.
+        command = ("wget", "-O", "-", "--timeout=60", url)
+        config_file = tempfile.TemporaryFile(dir="/dev/shm") if headers else None
+        try:
+            pass_fds = ()
+            if config_file is not None:
+                config_file.write("".join(config).encode())
+                config_file.seek(0)
+                fd = config_file.fileno()
+                command = (
+                    "wget",
+                    f"--config=/proc/self/fd/{fd}",
+                    "--max-redirect=0",
+                    "-O",
+                    "-",
+                    "--timeout=60",
+                    url,
+                )
+                pass_fds = (fd,)
+            wgetps = subprocess.Popen(
+                command,
+                pass_fds=pass_fds,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+        finally:
+            if config_file is not None:
+                config_file.close()
         tarps = subprocess.Popen(
             (
                 "sudo",
@@ -630,7 +679,7 @@ map $http_upgrade $connection_upgrade {
         if tar_rc != 0 or wget_rc != 0:
             wgetps.kill()
             tarps.kill()
-            return f"wget({wget_rc}):{wgetps.stderr.read()}\ntar({tar_rc}):{tarps.stderr.read()}"
+            return f"{command[0]}({wget_rc}):{wgetps.stderr.read()}\ntar({tar_rc}):{tarps.stderr.read()}"
         self._clean_external_symlinks(tmpdir)
         if os.path.exists(tgtdir):
             utils.swap_dirs(tmpdir, tgtdir)
@@ -638,7 +687,7 @@ map $http_upgrade $connection_upgrade {
         else:
             os.rename(tmpdir, tgtdir)
         # Update url in persistent storage
-        self._download_dirs[path] = url
+        self._download_dirs[path] = self._download_key(url, headers)
         LOG.info("_download_url finish: %s %s", path, url)
         return True
 
@@ -655,29 +704,40 @@ map $http_upgrade $connection_upgrade {
             for r in v["routes"].values():
                 c = r["cond"]
                 for a in c["actions"]:
-                    if a["kind"] != "local_dir_download":
-                        continue
-                    target_paths[self._route_key(v, c)] = a["url"]
+                    # Match the first applicable action rendered by nginx.
+                    if a["kind"] in {"backend", "redirect", "local_dir"}:
+                        break
+                    if a["kind"] == "local_dir_download":
+                        target_paths[self._route_key(v, c)] = (
+                            a["url"],
+                            a.get("headers", {}),
+                        )
+                        break
         return target_paths
 
     def _actualize_downloaded_dirs(self, agg_vhosts):
         target_paths = self._get_target_paths(agg_vhosts)
         target_paths_set = set(target_paths.keys())
         # Download new dirs/Update already existing with new link
-        for p, u in target_paths.items():
+        for p, (u, headers) in target_paths.items():
+            key = self._download_key(u, headers)
             # Already in progress, skip
             if p in self._download_dirs_futures:
                 continue
-            if self._download_dirs.get(p) != u:
+            if self._download_dirs.get(p) != key:
                 # Url changed, get new one
-                self._download_dirs_futures[p] = TPOOL.submit(self._download_url, p, u)
+                self._download_dirs_futures[p] = TPOOL.submit(
+                    self._download_url, p, u, headers
+                )
             elif os.path.isdir(os.path.join(DOWNLOAD_DIR, p)) and not os.path.isdir(
                 os.path.join(DOWNLOAD_DIR_TMP, p)
             ):
                 # already exists and "ok", just track it
-                self._download_dirs[p] = u
+                self._download_dirs[p] = key
             else:
-                self._download_dirs_futures[p] = TPOOL.submit(self._download_url, p, u)
+                self._download_dirs_futures[p] = TPOOL.submit(
+                    self._download_url, p, u, headers
+                )
         # Clean orphan dirs
         actual_ondisk_dirs = {
             entry.name for entry in os.scandir(DOWNLOAD_DIR) if entry.is_dir()
@@ -686,13 +746,13 @@ map $http_upgrade $connection_upgrade {
             self._download_dirs_futures[d] = TPOOL.submit(self._clean_path, d)
 
     def _validate_downloaded_dirs(self, agg_vhosts):
-        for p, u in self._get_target_paths(agg_vhosts).items():
+        for p, (u, headers) in self._get_target_paths(agg_vhosts).items():
             # If TMP dir exists - it's a signal that we didn't finish our job
             #  before (for ex. when url was updated)
             if (
                 not os.path.isdir(os.path.join(DOWNLOAD_DIR, p))
                 or os.path.isdir(os.path.join(DOWNLOAD_DIR_TMP, p))
-                or self._download_dirs.get(p, None) != u
+                or self._download_dirs.get(p, None) != self._download_key(u, headers)
             ):
                 self._download_dirs.pop(p, None)
                 return False
