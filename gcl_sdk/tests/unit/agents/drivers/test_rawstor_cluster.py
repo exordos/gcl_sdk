@@ -238,7 +238,10 @@ class TestCoreMDSLifecycle:
             driver.configure()
         cluster_uuid = driver._cluster.uuid
         topology = (tmp_path / "config" / f"{cluster_uuid}.topology").read_text()
-        assert topology == f"{cluster_uuid} ost://10.0.0.5:7777 1 {cluster_uuid}\n"
+        assert (
+            topology
+            == f"{cluster_uuid} ost://10.0.0.5:7777 1 data,witness {cluster_uuid}\n"
+        )
         config = (tmp_path / "config" / f"{cluster_uuid}.conf").read_text()
         assert config == "BIND_ADDR=10.20.0.2:7776\n"
         assert (
@@ -262,7 +265,7 @@ class TestCoreMDSLifecycle:
         with patch.object(rawstor_cluster.subprocess, "run"):
             driver.configure()
         assert (tmp_path / "config" / f"{node_uuid}.topology").read_text() == (
-            f"{node_uuid} ost://10.0.0.5:7777 {int(weight)} dc/server\n"
+            f"{node_uuid} ost://10.0.0.5:7777 {int(weight)} data,witness dc/server\n"
         )
 
     @pytest.mark.parametrize("weight", [0, 1.5, float("inf"), 1 << 64])
@@ -435,7 +438,7 @@ def test_two_core_mds_instances_create_enumerate_and_recover_disks(
                 rawstor_cluster.storage_capacity.default_policies(cluster.uuid)
             )
             nodes = {}
-            for member in range(2):
+            for member in range(3):
                 backing = tmp_path / f"ost{index}-{member}"
                 backing.mkdir()
                 ost_port = port()
@@ -474,6 +477,13 @@ def test_two_core_mds_instances_create_enumerate_and_recover_disks(
             assert target.spec().size == 8 << 20
             assert target.spec().width == 2
             assert target.spec().failure_domain == rawstor.OBJ_DOMAIN_RACK
+            for chunk in target.chunks():
+                members = chunk.meta()
+                assert len(chunk.slots()) == 3
+                assert sum(m.member_role == rawstor.MEMBER_DATA for m in members) == 2
+                assert (
+                    sum(m.member_role == rawstor.MEMBER_WITNESS for m in members) == 1
+                )
             capacities = rawstor_cluster.RawstorStorageClusterDriver(
                 cluster
             ).get_capacity()
@@ -567,7 +577,8 @@ def test_cluster_update_applies_configuration(tmp_path, monkeypatch):
     configure.assert_called_once()
 
 
-def test_cluster_restore_only_reads_actual_topology(tmp_path, monkeypatch):
+@pytest.mark.parametrize("role", ["data,witness", "witness,data"])
+def test_cluster_restore_only_reads_actual_topology(tmp_path, monkeypatch, role):
     import subprocess
 
     cluster = _cluster(tmp_path)
@@ -575,7 +586,7 @@ def test_cluster_restore_only_reads_actual_topology(tmp_path, monkeypatch):
     monkeypatch.setattr(rawstor_cluster, "MDS_CONFIG_DIR", tmp_path)
     (tmp_path / f"{cluster.uuid}.conf").write_text("BIND_ADDR=127.0.0.1:7776\n")
     node_uuid = str(sys_uuid.uuid4())
-    content = f"{node_uuid} ost://127.0.0.1:7777 100 dc/server\n"
+    content = f"{node_uuid} ost://127.0.0.1:7777 100 {role} dc/server\n"
     topology = tmp_path / f"{cluster.uuid}.topology"
     topology.write_text(content)
     driver = rawstor_cluster.RawstorStorageClusterDriver(cluster)
@@ -654,3 +665,18 @@ def test_coordinator_observes_drift_and_applies_target_on_update(tmp_path, monke
             driver.delete(updated)
         assert not topology.exists()
         assert not any("enable" in call.args[0] for call in run.call_args_list)
+
+
+@pytest.mark.parametrize("role", ["", " data", " witness", " bogus"])
+def test_restore_rejects_topology_without_managed_roles(tmp_path, monkeypatch, role):
+    cluster = _cluster(tmp_path)
+    cluster.driver_spec.endpoint = "mds://127.0.0.1:7776/"
+    monkeypatch.setattr(rawstor_cluster, "MDS_CONFIG_DIR", tmp_path)
+    (tmp_path / f"{cluster.uuid}.conf").write_text("BIND_ADDR=127.0.0.1:7776\n")
+    topology = tmp_path / f"{cluster.uuid}.topology"
+    content = f"{sys_uuid.uuid4()} ost://127.0.0.1:7777 100{role} dc/server\n"
+    topology.write_text(content)
+    driver = rawstor_cluster.RawstorStorageClusterDriver(cluster)
+    with pytest.raises(rawstor_cluster.driver_exc.ResourceNotFound):
+        driver.restore()
+    assert topology.read_text() == content

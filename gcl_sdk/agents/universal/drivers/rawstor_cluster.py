@@ -139,7 +139,7 @@ class RawstorStorageClusterDriver(AbstractStorageClusterDriver):
             ):
                 raise ValueError("Invalid rawstor OST topology entry")
             lines.append(
-                f"{node_uuid} {node['endpoint'].rstrip('/')} {int(node['weight'])} {path}\n"
+                f"{node_uuid} {node['endpoint'].rstrip('/')} {int(node['weight'])} data,witness {path}\n"
             )
         config = MDS_CONFIG_DIR / f"{self._cluster.uuid}.conf"
         previous_config = config.read_text() if config.exists() else None
@@ -196,7 +196,10 @@ class RawstorStorageClusterDriver(AbstractStorageClusterDriver):
         for line in topology.read_text().splitlines():
             if not line.strip():
                 continue
-            node_uuid, endpoint, weight, path = line.split()
+            fields = line.split()
+            if len(fields) != 5 or fields[3] not in ("data,witness", "witness,data"):
+                raise driver_exc.ResourceNotFound(resource=self._cluster)
+            node_uuid, endpoint, weight, _role, path = fields
             nodes[node_uuid] = {
                 "endpoint": endpoint,
                 "weight": int(weight),
