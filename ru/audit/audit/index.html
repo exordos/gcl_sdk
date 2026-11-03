@@ -878,6 +878,15 @@ transaction as the resource mutation. New rows start with delivery status
 <code>NEW</code>. A successful or idempotently acknowledged central ingest removes the
 local outbox row. A permanent central UUID/payload conflict is retained and
 marked <code>ERROR</code>.</p>
+<p>The immutable <code>actor</code> JSON object contains only <code>type</code>, optional <code>user_uuid</code>,
+and <code>ip</code>. The type comes from IAM when available, otherwise it is <code>user</code>,
+<code>anonymous</code> for requests without a user, or <code>system</code> for background work.
+<code>actor_user_uuid</code> remains available independently for filtering.</p>
+<p>Override <code>get_audit_actor()</code> to supply a custom JSON object. Background work
+without a user or request records <code>{"type": "system"}</code>. Forwarded IP accuracy
+depends on the proxy setup.</p>
+<p>Migration <code>0008</code> adds the JSON actor column and backfills existing events with
+the user UUID when present, otherwise <code>{"type": "system"}</code>.</p>
 <h2 id="local-api">Local API<a class="headerlink" href="#local-api" title="Permanent link">#</a></h2>
 <p>Attach <code>AuditRoute</code> to the service route tree. Reads require
 <code>audit.events.read</code> or <code>audit.events.read_all</code> and are project-scoped by the IAM
