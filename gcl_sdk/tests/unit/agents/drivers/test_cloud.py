@@ -5,6 +5,7 @@
 # http://www.apache.org/licenses/LICENSE-2.0
 
 from unittest import mock
+from types import SimpleNamespace
 import uuid
 
 from openstack.network.v2.network import Network
@@ -18,6 +19,51 @@ import yaml
 from gcl_sdk.cloud import bootstrap
 from gcl_sdk.cloud.drivers.base import CloudConfig
 from gcl_sdk.cloud.drivers.openstack import OpenStackDriver
+from gcl_sdk.agents.universal.drivers import cloud as cloud_pool
+from gcl_sdk.agents.universal.drivers import pool as pool_models
+
+
+@pytest.mark.parametrize("cores,ram", [(-1, -1), (-1, 4096), (8, -1), (8, 4096), (1, 512)])
+def test_pool_quota_projection_preserves_unlimited_and_finite_capacity(cores, ram):
+    driver = cloud_pool.CloudPoolDriver.__new__(cloud_pool.CloudPoolDriver)
+    driver.pool = SimpleNamespace(uuid=uuid.uuid4())
+    driver.spec = pool_models.CloudPoolDriverSpec(connection=uuid.uuid4())
+    driver.cloud = mock.Mock()
+    driver.cloud.api.compute.get_limits.return_value.absolute = SimpleNamespace(
+        max_total_cores=cores, max_total_ram_size=ram,
+        total_cores_used=2, total_ram_used=1024,
+    )
+    actual = driver.get_pool_info()
+    for quota, used, total, available in (
+        (cores, 2, actual.all_cores, actual.avail_cores),
+        (ram, 1024, actual.all_ram, actual.avail_ram),
+    ):
+        if quota == -1:
+            assert available >= 4096
+            assert total - available == used
+            assert total <= 2**31 - 1
+        else:
+            assert total == quota
+            assert available == max(0, quota - used)
+
+
+@pytest.mark.parametrize("quota", [-1, 100, 1])
+def test_cinder_quota_supports_volume_placement(quota):
+    driver = cloud_pool.CloudPoolDriver.__new__(cloud_pool.CloudPoolDriver)
+    driver.spec = pool_models.CloudPoolDriverSpec(connection=uuid.uuid4())
+    driver.cloud = mock.Mock()
+    driver.cloud.api.block_storage.get_limits.return_value.absolute = SimpleNamespace(
+        max_total_volume_gigabytes=quota, total_gigabytes_used=1,
+    )
+    storage = driver.list_storage_pools()[0]
+    if quota == -1:
+        assert storage.available >= 4096
+        assert storage.available_actual == storage.available
+    else:
+        assert storage.capacity_usable == quota
+        assert storage.available_actual == max(0, quota - 1)
+    selected = pool_models.select_storage_pool([storage], storage.tier, False, 8)
+    assert (selected is storage) == (quota == -1 or quota - 1 >= 8)
 
 
 @pytest.fixture

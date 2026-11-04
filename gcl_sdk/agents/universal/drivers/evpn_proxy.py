@@ -70,8 +70,8 @@ PLATFORM_CALLS = tuple(
     for method, path, claims in (
         ("GET", "/v1/boots/{me}", False),  # iPXE
         ("POST", "/v1/agents/", True),
-        ("PUT", "/v1/agents/{me}", False),
-        ("GET", "/v1/agents/{me}/actions/get_payload", False),
+        ("PUT", "/v1/agents/{uuid}", False),
+        ("GET", "/v1/agents/{uuid}/actions/get_payload", False),
         ("GET", "/v1/node_verifiers/{me}/actions/verify", False),
         # Seed OS takes the node's key after flashing the disk.
         ("POST", "/v1/nodes/{me}/actions/refresh_secret/invoke", False),
@@ -506,8 +506,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         * **api** — authenticates itself; relayed whole.
         * **service** — authenticates itself, but an unknown caller is
           refused rather than relayed without an identity.
-        * **platform** — one of `PLATFORM_CALLS`, naming no machine but the
-          caller (query included); a new route is closed until listed.
+        * **platform** — one of `PLATFORM_CALLS`, with machine paths scoped
+          to the caller (query included). APIs scope agent UUIDs to that node;
+          a new route is closed until listed.
         """
         if kind in ("boot", "published"):
             return method in ("GET", "HEAD")

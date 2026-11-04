@@ -9,6 +9,12 @@ import uuid
 from gcl_sdk.agents.universal.drivers import pool as models
 
 
+def _quota_capacity(limit, used):
+    # Core persists compute counters as signed 32-bit integers.
+    total = 2**31 - 1 if limit == -1 else limit
+    return total, max(0, total - used)
+
+
 class ControllerPoolAgentDriver(models.PoolAgentDriver):
     def get_capabilities(self):
         return super().get_capabilities() + ["cloud_pool"]
@@ -96,22 +102,26 @@ class CloudPoolDriver(models.AbstractPoolDriver):
 
     def get_pool_info(self):
         compute = self.cloud.api.compute.get_limits().absolute
-        total_cores = compute.max_total_cores
-        total_ram = compute.max_total_ram_size
+        total_cores, avail_cores = _quota_capacity(
+            compute.max_total_cores, compute.total_cores_used
+        )
+        total_ram, avail_ram = _quota_capacity(
+            compute.max_total_ram_size, compute.total_ram_used
+        )
         return models.MachinePool(
             uuid=self.pool.uuid,
             driver_spec=self.spec,
             status="ACTIVE",
             all_cores=total_cores,
             all_ram=total_ram,
-            avail_cores=max(0, total_cores - compute.total_cores_used),
-            avail_ram=max(0, total_ram - compute.total_ram_used),
+            avail_cores=avail_cores,
+            avail_ram=avail_ram,
         )
 
     def list_storage_pools(self):
         limits = self.cloud.api.block_storage.get_limits().absolute
-        total = limits.max_total_volume_gigabytes
         used = limits.total_gigabytes_used
+        total, available = _quota_capacity(limits.max_total_volume_gigabytes, used)
         return [
             models.ThinStoragePool(
                 uuid=uuid.uuid5(
@@ -121,7 +131,7 @@ class CloudPoolDriver(models.AbstractPoolDriver):
                 pool_type="cinder",
                 capacity_usable=total,
                 capacity_provisioned=used,
-                available_actual=max(0, total - used),
+                available_actual=available,
                 ephemeral=False,
             )
         ]
