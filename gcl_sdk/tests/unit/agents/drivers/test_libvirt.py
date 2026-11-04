@@ -655,3 +655,27 @@ def test_a_port_without_the_overlay_answer_takes_the_classic_path():
         mac=pool_base.Port.generate_mac(),
     )
     assert drv._iface_args(bare)["interface_id"] is None
+
+
+def test_resize_preserves_overlay_interface_identity_and_flat_transport():
+    driver = _driver_with({"ovs": True})
+    overlay = _port("private", overlay=True)
+    flat = _port("transport")
+    interfaces = "".join(
+        libvirt_driver.XMLLibvirtInstance.interface_xml(
+            mac=p.mac, **driver._iface_args(p)
+        )
+        for p in (overlay, flat)
+    )
+    domain = driver._client_instance.lookupByUUIDString.return_value
+    domain.XMLDesc.return_value = (
+        "<domain><devices>" + interfaces + "</devices></domain>"
+    )
+    restored = driver._list_interfaces(mock.Mock(uuid=sys_uuid.uuid4()))
+    assert restored[0].uuid == overlay.uuid
+    assert restored[0].overlay is True
+    assert driver._iface_args(restored[0])["interface_id"] == str(overlay.uuid)
+    assert driver._iface_args(restored[0])["source"] == "br-int"
+    assert restored[1].overlay is False
+    assert driver._iface_args(restored[1])["interface_id"] is None
+    assert driver._iface_args(restored[1])["source"] == "transport"
