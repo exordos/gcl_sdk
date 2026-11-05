@@ -160,3 +160,46 @@ except OSError:
     finally:
         process.terminate()
         process.wait(timeout=5)
+
+
+@pytest.mark.parametrize("protect", [False, True])
+def test_policy_withdrawal_blocks_an_already_established_tcp_session(fabric, flat, protect):
+    guest = fabric.add_guest("fc", vlan=49, ip="10.42.17.9/24")
+    fabric.apply_egress(guest, VNI, "10.42.17.0/24", "10.42.17.1")
+    _policy(["10.66.0.0/24"], [])
+    server_code = """import socket
+with socket.socket() as listener:
+    listener.bind(('0.0.0.0', 11011))
+    listener.listen(1)
+    print('ready', flush=True)
+    connection, _ = listener.accept()
+    with connection:
+        while data := connection.recv(1024):
+            connection.sendall(data)
+"""
+    client_code = """import socket, sys
+with socket.create_connection(('10.66.0.10', 11011), timeout=2) as connection:
+    for line in sys.stdin:
+        try:
+            connection.sendall(line.encode())
+            print(connection.recv(1024).decode().strip(), flush=True)
+        except OSError:
+            print('blocked', flush=True)
+"""
+    server = subprocess.Popen(["ip", "netns", "exec", flat, sys.executable, "-u", "-c", server_code], stdout=subprocess.PIPE, text=True)
+    client = None
+    try:
+        assert server.stdout.readline().strip() == "ready"
+        client = subprocess.Popen(["ip", "netns", "exec", guest.ns, sys.executable, "-u", "-c", client_code], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        client.stdin.write("before\n")
+        client.stdin.flush()
+        assert client.stdout.readline().strip() == "before"
+        _policy(["10.66.0.0/24"] if protect else [], ["10.66.0.10/32"] if protect else [])
+        client.stdin.write("after\n")
+        client.stdin.flush()
+        assert client.stdout.readline().strip() == "blocked"
+    finally:
+        for process in (client, server):
+            if process is not None:
+                process.terminate()
+                process.wait(timeout=5)

@@ -61,25 +61,26 @@ def test_provider_uploads_uncompressed_image_privately(
 ):
     monkeypatch.setattr(images, "_open", lambda *a, **kw: io.BytesIO(encode(payload)))
 
-    def upload(**values):
-        assert Path(values["filename"]).read_bytes() == payload
+    captured = {}
+
+    def create(cls, **values):
         assert values["visibility"] == "private"
         assert values["disk_format"] == format
-        assert values["description"].startswith(
-            "exordos:" + str(driver.config.connection) + ":image:"
-        )
-        return Image(
-            id="uploaded",
-            status="active",
-            **{k: v for k, v in values.items() if k in ["name", "description"]},
-        )
+        assert values["description"].startswith("exordos:" + str(driver.config.connection) + ":image:")
+        return Image(status="queued", **values)
 
-    driver.api.image.create_image.side_effect = upload
-    result = images.resolve(
-        driver, "https://repo.example/version/image" + suffix + "?download=1"
-    )
-    assert result.id == "uploaded"
-    assert not Path(driver.api.image.create_image.call_args.kwargs["filename"]).exists()
+    def upload(self, session, *, data):
+        captured["path"] = Path(data.name)
+        assert data.read() == payload
+        return mock.Mock(status_code=204)
+
+    driver.api.image._create.side_effect = create
+    driver.api.image.wait_for_status.side_effect = lambda image, **kw: image
+    monkeypatch.setattr(Image, "upload", upload)
+    result = images.resolve(driver, "https://repo.example/version/image" + suffix + "?download=1")
+    assert result.id == str(uuid.uuid5(driver.config.connection, "image:https://repo.example/version/image" + suffix + "?download=1"))
+    assert not captured["path"].exists()
+
 
 
 def test_ready_import_is_reused_without_downloading_or_adopting_other_connection(
@@ -116,12 +117,30 @@ def test_existing_glance_references_keep_the_native_contract(driver):
 def test_incomplete_owned_import_is_replaced_on_retry(driver, monkeypatch):
     url = "http://repo.example/image.raw"
     identity = uuid.uuid5(driver.config.connection, "image:" + url)
-    old = Image(id="old", status="queued", description=driver.marker("image", identity))
+    old = Image(id="old", status="killed", description=driver.marker("image", identity))
     driver.api.image.images.return_value = [old]
     monkeypatch.setattr(images, "_open", lambda *a, **kw: io.BytesIO(b"raw"))
+    monkeypatch.setattr(Image, "upload", lambda self, session, *, data: mock.Mock(status_code=204))
+    driver.api.image._create.return_value = Image(id=str(identity), status="queued", description=driver.marker("image", identity))
     images.resolve(driver, url)
     driver.api.image.delete_image.assert_called_once_with("old", ignore_missing=True)
     driver.api.image.wait_for_delete.assert_called_once_with(old)
+
+
+@pytest.mark.parametrize("status", ["saving", "importing", "uploading"])
+def test_concurrent_import_waits_without_deleting_another_upload(driver, status):
+    url = "http://repo.example/image.raw"
+    identity = uuid.uuid5(driver.config.connection, "image:" + url)
+    existing = Image(id=str(identity), status=status, description=driver.marker("image", identity))
+    driver.api.image.images.return_value = [existing]
+    result = images.resolve(driver, url)
+    assert result is driver.api.image.wait_for_status.return_value
+    driver.api.image.wait_for_status.assert_called_once_with(
+        existing, status="active", failures=["killed", "deleted", "pending_delete"],
+        wait=images.CONF.openstack_cloud.image_import_timeout,
+    )
+    driver.api.image.delete_image.assert_not_called()
+    driver.api.image.create_image.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -197,6 +216,56 @@ def test_download_is_bounded_by_total_time(driver, monkeypatch):
 def test_glance_wait_uses_remaining_import_deadline(driver, monkeypatch):
     monkeypatch.setattr(images, "_open", lambda url: io.BytesIO(b"image"))
     clock = iter([0, 100, 200, 250, 300, 400, 500])
-    monkeypatch.setattr(images.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(images.time, "monotonic", lambda: next(clock, 500))
+    driver.api.image._create.side_effect = lambda cls, **values: Image(status="queued", **values)
+    monkeypatch.setattr(Image, "upload", lambda self, session, *, data: mock.Mock(status_code=204))
     images.resolve(driver, "https://repo.example/image.raw")
-    assert driver.api.image.create_image.call_args.kwargs["timeout"] == 400
+    assert 0 < driver.api.image.wait_for_status.call_args.kwargs["wait"] < 900
+
+
+def test_abandoned_queued_image_is_uploaded_without_deletion(driver, monkeypatch):
+    url = "https://repo.example/image.raw"
+    identity = uuid.uuid5(driver.config.connection, "image:" + url)
+    queued = Image(id=str(identity), status="queued", description=driver.marker("image", identity))
+    driver.api.image.images.return_value = [queued]
+    monkeypatch.setattr(images, "_open", lambda *_: io.BytesIO(b"raw"))
+    with mock.patch.object(Image, "upload", return_value=mock.Mock(status_code=204)) as upload:
+        images.resolve(driver, url)
+    upload.assert_called_once()
+    driver.api.image._create.assert_not_called()
+    driver.api.image.delete_image.assert_not_called()
+    driver.api.image.wait_for_status.assert_called_once()
+
+
+def test_create_collision_returns_owned_active_image_without_deleting(driver, monkeypatch):
+    from openstack import exceptions
+
+    url = "https://repo.example/image.raw"
+    identity = uuid.uuid5(driver.config.connection, "image:" + url)
+    existing = Image(id=str(identity), status="active", description=driver.marker("image", identity))
+    driver.api.image._create.side_effect = exceptions.ConflictException("already exists")
+    driver.api.image.get_image.return_value = existing
+    monkeypatch.setattr(images, "_open", lambda *_: io.BytesIO(b"raw"))
+    assert images.resolve(driver, url) is existing
+    driver.api.image.delete_image.assert_not_called()
+
+
+@pytest.mark.parametrize("status", [409, 410])
+def test_upload_collision_waits_for_the_owned_image_without_deleting(driver, monkeypatch, status):
+    from openstack import exceptions
+    from requests import Response
+
+    url = "https://repo.example/image.raw"
+    identity = uuid.uuid5(driver.config.connection, "image:" + url)
+    queued = Image(id=str(identity), status="queued", description=driver.marker("image", identity))
+    saving = Image(id=str(identity), status="saving", description=driver.marker("image", identity))
+    driver.api.image.images.return_value = [queued]
+    driver.api.image.get_image.return_value = saving
+    monkeypatch.setattr(images, "_open", lambda *_: io.BytesIO(b"raw"))
+    response = Response()
+    response.status_code = status
+    monkeypatch.setattr(Image, "upload", mock.Mock(side_effect=exceptions.HttpException(response=response)))
+    images.resolve(driver, url)
+    driver.api.image.wait_for_status.assert_called_once()
+    assert driver.api.image.wait_for_status.call_args.args[0] is saving
+    driver.api.image.delete_image.assert_not_called()

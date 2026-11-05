@@ -103,10 +103,19 @@ def resolve(driver, reference):
     found = driver._find(driver.api.image.images(), "image", identity)
     if found and found.status == "active":
         return found
-    if found:
+    if found and found.status in {"saving", "importing", "uploading"}:
+        driver._require(found, "image")
+        return driver.api.image.wait_for_status(
+            found,
+            status="active",
+            failures=["killed", "deleted", "pending_delete"],
+            wait=CONF.openstack_cloud.image_import_timeout,
+        )
+    if found and found.status != "queued":
         driver._require(found, "image")
         driver.api.image.delete_image(found.id, ignore_missing=True)
         driver.api.image.wait_for_delete(found)
+        found = None
     with tempfile.TemporaryDirectory(prefix="exordos-cloud-image-") as directory:
         filename = Path(directory) / "image"
         deadline = time.monotonic() + CONF.openstack_cloud.image_import_timeout
@@ -130,14 +139,33 @@ def resolve(driver, reference):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise ValueError("Cloud image import timed out")
-        return driver.api.image.create_image(
-            name="exordos-image-" + identity.hex,
-            filename=str(filename),
-            disk_format="qcow2" if magic == b"QFI\xfb" else "raw",
-            container_format="bare",
-            visibility="private",
-            description=driver.marker("image", identity),
-            allow_duplicates=True,
-            wait=True,
-            timeout=remaining,
+        from openstack import exceptions
+        from openstack.image.v2.image import Image
+
+        if found is None:
+            try:
+                found = driver.api.image._create(
+                    Image, id=str(identity), name="exordos-image-" + identity.hex,
+                    disk_format="qcow2" if magic == b"QFI\xfb" else "raw",
+                    container_format="bare", visibility="private",
+                    description=driver.marker("image", identity),
+                )
+            except exceptions.ConflictException:
+                found = driver.api.image.get_image(str(identity))
+        driver._require(found, "image")
+        if found.status == "active":
+            return found
+        if found.status == "queued":
+            try:
+                with filename.open("rb") as image_data:
+                    response = found.upload(driver.api.image, data=image_data)
+                    exceptions.raise_from_response(response)
+            except exceptions.HttpException as error:
+                if not isinstance(error, exceptions.ConflictException) and error.status_code not in {409, 410}:
+                    raise
+                found = driver.api.image.get_image(found.id)
+                driver._require(found, "image")
+        return driver.api.image.wait_for_status(
+            found, status="active", failures=["killed", "deleted", "pending_delete"],
+            wait=max(1, int(deadline - time.monotonic())),
         )
