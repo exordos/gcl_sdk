@@ -37,19 +37,19 @@ depends on the proxy setup.
 Migration `0008` adds the JSON actor column and backfills existing events with
 the user UUID when present, otherwise `{"type": "system"}`.
 
-Audit snapshots omit common sensitive top-level fields, including passwords,
-tokens, private keys, client secrets, and HMAC keys. A service can omit
-additional top-level fields by setting `__audit_excluded_fields__` on its model or
-service mixin:
+Audit snapshots omit common sensitive fields, including passwords, tokens,
+private keys, client secrets, and HMAC keys, before serializing top-level model
+properties. Sensitive keys in nested dictionaries and lists are filtered after
+serialization. A service can omit additional fields by setting
+`__audit_excluded_fields__` on its model or service mixin:
 
 ```python
 class Config(audit_models.AuditLogSQLStorableMixin, ...):
     __audit_excluded_fields__ = frozenset({"body", "on_change"})
 ```
 
-The service-specific fields are added to the SDK defaults. For sensitive keys
-inside nested dictionaries or lists, use `filter_sensitive_fields` on the
-serialized value.
+The service-specific fields are added to the SDK defaults and filtered at
+both the resource's top level and in nested dictionaries and lists.
 
 ## Local API
 
