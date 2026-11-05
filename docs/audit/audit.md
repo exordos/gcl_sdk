@@ -37,6 +37,19 @@ depends on the proxy setup.
 Migration `0008` adds the JSON actor column and backfills existing events with
 the user UUID when present, otherwise `{"type": "system"}`.
 
+Audit snapshots recursively omit common sensitive fields, including passwords,
+tokens, private keys, client secrets, and HMAC keys. A service can omit
+additional fields by setting `__audit_excluded_fields__` on its model or
+service mixin:
+
+```python
+class Config(audit_models.AuditLogSQLStorableMixin, ...):
+    __audit_excluded_fields__ = frozenset({"body", "on_change"})
+```
+
+The service-specific fields are added to the SDK defaults and are filtered at
+both the resource top level and in nested dictionaries and lists.
+
 ## Local API
 
 Attach `AuditRoute` to the service route tree. Reads require

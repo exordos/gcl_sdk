@@ -28,6 +28,48 @@ from restalchemy.storage.sql import orm
 from gcl_sdk.audit import constants
 from gcl_sdk.common import constants as sdk_constants
 
+_DEFAULT_SENSITIVE_FIELDS = frozenset(
+    {
+        "access_key",
+        "access_token",
+        "client_secret",
+        "code",
+        "confirmation_code",
+        "encryption_key",
+        "hmac_key",
+        "key",
+        "nonce",
+        "otp_secret",
+        "password",
+        "password_hash",
+        "private_key",
+        "refresh_token",
+        "refresh_token_uuid",
+        "salt",
+        "secret",
+        "secret_hash",
+        "secret_key",
+        "session_token",
+        "token",
+    }
+)
+
+
+def filter_sensitive_fields(
+    value: Any,
+    excluded_fields: frozenset[str] | set[str] = frozenset(),
+) -> Any:
+    fields = _DEFAULT_SENSITIVE_FIELDS | excluded_fields
+    if isinstance(value, dict):
+        return {
+            key: filter_sensitive_fields(item, fields)
+            for key, item in value.items()
+            if key not in fields
+        }
+    if isinstance(value, list):
+        return [filter_sensitive_fields(item, fields) for item in value]
+    return value
+
 
 class AuditEventBase(
     models.ModelWithTimestamp,
@@ -107,6 +149,7 @@ class AuditDeliveryEvent(AuditEventBase, orm.SQLStorableMixin):
 class AuditLogSQLStorableMixin(orm.SQLStorableMixin):
     __audit_service_name__ = sdk_constants.GLOBAL_SERVICE_NAME
     __audit_resource_type__ = None
+    __audit_excluded_fields__ = frozenset()
 
     def insert(self, session: Any = None) -> None:
         with self._get_engine().session_manager(session=session) as s:
@@ -141,7 +184,13 @@ class AuditLogSQLStorableMixin(orm.SQLStorableMixin):
             )
 
     def dump_to_audit_snapshot(self) -> dict[str, Any]:
-        return self.dump_to_simple_view()
+        excluded_fields = _DEFAULT_SENSITIVE_FIELDS | self.__audit_excluded_fields__
+        snapshot = {
+            name: prop.get_property_type().to_simple_type(getattr(self, name))
+            for name, prop in self.properties.properties.items()
+            if name not in excluded_fields
+        }
+        return filter_sensitive_fields(snapshot, excluded_fields)
 
     @classmethod
     def get_audit_service_name(cls) -> str:
