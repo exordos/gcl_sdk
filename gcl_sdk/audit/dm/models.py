@@ -185,8 +185,7 @@ class AuditLogSQLStorableMixin(orm.SQLStorableMixin):
 
     def dump_to_audit_snapshot(self) -> dict[str, Any]:
         excluded_fields = _DEFAULT_SENSITIVE_FIELDS | self.__audit_excluded_fields__
-        snapshot = self.dump_to_simple_view(skip=excluded_fields)
-        return filter_sensitive_fields(snapshot, excluded_fields)
+        return self.dump_to_simple_view(skip=excluded_fields)
 
     @classmethod
     def get_audit_service_name(cls) -> str:
