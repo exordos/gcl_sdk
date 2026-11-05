@@ -786,16 +786,22 @@ class LibvirtPoolDriver(pool_base.AbstractPoolDriver):
             if not mac or not source:
                 raise ValueError(f"Interface {iface} has no mac or source")
 
-            ports.append(
-                pool_base.Port(
-                    uuid=sys_uuid.UUID("00000000-0000-0000-0000-000000000000"),
-                    machine=machine.uuid,
-                    mac=mac,
-                    project_id=pool_base.SYSTEM_PROJECT_ID,
-                    source=source,
-                    status=pool_base.PortStatus.ACTIVE.value,
-                )
+            parameters = iface.find("virtualport[@type='openvswitch']/parameters")
+            interface_id = (
+                parameters.get("interfaceid") if parameters is not None else None
             )
+            port = pool_base.Port(
+                uuid=sys_uuid.UUID(interface_id)
+                if interface_id
+                else sys_uuid.UUID(int=0),
+                machine=machine.uuid,
+                mac=mac,
+                project_id=pool_base.SYSTEM_PROJECT_ID,
+                source=source,
+                status=pool_base.PortStatus.ACTIVE.value,
+            )
+            port.overlay = interface_id is not None
+            ports.append(port)
 
         return ports
 

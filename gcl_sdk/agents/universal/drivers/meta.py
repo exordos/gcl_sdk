@@ -243,7 +243,7 @@ class MetaFileStorageAgentDriver(base.AbstractCapabilityDriver):
                     view.pop(k)
 
         self._storage[capability]["resources"][str(meta_object.uuid)] = view
-        LOG.debug("Saved meta resource: %s", view)
+        LOG.debug("Saved meta resource: %s(%s)", capability, meta_object.uuid)
 
     def get_capabilities(self) -> list[str]:
         """Returns a list of capabilities supported by the driver."""

@@ -170,9 +170,9 @@ def main():
     if CONF[DOMAIN].uuid:
         agent_uuid = sys_uuid.UUID(CONF[DOMAIN].uuid)
     elif CONF[DOMAIN].uuid5_name:
-        agent_uuid = sys_uuid.uuid5(ua_utils.system_uuid(), CONF[DOMAIN].uuid5_name)
+        agent_uuid = sys_uuid.uuid5(ua_utils.node_uuid(), CONF[DOMAIN].uuid5_name)
     else:
-        agent_uuid = ua_utils.system_uuid()
+        agent_uuid = ua_utils.node_uuid()
 
     # Load drivers from entry points
     caps_drivers = []
@@ -214,6 +214,7 @@ def main():
 
     service = agent.UniversalAgentService(
         agent_uuid=agent_uuid,
+        system_uuid=ua_utils.node_uuid(),
         orch_client=orch_client,
         caps_drivers=caps_drivers,
         facts_drivers=facts_drivers,

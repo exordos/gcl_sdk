@@ -19,6 +19,7 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
 ]
 dependencies = [
+    "PyYAML>=6.0.0,<7.0.0",  # MIT
     "oslo.config>=3.22.2,<10.0.0",  # Apache-2.0
     "importlib-metadata",  # Apache-2.0
     "restalchemy>=16.0.3,<17.0.0",  # Apache-2.0
@@ -44,12 +45,19 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools_scm]
 
 [project.optional-dependencies]
+openstack = [
+    "openstacksdk>=4.0.0,<5.0.0",  # Apache-2.0
+    "zstandard>=0.23.0,<1.0.0",  # BSD-3-Clause
+]
+
 dev = [
     "tox>=4.0.0",
     "tox-uv",
     "pytest>=8.0.0,<10.0.0",
 ]
 test = [
+    "openstacksdk>=4.0.0,<5.0.0",  # Apache-2.0
+    "zstandard>=0.23.0,<1.0.0",  # BSD-3-Clause
     "coverage>=4.0",
     "mock>=3.0.5,<6.0.0",
     "pytest>=8.0.0,<10.0.0",
@@ -138,6 +146,7 @@ force-single-line = true
 
 [tool.setuptools.packages.find]
 where = ["."]
+include = ["gcl_sdk*"]
 
 [project.scripts]
 exordos-universal-agent = "gcl_sdk.agents.universal.cmd.universal_agent:main"
@@ -148,6 +157,7 @@ exordos-universal-scheduler = "gcl_sdk.agents.universal.cmd.scheduler:main"
 DummyEventPayload = "gcl_sdk.events.dm.models:DummyEventPayload"
 
 [project.entry-points."gcl_sdk_universal_agent"]
+OpenVPNCapabilityDriver = "gcl_sdk.agents.universal.drivers.openvpn:OpenVPNCapabilityDriver"
 LBCapabilityDriver = "gcl_sdk.agents.universal.drivers.lb:LBCapabilityDriver"
 LBAgentCapabilityDriver = "gcl_sdk.agents.universal.drivers.lb:LBAgentCapabilityDriver"
 RenderAgentDriver = "gcl_sdk.agents.universal.drivers.render:RenderAgentDriver"
@@ -165,6 +175,7 @@ LocalPoolAgentDriver = "gcl_sdk.agents.universal.drivers.pool:LocalPoolAgentDriv
 EvpnAgentCapabilityDriver = "gcl_sdk.agents.universal.drivers.evpn:EvpnAgentCapabilityDriver"
 
 [project.entry-points."gcl_sdk_machine_pool_driver"]
+cloud = "gcl_sdk.agents.universal.drivers.cloud:CloudPoolDriver"
 dummy = "gcl_sdk.agents.universal.drivers.pool:DummyPoolDriver"
 libvirt = "gcl_sdk.agents.universal.drivers.libvirt:LibvirtPoolDriver"
 exordos_local_hyper = "gcl_sdk.agents.universal.drivers.libvirt:LibvirtPoolDriver"
