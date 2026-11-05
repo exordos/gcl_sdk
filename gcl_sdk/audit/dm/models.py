@@ -185,11 +185,7 @@ class AuditLogSQLStorableMixin(orm.SQLStorableMixin):
 
     def dump_to_audit_snapshot(self) -> dict[str, Any]:
         excluded_fields = _DEFAULT_SENSITIVE_FIELDS | self.__audit_excluded_fields__
-        snapshot = {
-            name: prop.get_property_type().to_simple_type(getattr(self, name))
-            for name, prop in self.properties.properties.items()
-            if name not in excluded_fields
-        }
+        snapshot = self.dump_to_simple_view(skip=excluded_fields)
         return filter_sensitive_fields(snapshot, excluded_fields)
 
     @classmethod
