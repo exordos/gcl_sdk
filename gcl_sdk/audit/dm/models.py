@@ -59,6 +59,7 @@ def filter_sensitive_fields(
     value: Any,
     excluded_fields: frozenset[str] | set[str] = frozenset(),
 ) -> Any:
+    """Recursively remove default sensitive keys and caller-supplied exclusions."""
     fields = _DEFAULT_SENSITIVE_FIELDS | excluded_fields
     if isinstance(value, dict):
         return {
