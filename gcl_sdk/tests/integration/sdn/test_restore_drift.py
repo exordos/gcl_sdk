@@ -105,7 +105,10 @@ def _port_for(port_uuid, mac, vlan):
         port_security=False,
     )
     # The client config is the one fact that is not read off the host.
-    sh.write_atomic(os.path.join(base.CLIENT_CONF_DIR, "%s.json" % port_uuid), "{}")
+    sh.write_atomic(
+        os.path.join(base.CLIENT_CONF_DIR, "%s.json" % port_uuid),
+        port._render_client_conf(vlan),
+    )
     # The map is written by the driver when it hands a guest its VLAN. These
     # cases wire the guest by hand, so on a fresh work directory there is
     # nothing to read yet — and reading it was failing every case here at

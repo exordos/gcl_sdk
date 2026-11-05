@@ -29,6 +29,7 @@ import yaml
 
 ROOT = Path("/var/lib/exordos/network-links")
 ROLES = ("auto", "server", "client")
+FORWARD_GUARD = "EXORDOS-OVPN-GUARD"
 
 
 def identity(value):
@@ -167,7 +168,7 @@ def render(resource, own, peers, ca_cert, protocol="tcp", port=443, mtu=1380):
     root, runtime = paths(resource)
     prefix = "cl" + own_id[:8]
     files = {"ca.crt": ca_cert}
-    services, expected = [], {}
+    services, expected, interface_cidrs = [], {}, {}
     gateway_ip = own.get("gateway_ip")
     if gateway_ip is not None:
         gateway_ip = str(ipaddress.IPv4Address(gateway_ip))
@@ -210,6 +211,7 @@ def render(resource, own, peers, ca_cert, protocol="tcp", port=443, mtu=1380):
         selected.append(peer)
     if incoming:
         name = "server"
+        interface_cidrs[prefix + "s"] = [str(ipaddress.IPv4Network(p["cidr"])) for p in incoming]
         subnet = ipaddress.IPv4Network(own["tunnel_cidr"])
         lines = [line for line in common if line != "nobind"] + [
             f"dev {prefix}s",
@@ -250,6 +252,7 @@ def render(resource, own, peers, ca_cert, protocol="tcp", port=443, mtu=1380):
         peer_id = identity(peer["id"])
         host = str(ipaddress.IPv4Address(peer["endpoint"]))
         name = "client-" + peer_id
+        interface_cidrs[prefix + "c" + str(index)] = [str(ipaddress.IPv4Network(peer["cidr"]))]
         lines = common + [
             "client",
             "route-nopull",
@@ -284,7 +287,25 @@ def render(resource, own, peers, ca_cert, protocol="tcp", port=443, mtu=1380):
         "peers": expected,
         "local_cidrs": [str(ipaddress.IPv4Network(own["cidr"]))],
         "remote_cidrs": [str(ipaddress.IPv4Network(p["cidr"])) for p in peers],
+        "interface_cidrs": interface_cidrs,
     }
+
+
+def _interface_cidrs(bundle):
+    if "interface_cidrs" in bundle:
+        return bundle["interface_cidrs"]
+    result = {}
+    for name, content in bundle["files"].items():
+        if name != "server.conf" and not re.fullmatch(r"client-[a-f0-9]{32}\.conf", name):
+            continue
+        lines = [line.split() for line in content.splitlines()]
+        interface = next((line[1] for line in lines if len(line) == 2 and line[0] == "dev"), None)
+        if interface:
+            result[interface] = [
+                str(ipaddress.IPv4Network((line[1], line[2]), strict=False))
+                for line in lines if len(line) == 3 and line[0] == "route"
+            ]
+    return result
 
 
 def service_files(resource, bundle):
@@ -294,15 +315,18 @@ def service_files(resource, bundle):
     chain = "EXO" + own[:12]
     rules = []
     for local in bundle["local_cidrs"]:
-        for remote in bundle["remote_cidrs"]:
-            local, remote = (
-                str(ipaddress.IPv4Network(local)),
-                str(ipaddress.IPv4Network(remote)),
-            )
-            rules += [
-                f"-A {chain} -i {prefix} -s {remote} -d {local} -j ACCEPT",
-                f"-A {chain} -o {prefix} -s {local} -d {remote} -j ACCEPT",
-            ]
+        for interface, cidrs in _interface_cidrs(bundle).items():
+            if not re.fullmatch(re.escape("cl" + own[:8]) + r"(?:s|c[0-9]+)", interface):
+                raise ValueError("Invalid OpenVPN tunnel interface")
+            for remote in cidrs:
+                local, remote = (
+                    str(ipaddress.IPv4Network(local)),
+                    str(ipaddress.IPv4Network(remote)),
+                )
+                rules += [
+                    f"-A {chain} -i {interface} -s {remote} -d {local} -j ACCEPT",
+                    f"-A {chain} -o {interface} -s {local} -d {remote} -j ACCEPT",
+                ]
     script = [
         "#!/bin/sh",
         "set -eu",
@@ -311,8 +335,17 @@ def service_files(resource, bundle):
         "flock 9",
         f"if [ ! -f {ROOT / 'openvpn-forwarding.before'} ]; then cat /proc/sys/net/ipv4/ip_forward > {ROOT / 'openvpn-forwarding.before'}; fi",
         f"touch {ROOT / ('openvpn-owner-' + own)}",
-        f") 9>{ROOT / 'openvpn-forwarding.lock'}",
-        "sysctl -w net.ipv4.ip_forward=1 >/dev/null",
+        f"case $(cat {ROOT / 'openvpn-forwarding.before'}) in",
+        "0)",
+        f"iptables -w -N {FORWARD_GUARD} 2>/dev/null || true",
+        f"iptables -w -C {FORWARD_GUARD} -j DROP 2>/dev/null || iptables -w -A {FORWARD_GUARD} -j DROP",
+        f"iptables -w -C {FORWARD_GUARD} -i {prefix} -j RETURN 2>/dev/null || iptables -w -I {FORWARD_GUARD} -i {prefix} -j RETURN",
+        f"iptables -w -C {FORWARD_GUARD} -o {prefix} -j RETURN 2>/dev/null || iptables -w -I {FORWARD_GUARD} -o {prefix} -j RETURN",
+        f"iptables -w -C FORWARD -j {FORWARD_GUARD} 2>/dev/null || iptables -w -I FORWARD -j {FORWARD_GUARD}",
+        ";;",
+        "1) ;;",
+        "*) echo 'Invalid saved forwarding state' >&2; exit 1;;",
+        "esac",
         "iptables-restore --noflush <<'EXORDOS_RULES'",
         "*filter",
         f":{chain} - [0:0]",
@@ -343,6 +376,10 @@ def service_files(resource, bundle):
             + " 2>/dev/null || "
             + shlex.join(["iptables", "-w", "-I", *args])
         )
+    script += [
+        "sysctl -w net.ipv4.ip_forward=1 >/dev/null",
+        f") 9>{ROOT / 'openvpn-forwarding.lock'}",
+    ]
     result = []
     for name, content in bundle["files"].items():
         if not re.fullmatch(
@@ -558,6 +595,12 @@ def uninstall(resource):
         fcntl.flock(lock, fcntl.LOCK_EX)
         (ROOT / ("openvpn-owner-" + own)).unlink(missing_ok=True)
         baseline = ROOT / "openvpn-forwarding.before"
+        if baseline.exists() and baseline.read_text().strip() == "0":
+            for direction in ("-i", "-o"):
+                subprocess.run(
+                    ["iptables", "-w", "-D", FORWARD_GUARD, direction, prefix, "-j", "RETURN"],
+                    capture_output=True,
+                )
         if not list(ROOT.glob("openvpn-owner-*")) and baseline.exists():
             previous = baseline.read_text().strip()
             if previous not in {"0", "1"}:
@@ -567,5 +610,12 @@ def uninstall(resource):
                 check=True,
                 capture_output=True,
             )
+            if previous == "0":
+                subprocess.run(
+                    ["iptables", "-w", "-D", "FORWARD", "-j", FORWARD_GUARD],
+                    capture_output=True,
+                )
+                for operation in ("-F", "-X"):
+                    subprocess.run(["iptables", "-w", operation, FORWARD_GUARD], capture_output=True)
             baseline.unlink()
     subprocess.run(["systemctl", "daemon-reload"], check=True)

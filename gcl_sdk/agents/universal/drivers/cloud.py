@@ -79,7 +79,11 @@ class CloudPoolDriver(models.AbstractPoolDriver):
     def _volume(self, volume):
         metadata = volume.metadata
         attachments = volume.attachments or []
-        machine = None
+        machine = (
+            uuid.UUID(metadata["deleting_machine"])
+            if metadata.get("deleting_machine")
+            else None
+        )
         if attachments:
             server = self.cloud.api.compute.get_server(attachments[0]["server_id"])
             machine = self.cloud.identity(server, "server")
@@ -154,6 +158,9 @@ class CloudPoolDriver(models.AbstractPoolDriver):
         return self._machine(server)
 
     def create_machine(self, machine, volumes, ports):
+        existing = self.cloud.server(machine.uuid, self.pool.uuid)
+        if existing is not None:
+            return self._machine(existing)
         provider_ports = []
         for port in ports:
             external = self.cloud.api.network.get_port(port.source)
@@ -184,6 +191,12 @@ class CloudPoolDriver(models.AbstractPoolDriver):
     def delete_machine(self, machine, delete_volumes=True):
         server = self.cloud.server(machine.uuid, self.pool.uuid)
         volumes = list(self.list_volumes(machine)) if delete_volumes else []
+        for volume in volumes:
+            external = self.cloud.volume(volume.uuid, self.pool.uuid)
+            if external is not None:
+                self.cloud.api.block_storage.set_volume_metadata(
+                    external.id, deleting_machine=str(machine.uuid)
+                )
         if server:
             self.cloud.delete_server(server)
         for volume in volumes:

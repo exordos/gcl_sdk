@@ -6,6 +6,7 @@
 
 import configparser
 import io
+import re
 import shlex
 from urllib.parse import urlsplit
 import uuid
@@ -18,6 +19,17 @@ from gcl_sdk.agents.universal import constants as agent_constants
 def validate_agent_config(orch_endpoint, status_endpoint, package):
     if not package.strip():
         raise ValueError("Agent package must be a nonempty requirement or URL")
+    source = re.search(r"(?i)(?:git\+)?[a-z][a-z0-9+.-]*://\S+", package)
+    if source:
+        source = source.group()
+        package_url = urlsplit(source[4:] if source.lower().startswith("git+") else source)
+        if (
+            package_url.username is not None
+            or package_url.password is not None
+            or package_url.query
+            or (package_url.fragment and not re.fullmatch(r"sha256=[0-9a-fA-F]{64}", package_url.fragment))
+        ):
+            raise ValueError("Agent package URL must not contain credentials or query parameters")
     for endpoint in (orch_endpoint, status_endpoint):
         parsed = urlsplit(endpoint)
         if (
@@ -113,7 +125,7 @@ if [ ! -x /opt/exordos/venv/bin/exordos-universal-agent ]; then
             "python3-dev",
             "gcc",
             "libev-dev",
-        ],
+        ] + (["git"] if re.search(r"(?i)git\+", package) else []),
         "write_files": [
             {
                 "path": path,

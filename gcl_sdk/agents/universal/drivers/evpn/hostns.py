@@ -440,7 +440,7 @@ def _flat_specs(vni: int) -> list[list[str]] | None:
     addresses = host_addresses()
     if addresses is None:
         raise RuntimeError("evpn: cannot read host addresses; flat policy unchanged")
-    specs = [["-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "RETURN"]]
+    specs = [["-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "--ctdir", "REPLY", "-j", "RETURN"]]
     # Explicit operator publications can expose a service on a protected host.
     for entry in published_addresses():
         spec = published_spec(entry, "gw%d" % vni)
@@ -460,6 +460,7 @@ def _flat_specs(vni: int) -> list[list[str]] | None:
         ["-p", proto, "--dport", port, "-j", "DROP"] for proto, port in FABRIC_PORTS
     )
     specs.extend(["-d", prefix, "-j", "ACCEPT"] for prefix in policy["flat_prefixes"])
+    specs.extend(["-d", prefix, "-j", "DROP"] for prefix in internal_destinations())
     specs.append(["-j", "RETURN"])
     return specs
 

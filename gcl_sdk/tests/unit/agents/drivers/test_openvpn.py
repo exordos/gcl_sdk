@@ -57,6 +57,28 @@ def bundles(material):
     }
 
 
+def test_peer_prefixes_are_bound_to_their_own_tunnel(material):
+    mesh = bundles(material)
+    own = sorted(mesh)[1]
+    bundle = mesh[own]
+    interfaces = bundle["interface_cidrs"]
+    assert len(interfaces) == 2
+    script = next(content for path, content, _ in openvpn.service_files(own, bundle) if path.startswith("/usr/local/sbin/"))
+    for interface, prefixes in interfaces.items():
+        assert len(prefixes) == 1
+        assert f"-i {interface} -s {prefixes[0]}" in script
+        for other, other_prefixes in interfaces.items():
+            if other != interface:
+                assert f"-i {interface} -s {other_prefixes[0]}" not in script
+
+
+def test_existing_manifest_reconstructs_interface_prefixes(material):
+    own, bundle = next(iter(bundles(material).items()))
+    legacy = {key: value for key, value in bundle.items() if key != "interface_cidrs"}
+    assert openvpn._interface_cidrs(legacy) == bundle["interface_cidrs"]
+    assert openvpn.service_files(own, legacy)[:-1] == openvpn.service_files(own, bundle)[:-1]
+
+
 @pytest.mark.parametrize(
     ("own_role", "peer_role", "serves"),
     [

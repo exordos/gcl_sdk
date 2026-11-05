@@ -150,6 +150,62 @@ def test_port_retry_never_allocates_a_second_address(driver):
     driver.api.network.create_port.assert_not_called()
 
 
+def test_machine_create_retry_recovers_server_before_checking_attached_disks():
+    adapter = cloud_pool.CloudPoolDriver.__new__(cloud_pool.CloudPoolDriver)
+    adapter.pool = SimpleNamespace(uuid=uuid.uuid4())
+    adapter.cloud = mock.Mock()
+    adapter._machine = mock.Mock()
+    machine = SimpleNamespace(uuid=uuid.uuid4())
+    adapter.cloud.volume.return_value = SimpleNamespace(status="in-use")
+    assert adapter.create_machine(machine, [SimpleNamespace(uuid=uuid.uuid4(), index=0)], []) is adapter._machine.return_value
+    adapter._machine.assert_called_once_with(adapter.cloud.server.return_value)
+    adapter.cloud.volume.assert_not_called()
+    adapter.cloud.ensure_server.assert_not_called()
+
+
+def test_machine_delete_retry_retains_disk_ownership_after_server_is_gone(driver):
+    from openstack.block_storage.v3.volume import Volume
+
+    machine = SimpleNamespace(uuid=uuid.uuid4())
+    pool = uuid.uuid4()
+    adapter = cloud_pool.CloudPoolDriver.__new__(cloud_pool.CloudPoolDriver)
+    adapter.pool = SimpleNamespace(uuid=pool)
+    adapter.spec = SimpleNamespace(volume_type="__DEFAULT__")
+    adapter.cloud = driver
+    server = {"id": "server", "metadata": {"exordos": driver.marker("server", machine.uuid)}}
+    volumes = [Volume(id=str(uuid.uuid4()), name="disk", size=1, status="in-use", attachments=[{"server_id": "server"}], metadata={"exordos": driver.marker("volume", uuid.uuid4()), "pool": str(pool), "project": str(uuid.uuid4()), "index": str(i)}) for i in range(2)]
+    driver.api.block_storage.volumes.side_effect = lambda **kw: list(volumes)
+    driver.api.compute.get_server.return_value = server
+    driver.server = mock.Mock(return_value=server)
+
+    def mark(identifier, **metadata):
+        volume = next(v for v in volumes if v.id == identifier)
+        volume.metadata.update(metadata)
+
+    def delete_server(value):
+        driver.server.return_value = None
+        for volume in volumes:
+            volume.attachments = []
+            volume.status = "available"
+
+    attempts = []
+    def delete_volume(value):
+        attempts.append(value.id)
+        if len(attempts) == 2:
+            raise RuntimeError("Cinder unavailable")
+        volumes.remove(value)
+
+    driver.api.block_storage.set_volume_metadata.side_effect = mark
+    driver.delete_server = delete_server
+    driver.delete_volume = delete_volume
+    with pytest.raises(RuntimeError, match="Cinder unavailable"):
+        adapter.delete_machine(machine)
+    assert len(volumes) == 1
+    assert not volumes[0].attachments
+    adapter.delete_machine(machine)
+    assert volumes == []
+
+
 def test_provider_default_egress_is_equivalent_to_explicit_any_address(driver):
     resource = uuid.uuid4()
     group = SecurityGroup(
@@ -602,3 +658,24 @@ def test_provider_accepts_project_scoped_password_authentication():
         driver = OpenStackDriver(config)
     assert driver.api.config.get_auth_args()["project_id"] == "project"
     assert "private-sentinel" not in repr(config)
+
+
+def test_bootstrap_installs_git_only_for_a_git_source():
+    arguments = (uuid.uuid4(), "key", "https://core.example/orch", "https://core.example/status")
+    normal = yaml.safe_load(bootstrap.agent_user_data(*arguments, "gcl_sdk==3.7.6"))
+    source = yaml.safe_load(bootstrap.agent_user_data(*arguments, "git+https://github.com/exordos/gcl_sdk.git@1234567890abcdef1234567890abcdef12345678"))
+    assert "git" not in normal["packages"]
+    assert "git" in source["packages"]
+
+
+@pytest.mark.parametrize("package", ["https://user:secret@example.org/sdk.whl", "git+https://user:secret@example.org/sdk.git@123", "gcl_sdk @ https://user:secret@example.org/sdk.whl", "GIT+HTTPS://user:secret@example.org/sdk.git", "git+ssh://user:secret@example.org/sdk.git", "gcl_sdk@https://user:secret@example.org/sdk.whl", "https://example.org/sdk.whl?token=secret", "https://example.org/sdk.whl#token=secret"])
+def test_bootstrap_rejects_credentials_in_package_url(package):
+    with pytest.raises(ValueError, match="must not contain credentials"):
+        bootstrap.validate_agent_config("https://core.example/orch", "https://core.example/status", package)
+
+
+def test_bootstrap_allows_wheel_integrity_fragment():
+    bootstrap.validate_agent_config(
+        "https://core.example/orch", "https://core.example/status",
+        "https://repo.example/sdk.whl#sha256=" + "a" * 64,
+    )
