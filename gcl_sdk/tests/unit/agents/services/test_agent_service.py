@@ -3,6 +3,8 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 import uuid as sys_uuid
 
+import pytest
+
 from gcl_sdk.agents.universal.dm import models
 from gcl_sdk.agents.universal.services.agent import UniversalAgentService
 
@@ -599,3 +601,63 @@ class TestReadFailureProtection:
         result = agent._cap_driver_iteration(driver, payload, collected_payload)
 
         assert result == set()
+
+
+class TestFactProjectionUpdate:
+    @pytest.mark.parametrize(
+        "previous_fields,current_fields",
+        [
+            ({"uuid"}, {"uuid", "port_security"}),
+            ({"uuid", "port_security"}, {"uuid"}),
+        ],
+        ids=["declare-existing-default", "stop-managing-field"],
+    )
+    def test_iteration_updates_hash_when_only_target_fields_change(
+        self, previous_fields, current_fields
+    ):
+        resource_uuid = sys_uuid.uuid4()
+        value = {"uuid": str(resource_uuid), "port_security": True}
+        previous = models.Resource.from_value(
+            value, KIND, target_fields=frozenset(previous_fields)
+        )
+        current = models.Resource.from_value(
+            value, KIND, target_fields=frozenset(current_fields)
+        )
+        assert previous.full_hash == current.full_hash
+        assert previous.hash != current.hash
+
+        payload = models.Payload.empty()
+        payload.add_caps_resources([current])
+        payload.add_facts_resources([previous])
+        payload.calculate_hash()
+        collected = models.Payload.empty()
+        collected.add_caps_resources([current])
+        collected.add_facts_resources([current])
+        collected.calculate_hash()
+        assert collected == payload
+        driver = MagicMock()
+        driver.get_capabilities.return_value = [KIND]
+        driver.dependent_capabilities.return_value = False
+        driver.list.return_value = [current]
+        orch = MagicMock()
+        orch.agents_get_payload.return_value = payload
+        agent = _make_service(caps_drivers=[driver], orch_client=orch)
+
+        agent._iteration()
+
+        orch.resources_update.assert_called_once()
+        args, kwargs = orch.resources_update.call_args
+        assert args == (KIND, str(resource_uuid))
+        assert kwargs["hash"] == current.hash
+        assert kwargs["full_hash"] == previous.full_hash
+        assert kwargs["value"] == value
+        driver.create.assert_not_called()
+        driver.update.assert_not_called()
+
+        # A repeated poll sees the new projection and needs no further write.
+        orch.reset_mock()
+        payload.facts = {}
+        payload.add_facts_resources([current])
+        payload.calculate_hash()
+        agent._iteration()
+        orch.resources_update.assert_not_called()
