@@ -34,6 +34,19 @@ class EventSenderService(basic.BasicService):
         self._butch_size = butch_size
         self._enabled = enabled
 
+    def _prepare_event(self, event):
+        """Return false when a domain handler completes an event without sending."""
+        return True
+
+    def _get_event_status(self, event):
+        return self._notification_client.get_event_status(event_uuid=event.uuid)
+
+    def _apply_event_status(self, event, event_status):
+        if event_status == models.Event.STATUS.ACTIVE.value:
+            event.status = event_status
+        else:
+            event.status = models.Event.STATUS.IN_PROGRESS.value
+
     def _fetch_new_events(self):
         return models.Event.objects.get_all(
             filters={
@@ -54,8 +67,9 @@ class EventSenderService(basic.BasicService):
         events = self._fetch_new_events()
         for event in events:
             try:
-                self._notification_client.send_event(event)
-                event.status = models.Event.STATUS.IN_PROGRESS.value
+                if self._prepare_event(event):
+                    self._notification_client.send_event(event)
+                    event.status = models.Event.STATUS.IN_PROGRESS.value
             except Exception:
                 LOG.exception("Can't send event by reason:")
             event.save()
@@ -64,13 +78,7 @@ class EventSenderService(basic.BasicService):
         events = self._fetch_in_progress_events()
         for event in events:
             try:
-                event_status = self._notification_client.get_event_status(
-                    event_uuid=event.uuid
-                )
-                if event_status == models.Event.STATUS.ACTIVE.value:
-                    event.status = event_status
-                else:
-                    event.status = models.Event.STATUS.IN_PROGRESS.value
+                self._apply_event_status(event, self._get_event_status(event))
             except clients.EventNotFound:
                 event.status = models.Event.STATUS.NEW.value
             event.save()
