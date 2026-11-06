@@ -887,6 +887,21 @@ without a user or request records <code>{"type": "system"}</code>. Forwarded IP 
 depends on the proxy setup.</p>
 <p>Migration <code>0008</code> adds the JSON actor column and backfills existing events with
 the user UUID when present, otherwise <code>{"type": "system"}</code>.</p>
+<p>Audit snapshots omit common sensitive fields, including passwords, tokens,
+private keys, client secrets, and HMAC keys, before serializing top-level model
+properties. Sensitive keys in nested dictionaries and lists are filtered after
+serialization. A service can omit additional fields by setting
+<code>__audit_excluded_fields__</code> on its model or service mixin. To replace the SDK
+defaults completely, set <code>__audit_sensitive_fields__</code> instead:</p>
+<div class="highlight"><pre><span></span><code><span class="k">class</span><span class="w"> </span><span class="nc">Config</span><span class="p">(</span><span class="n">audit_models</span><span class="o">.</span><span class="n">AuditLogSQLStorableMixin</span><span class="p">,</span> <span class="o">...</span><span class="p">):</span>
+    <span class="c1"># Replaces the SDK defaults completely.</span>
+    <span class="n">__audit_sensitive_fields__</span> <span class="o">=</span> <span class="nb">frozenset</span><span class="p">({</span><span class="s2">"password"</span><span class="p">,</span> <span class="s2">"token"</span><span class="p">})</span>
+    <span class="c1"># Adds fields to the selected sensitive-field set.</span>
+    <span class="n">__audit_excluded_fields__</span> <span class="o">=</span> <span class="nb">frozenset</span><span class="p">({</span><span class="s2">"body"</span><span class="p">,</span> <span class="s2">"on_change"</span><span class="p">})</span>
+</code></pre></div>
+<p>The custom set replaces the defaults, while <code>__audit_excluded_fields__</code> adds
+to the selected set. Both are filtered at the resource's top level and in
+nested dictionaries and lists.</p>
 <h2 id="local-api">Local API<a class="headerlink" href="#local-api" title="Permanent link">#</a></h2>
 <p>Attach <code>AuditRoute</code> to the service route tree. Reads require
 <code>audit.events.read</code> or <code>audit.events.read_all</code> and are project-scoped by the IAM
