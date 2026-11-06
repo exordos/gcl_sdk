@@ -58,18 +58,23 @@ _DEFAULT_SENSITIVE_FIELDS = frozenset(
 def filter_sensitive_fields(
     value: Any,
     excluded_fields: frozenset[str] | set[str] = frozenset(),
+    sensitive_fields: frozenset[str] | set[str] = _DEFAULT_SENSITIVE_FIELDS,
 ) -> Any:
-    """Recursively remove default sensitive keys and caller-supplied exclusions."""
-    fields = _DEFAULT_SENSITIVE_FIELDS | excluded_fields
-    if isinstance(value, dict):
-        return {
-            key: filter_sensitive_fields(item, fields)
-            for key, item in value.items()
-            if key not in fields
-        }
-    if isinstance(value, list):
-        return [filter_sensitive_fields(item, fields) for item in value]
-    return value
+    """Recursively remove configured sensitive keys and caller exclusions."""
+    fields = sensitive_fields | excluded_fields
+
+    def filter_value(item: Any) -> Any:
+        if isinstance(item, dict):
+            return {
+                key: filter_value(nested_item)
+                for key, nested_item in item.items()
+                if key not in fields
+            }
+        if isinstance(item, list):
+            return [filter_value(nested_item) for nested_item in item]
+        return item
+
+    return filter_value(value)
 
 
 class AuditEventBase(
@@ -150,6 +155,7 @@ class AuditDeliveryEvent(AuditEventBase, orm.SQLStorableMixin):
 class AuditLogSQLStorableMixin(orm.SQLStorableMixin):
     __audit_service_name__ = sdk_constants.GLOBAL_SERVICE_NAME
     __audit_resource_type__ = None
+    __audit_sensitive_fields__ = _DEFAULT_SENSITIVE_FIELDS
     __audit_excluded_fields__ = frozenset()
 
     def insert(self, session: Any = None) -> None:
@@ -185,9 +191,15 @@ class AuditLogSQLStorableMixin(orm.SQLStorableMixin):
             )
 
     def dump_to_audit_snapshot(self) -> dict[str, Any]:
-        excluded_fields = _DEFAULT_SENSITIVE_FIELDS | self.__audit_excluded_fields__
-        snapshot = self.dump_to_simple_view(skip=excluded_fields)
-        return filter_sensitive_fields(snapshot, excluded_fields)
+        sensitive_fields = self.__audit_sensitive_fields__
+        excluded_fields = self.__audit_excluded_fields__
+        skipped_fields = sensitive_fields | excluded_fields
+        snapshot = self.dump_to_simple_view(skip=skipped_fields)
+        return filter_sensitive_fields(
+            snapshot,
+            excluded_fields=excluded_fields,
+            sensitive_fields=sensitive_fields,
+        )
 
     @classmethod
     def get_audit_service_name(cls) -> str:
