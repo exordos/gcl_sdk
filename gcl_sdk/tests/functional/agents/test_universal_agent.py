@@ -103,6 +103,7 @@ class TestUniversalAgent:
             orch_client=self.orch_client,
             caps_drivers=[],
             facts_drivers=[],
+            payload_path=self.PAYLOAD_PATH,
         )
 
         agent._iteration()

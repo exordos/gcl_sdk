@@ -11,9 +11,10 @@ import pytest
 from gcl_sdk.agents.universal.cmd import universal_agent_db_back as cmd
 
 
+@pytest.mark.parametrize("projected", [False, True])
 @pytest.mark.parametrize("period", [None, 0.0, 0.5, 10.0])
 def test_main_uses_configured_iteration_period(
-    tmp_path: Path, period: float | None
+    tmp_path: Path, period: float | None, projected: bool
 ) -> None:
     conf = cfg.ConfigOpts()
     conf.register_cli_opts(cmd.core_agent_opts, cmd.DOMAIN)
@@ -22,6 +23,15 @@ def test_main_uses_configured_iteration_period(
         "[agent]\n" + (f"iter_min_period = {period}\n" if period is not None else "")
     )
     conf(["--config-file", str(config_path)])
+
+    class Model:
+        pass
+
+    calls = []
+    if projected:
+        Model.project_observations = lambda rows, session=None: calls.append(
+            (rows, session)
+        )
 
     with ExitStack() as stack:
         stack.enter_context(mock.patch.object(cmd, "CONF", conf))
@@ -33,10 +43,19 @@ def test_main_uses_configured_iteration_period(
             )
         )
         stack.enter_context(
-            mock.patch.object(cmd.ua_utils, "cfg_load_section_map", return_value={})
+            mock.patch.object(
+                cmd.ua_utils,
+                "cfg_load_section_map",
+                side_effect=lambda config, section: (
+                    {"node": "example.Model"} if section == "models" else {}
+                ),
+            )
+        )
+        stack.enter_context(
+            mock.patch.object(cmd.ua_utils, "cfg_load_class", return_value=Model)
         )
         stack.enter_context(mock.patch.object(cmd.ua_utils, "system_uuid"))
-        stack.enter_context(
+        driver = stack.enter_context(
             mock.patch.object(cmd.ua_core_drivers, "DatabaseCapabilityDriver")
         )
         stack.enter_context(mock.patch.object(cmd.orch_db, "DatabaseOrchClient"))
@@ -45,6 +64,11 @@ def test_main_uses_configured_iteration_period(
         )
         cmd.main()
 
+    (spec,) = driver.call_args.kwargs["model_specs"]
+    assert spec.model is Model
+    assert len(spec) == 4
+    cmd.db_back.DatabaseBackendClient._project(spec, [], None)
+    assert calls == ([([], None)] if projected else [])
     expected = 3.0 if period is None else period
     assert service.call_args.kwargs["iter_min_period"] == expected
     service.return_value.start.assert_called_once_with()

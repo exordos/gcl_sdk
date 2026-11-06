@@ -69,7 +69,7 @@ class TestUAOrchApi:
         agent = models.UniversalAgent(
             name="Agent A",
             uuid=uuid,
-            node=uuid,
+            node=conftest.ORCH_NODE_UUID,
             capabilities={"capabilities": ["foo"]},
             facts={"facts": ["bar"]},
         )
@@ -90,7 +90,7 @@ class TestUAOrchApi:
         agent = models.UniversalAgent(
             name="Agent A",
             uuid=uuid,
-            node=uuid,
+            node=conftest.ORCH_NODE_UUID,
             capabilities={"capabilities": ["foo"]},
             facts={"facts": ["bar"]},
         )
@@ -120,7 +120,7 @@ class TestUAOrchApi:
         agent = models.UniversalAgent(
             name="Agent A",
             uuid=uuid,
-            node=uuid,
+            node=conftest.ORCH_NODE_UUID,
             capabilities={"capabilities": ["foo"]},
             facts={"facts": ["bar"]},
         )
@@ -167,7 +167,7 @@ class TestUAOrchApi:
         agent = models.UniversalAgent(
             name="Agent A",
             uuid=uuid,
-            node=uuid,
+            node=conftest.ORCH_NODE_UUID,
             capabilities={"capabilities": ["foo"]},
             facts={"facts": ["bar"]},
         )
@@ -207,3 +207,17 @@ class TestUAOrchApi:
         assert output["capabilities"] == {}
         assert output["facts"] == {}
         assert output["hash"] == current_hash
+
+    def test_agent_payload_is_scoped_to_the_authenticated_node(self, orch_api):
+        agent = models.UniversalAgent(
+            name="Other node agent",
+            uuid=sys_uuid.uuid4(),
+            node=sys_uuid.uuid4(),
+            capabilities={"capabilities": ["foo"]},
+            facts={"facts": []},
+        )
+        agent.insert()
+        url = urljoin(orch_api.base_url, f"agents/{agent.uuid}/actions/get_payload")
+        response = requests.get(url)
+        assert response.status_code == 404
+        assert "capabilities" not in response.json()
