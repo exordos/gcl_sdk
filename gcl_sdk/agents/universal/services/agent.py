@@ -154,7 +154,10 @@ class UniversalAgentService(looper_basic.BasicService):
 
                     # All gathered resources for capabilities are considered
                     # as facts too
-                    collected_payload.add_facts_resources(collected_resources)
+                    collected_payload.add_facts_resources(
+                        collected_resources,
+                        skip_fields=("master",),
+                    )
                     collected_capabilities.add(capability)
                 except Exception:
                     LOG.exception("Error actualizing resources for %s", capability)
@@ -209,6 +212,7 @@ class UniversalAgentService(looper_basic.BasicService):
             LOG.info("Creating resource %s %s", capability, r.uuid)
             try:
                 resource = self._create_resource(driver, r)
+                self._preserve_master(r, resource)
                 collected_resources.append(resource)
             except Exception:
                 LOG.exception(
@@ -238,12 +242,14 @@ class UniversalAgentService(looper_basic.BasicService):
             actual_resource = actual_resources[r]
 
             # Nothing to do if the resources are the same
-            if target_resource.hash == actual_resource.hash:
+            if driver.resources_equal(target_resource, actual_resource):
+                self._preserve_master(target_resource, actual_resource)
                 collected_resources.append(actual_resource)
                 continue
 
             try:
                 resource = self._update_resource(driver, target_resource)
+                self._preserve_master(target_resource, resource)
                 collected_resources.append(resource)
             except Exception:
                 LOG.exception(
@@ -253,6 +259,16 @@ class UniversalAgentService(looper_basic.BasicService):
                 )
 
         return collected_resources
+
+    @staticmethod
+    def _preserve_master(target: models.Resource, actual: models.Resource) -> None:
+        if hasattr(target, "master"):
+            actual.master = target.master
+        elif (
+            hasattr(actual, "master")
+            and "master" not in actual.properties.properties
+        ):
+            actual.master = None
 
     def _actualize_resource_facts(
         self,
