@@ -16,7 +16,10 @@
 """Shared rawstor admission budget, in bytes (pool figures are not additive)."""
 
 import ipaddress
+from pathlib import Path
 from urllib.parse import urlparse
+
+OST_BACKING_ROOTS = ("/var/lib/rawstor/ost", "/data", "/srv/rawstor", "/mnt/rawstor")
 
 DOMAIN_DEPTH = {"dc": 1, "row": 2, "rack": 3, "server": 4}
 
@@ -43,6 +46,13 @@ def validate_ost_configuration(location, bind_address):
             raise ValueError(
                 "OST backing store must be an absolute file:/// directory URI"
             )
+        directory = Path(uri.path)
+        if not any(directory.parent == Path(root) for root in OST_BACKING_ROOTS):
+            raise ValueError(
+                "OST backing must be a dedicated directory below an approved storage root"
+            )
+        if directory.resolve() != directory:
+            raise ValueError("OST backing must not traverse symlinks")
         backing = uri.path
     elif uri.scheme == "zfs":
         backing = uri.netloc + uri.path

@@ -297,6 +297,29 @@ class TestCoreMDSLifecycle:
         )
         assert not any("restart" in c.args[0] for c in run.call_args_list)
 
+    def test_failed_restart_restores_configuration_and_retries(
+        self, tmp_path, monkeypatch
+    ):
+        driver = self._driver(tmp_path, monkeypatch)
+        with patch.object(rawstor_cluster.subprocess, "run"):
+            driver.configure()
+        config = tmp_path / "config" / f"{driver._cluster.uuid}.conf"
+        topology = config.with_suffix(".topology")
+        previous = config.read_text(), topology.read_text()
+        driver._cluster.driver_spec.endpoint = "mds://10.20.0.2:7788/"
+
+        def run(args, **kwargs):
+            if "restart" in args:
+                raise subprocess.CalledProcessError(1, args)
+
+        with patch.object(rawstor_cluster.subprocess, "run", side_effect=run):
+            with pytest.raises(subprocess.CalledProcessError):
+                driver.configure()
+        assert (config.read_text(), topology.read_text()) == previous
+        with patch.object(rawstor_cluster.subprocess, "run") as retry:
+            driver.configure()
+        assert any("restart" in c.args[0] for c in retry.call_args_list)
+
     def test_unchanged_configuration_does_not_restart_mds(self, tmp_path, monkeypatch):
         driver = self._driver(tmp_path, monkeypatch)
         with patch.object(rawstor_cluster.subprocess, "run") as run:
