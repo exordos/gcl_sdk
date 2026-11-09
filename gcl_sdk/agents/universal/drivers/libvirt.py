@@ -1038,6 +1038,13 @@ class LibvirtPoolDriver(pool_base.AbstractPoolDriver):
             all_ram=info[1],
         )
 
+    def _domains_with_xml(
+        self,
+    ) -> tp.Tuple[tp.Tuple[libvirt.virDomain, ET.Element], ...]:
+        return tuple(
+            (d, ET.fromstring(d.XMLDesc())) for d in self._client.listAllDomains()
+        )
+
     def list_pool_resources(
         self,
     ) -> tp.Tuple[
@@ -1047,9 +1054,7 @@ class LibvirtPoolDriver(pool_base.AbstractPoolDriver):
         tp.Collection[pool_base.MachineVolume],
     ]:
         pool = self.get_pool_info()
-        domains = tuple(
-            (d, ET.fromstring(d.XMLDesc())) for d in self._client.listAllDomains()
-        )
+        domains = self._domains_with_xml()
         machines = self._list_machines(domains)
 
         storage_pools, volumes = self._list_local_storage(domains)
@@ -1069,11 +1074,12 @@ class LibvirtPoolDriver(pool_base.AbstractPoolDriver):
             pool_type = storage_pool_element.get("type")
             tier, ephemeral = self._storage_pool_attributes(name)
 
+            info = vir_storage_pool.info()
             thin_pool = pool_base.ThinStoragePool(
                 uuid=sys_uuid.UUID(vir_storage_pool.UUIDString()),
                 name=vir_storage_pool.name(),
-                capacity_usable=vir_storage_pool.info()[1] >> 30,  # GB
-                available_actual=vir_storage_pool.info()[3] >> 30,  # GB
+                capacity_usable=info[1] >> 30,  # GB
+                available_actual=info[3] >> 30,  # GB
                 pool_type=pool_type,
                 tier=tier,
                 ephemeral=ephemeral,
@@ -1083,13 +1089,10 @@ class LibvirtPoolDriver(pool_base.AbstractPoolDriver):
 
         return tuple(storage_pools), volumes
 
-    def list_volumes(
-        self, machine: tp.Optional[pool_base.Machine] = None
-    ) -> tp.Iterable[pool_base.MachineVolume]:
-        domains = tuple(
-            (d, ET.fromstring(d.XMLDesc())) for d in self._client.listAllDomains()
-        )
-
+    def _list_local_volumes(
+        self,
+        domains: tp.Collection[tp.Tuple[libvirt.virDomain, ET.Element]],
+    ) -> tp.List[pool_base.MachineVolume]:
         volumes = []
         for name in self._storage_pool_names():
             storage_pool = self._client.storagePoolLookupByName(name)
@@ -1098,6 +1101,12 @@ class LibvirtPoolDriver(pool_base.AbstractPoolDriver):
                     domains, storage_pool.listAllVolumes(), storage_pool=name
                 )
             )
+        return volumes
+
+    def list_volumes(
+        self, machine: tp.Optional[pool_base.Machine] = None
+    ) -> tp.Iterable[pool_base.MachineVolume]:
+        volumes = self._list_local_volumes(self._domains_with_xml())
 
         if machine is None:
             return volumes

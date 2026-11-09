@@ -81,6 +81,11 @@ def _no_op_systemctl(monkeypatch):
         return 0
 
     monkeypatch.setattr(subprocess, "check_call", fake_check_call)
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda cmd, **kwargs: subprocess.CompletedProcess(cmd, 0, stdout="loaded\n"),
+    )
     return calls
 
 
@@ -596,6 +601,76 @@ def test_qcow2_discovery_does_not_require_rawstor_binding(tmp_path, monkeypatch)
             ),
         )
     )
-    driver.list_pool_resources()
-    with pytest.raises(RuntimeError, match="rawstor"):
+    assert driver.list_volumes() == []
+    with pytest.raises(RuntimeError, match="Rawstor"):
         module._rawstor_module()
+
+
+@pytest.mark.parametrize(
+    "operation", ["list_pool_resources", "list_volumes", "get_qcow2", "get_rawstor"]
+)
+def test_mixed_disk_observation_reads_each_libvirt_snapshot_once(
+    tmp_path, monkeypatch, request, operation
+):
+    base_driver, machine, local_volume = (
+        TestForeignVolumes()._foreign_machine_and_volume("default-pool")
+    )
+    driver = _driver(tmp_path, storage_pool="default-pool")
+    request.addfinalizer(base_driver._client.close)
+    request.addfinalizer(driver._client.close)
+    remote_uuid = sys_uuid.uuid4()
+    domains = []
+    for domain in driver._client.listAllDomains():
+        if domain.UUIDString() != str(machine.uuid):
+            continue
+        observed = MagicMock(wraps=domain)
+        root = ET.fromstring(domain.XMLDesc())
+        if domain.UUIDString() == str(machine.uuid):
+            disk = ET.SubElement(
+                root.find("devices"), "disk", type="vhostuser", device="disk"
+            )
+            ET.SubElement(disk, "source", path=driver._socket_path(remote_uuid))
+        observed.XMLDesc.return_value = ET.tostring(root, encoding="unicode")
+        domains.append(observed)
+    storage_pool = MagicMock(
+        wraps=driver._client.storagePoolLookupByName("default-pool")
+    )
+    client = MagicMock(wraps=driver._client)
+    client.listAllDomains.return_value = domains
+    client.storagePoolLookupByName.return_value = storage_pool
+    monkeypatch.setattr(driver, "_client_instance", client)
+    monkeypatch.setattr(
+        driver,
+        "_read_remote_location",
+        lambda uuid: "mds://core:7776/" if uuid == remote_uuid else None,
+    )
+    target = MagicMock()
+    target.spec.return_value.size = 1 << 30
+    monkeypatch.setattr(exordos_hyper.rawstor, "Target", lambda uri: target)
+
+    for cycle in (1, 2):
+        if operation == "list_pool_resources":
+            _, _, machines, volumes = driver.list_pool_resources()
+            assert machine.uuid in {model.uuid for model, _ in machines}
+            assert storage_pool.info.call_count == cycle
+        elif operation == "list_volumes":
+            volumes = driver.list_volumes(machine)
+        else:
+            uuid = local_volume.uuid if operation == "get_qcow2" else remote_uuid
+            volumes = [driver.get_volume(uuid)]
+        by_uuid = {volume.uuid: volume for volume in volumes}
+        expected = (
+            {local_volume.uuid, remote_uuid}
+            if operation.startswith("list_")
+            else {uuid}
+        )
+        assert expected <= by_uuid.keys()
+        for uuid in expected:
+            assert by_uuid[uuid].machine == machine.uuid
+            assert by_uuid[uuid].index == (0 if uuid == local_volume.uuid else 1)
+        assert client.listAllDomains.call_count == cycle
+        assert all(domain.XMLDesc.call_count == cycle for domain in domains)
+        if operation != "get_rawstor":
+            assert client.storagePoolLookupByName.call_count == cycle
+            assert storage_pool.listAllVolumes.call_count == cycle
+    assert base_driver is not None  # Keep the test hypervisor alive.

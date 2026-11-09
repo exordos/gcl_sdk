@@ -243,10 +243,14 @@ class TestDeleteMachine:
         )
         driver.create_machine(machine, [volume], [port])
 
-        driver.delete_machine(machine, delete_volumes=True)
-
         storage_pool = driver._client.storagePoolLookupByName("default-pool")
-        assert list(storage_pool.listAllVolumes()) == []
+        previous = {v.name() for v in storage_pool.listAllVolumes()}
+        volume_name = driver._vir_volume_name(storage_pool, volume)
+        assert volume_name in previous
+        driver.delete_machine(machine, delete_volumes=True)
+        assert {v.name() for v in storage_pool.listAllVolumes()} == previous - {
+            volume_name
+        }
 
 
 class TestRemoveDirectChildren:
