@@ -43,6 +43,7 @@ from gcl_sdk.agents.universal.status_api import routes as status_routes
 from gcl_sdk.audit.api import routes as audit_routes
 
 FIRST_MIGRATION = "0000-init-events-table-2cfd220e.py"
+ORCH_NODE_UUID = sys_uuid.UUID("11111111-1111-4111-8111-111111111111")
 
 
 class FooResource(ra_models.ModelWithUUID, models.ResourceMixin):
@@ -180,6 +181,11 @@ def get_openapi_engine():
 
 @pytest.fixture(scope="module")
 def orch_api_wsgi_app():
+    class TestEncryptionInformation(packers.NoEncryptionInformation):
+        @property
+        def node_uuid(self):
+            return ORCH_NODE_UUID
+
     class OrchApiApp(routes.RootRoute):
         pass
 
@@ -203,7 +209,7 @@ def orch_api_wsgi_app():
             functools.partial(
                 sdk_middlewares.SdkContextMiddleware,
                 context_kwargs={
-                    "encryption_information_class": (packers.NoEncryptionInformation)
+                    "encryption_information_class": TestEncryptionInformation
                 },
             ),
             errors_mw.ErrorsHandlerMiddleware,
@@ -214,6 +220,11 @@ def orch_api_wsgi_app():
 
 @pytest.fixture(scope="module")
 def status_api_wsgi_app():
+    class TestEncryptionInformation(packers.NoEncryptionInformation):
+        @property
+        def node_uuid(self):
+            return sys_uuid.UUID("11111111-1111-4111-8111-111111111111")
+
     class StatusApiApp(routes.RootRoute):
         pass
 
@@ -239,7 +250,7 @@ def status_api_wsgi_app():
             functools.partial(
                 sdk_middlewares.SdkContextMiddleware,
                 context_kwargs={
-                    "encryption_information_class": (packers.NoEncryptionInformation)
+                    "encryption_information_class": TestEncryptionInformation
                 },
             ),
             errors_mw.ErrorsHandlerMiddleware,
