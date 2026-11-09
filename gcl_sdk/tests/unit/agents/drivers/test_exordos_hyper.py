@@ -14,7 +14,9 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import errno
 import subprocess
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 import uuid as sys_uuid
 from xml.etree import ElementTree as ET
@@ -674,3 +676,119 @@ def test_mixed_disk_observation_reads_each_libvirt_snapshot_once(
             assert client.storagePoolLookupByName.call_count == cycle
             assert storage_pool.listAllVolumes.call_count == cycle
     assert base_driver is not None  # Keep the test hypervisor alive.
+
+
+@pytest.fixture
+def resize_environment(tmp_path, monkeypatch):
+    driver = _driver(tmp_path)
+    _redirect_vhost_drop_in(monkeypatch, driver, tmp_path)
+    _no_op_systemctl(monkeypatch)
+    monkeypatch.setattr(driver, "_domains_with_xml", lambda: ())
+    volume = pool_base.MachineVolume(
+        uuid=sys_uuid.uuid4(),
+        project_id=sys_uuid.uuid4(),
+        size=3,
+        storage_location="mds://core:7776/",
+    )
+    driver._write_remote_location_drop_in(volume.uuid, volume.storage_location)
+    size = {"bytes": 2 << 30}
+    target = MagicMock()
+    target.spec.side_effect = lambda: SimpleNamespace(
+        size=size["bytes"], chunk_size=1 << 30
+    )
+    target.resize.side_effect = lambda value: size.update(bytes=value)
+    monkeypatch.setattr(exordos_hyper.rawstor, "Target", lambda uri: target)
+    run = MagicMock(return_value=subprocess.CompletedProcess([], 0))
+    notify = MagicMock()
+    monkeypatch.setattr(subprocess, "run", run)
+    monkeypatch.setattr(subprocess, "check_call", notify)
+    return SimpleNamespace(
+        driver=driver,
+        volume=volume,
+        target=target,
+        size=size,
+        run=run,
+        notify=notify,
+        pending=tmp_path
+        / "drop-ins"
+        / f"rawstor-vhost@{volume.uuid}.service.d"
+        / "resize-pending",
+    )
+
+
+def test_resize_mds_disk_notifies_live_vhost_without_restart(resize_environment):
+    env = resize_environment
+    env.driver.resize_volume(env.volume)
+    env.target.resize.assert_called_once_with(3 << 30)
+    env.notify.assert_called_once_with(
+        [
+            "systemctl",
+            "kill",
+            "--kill-whom=main",
+            "--signal=HUP",
+            env.driver._vhost_unit(env.volume.uuid),
+        ]
+    )
+    assert env.driver.get_volume(env.volume.uuid).size == 3
+    assert not env.pending.exists()
+
+
+def test_resize_inactive_vhost_does_not_start_it(resize_environment):
+    env = resize_environment
+    env.run.return_value.returncode = 3
+    env.driver.resize_volume(env.volume)
+    env.notify.assert_not_called()
+    assert env.size["bytes"] == 3 << 30
+    assert not env.pending.exists()
+
+
+@pytest.mark.parametrize("size,chunk_size", [(1, 1 << 30), (3, 2 << 30)])
+def test_resize_rejects_shrink_and_partial_chunks(resize_environment, size, chunk_size):
+    env = resize_environment
+    env.volume.size = size
+    env.target.spec.side_effect = lambda: SimpleNamespace(
+        size=2 << 30, chunk_size=chunk_size
+    )
+    with pytest.raises(ValueError, match="whole chunks"):
+        env.driver.resize_volume(env.volume)
+    env.target.resize.assert_not_called()
+    assert not env.pending.exists()
+
+
+@pytest.mark.parametrize("discovery", ["get", "list"])
+def test_discovery_finishes_resize_after_failed_vhost_notification(
+    resize_environment, tmp_path, monkeypatch, discovery
+):
+    env = resize_environment
+    env.notify.side_effect = subprocess.CalledProcessError(1, ["systemctl", "kill"])
+    with pytest.raises(subprocess.CalledProcessError):
+        env.driver.resize_volume(env.volume)
+    assert env.size["bytes"] == 3 << 30
+    assert env.pending.exists()
+    env.notify.side_effect = None
+    restarted = _driver(tmp_path)
+    _redirect_vhost_drop_in(monkeypatch, restarted, tmp_path)
+    monkeypatch.setattr(restarted, "_domains_with_xml", lambda: ())
+    if discovery == "get":
+        actual = restarted.get_volume(env.volume.uuid)
+    else:
+        domain = SimpleNamespace(UUIDString=lambda: str(sys_uuid.uuid4()))
+        monkeypatch.setattr(
+            restarted,
+            "_rawstor_attachments",
+            lambda domains: {env.volume.uuid: (domain, 0)},
+        )
+        [actual] = restarted._list_rawstor_volumes(())
+    assert actual.size == 3
+    assert env.target.resize.call_count == 2
+    assert not env.pending.exists()
+
+
+def test_failed_grow_does_not_poison_discovery(resize_environment):
+    env = resize_environment
+    env.target.resize.side_effect = OSError(errno.ENOSPC, "no space")
+    with pytest.raises(OSError) as error:
+        env.driver.resize_volume(env.volume)
+    assert error.value.errno == errno.ENOSPC
+    assert not env.pending.exists()
+    assert env.driver.get_volume(env.volume.uuid).size == 2

@@ -17,6 +17,7 @@
 import logging
 import operator
 import os
+from pathlib import Path
 import re
 import shutil
 import subprocess
@@ -261,6 +262,28 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
 
         return result
 
+    def _finish_pending_resize(self, volume_uuid: sys_uuid.UUID, address: str) -> None:
+        pending = Path(self._vhost_drop_in_dir(volume_uuid)) / "resize-pending"
+        try:
+            size = int(pending.read_text())
+        except FileNotFoundError:
+            return
+        # Replay the grow as well: MDS may have reserved new chunks before
+        # an interrupted attempt finished materializing them on the OSTs.
+        target = _rawstor_module().Target(self._target_uri(volume_uuid, address))
+        target.resize(size)
+        unit = self._vhost_unit(volume_uuid)
+        active = subprocess.run(
+            ["systemctl", "is-active", "--quiet", unit], check=False
+        )
+        if active.returncode == 0:
+            subprocess.check_call(
+                ["systemctl", "kill", "--kill-whom=main", "--signal=HUP", unit]
+            )
+        # An inactive backend picks up the size when it starts. Keep the
+        # marker on failure so discovery retries before reporting completion.
+        pending.unlink()
+
     def _list_rawstor_volumes(
         self,
         domains: tp.Collection[tp.Tuple[libvirt.virDomain, ET.Element]],
@@ -281,6 +304,7 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
                 continue
 
             try:
+                self._finish_pending_resize(volume_uuid, address)
                 spec = (
                     _rawstor_module()
                     .Target(self._target_uri(volume_uuid, address))
@@ -414,6 +438,7 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
         # no rawstor backing store of its own.
         remote_address = self._read_remote_location(volume)
         if remote_address is not None:
+            self._finish_pending_resize(volume, remote_address)
             target = _rawstor_module().Target(self._target_uri(volume, remote_address))
             try:
                 spec = target.spec()
@@ -580,8 +605,24 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
     @libvirt_driver.dry_run_decorator()
     def resize_volume(self, volume: pool_base.MachineVolume) -> None:
         """Resize the volume."""
-        if self._rawstor_address(volume) is None:
+        address = self._rawstor_address(volume)
+        if address is None:
             return super().resize_volume(volume)
-
-        # rawstor has no resize API.
-        raise pool_base.VolumeResizeNotSupportedError(volume=volume.uuid)
+        if not address.startswith("mds://"):
+            raise pool_base.VolumeResizeNotSupportedError(volume=volume.uuid)
+        target = _rawstor_module().Target(self._target_uri(volume.uuid, address))
+        spec = target.spec()
+        size = volume.size << 30
+        if size < spec.size or size % spec.chunk_size:
+            raise ValueError("Rawstor disks can only grow by whole chunks")
+        pending = Path(self._vhost_drop_in_dir(volume.uuid)) / "resize-pending"
+        pending.parent.mkdir(parents=True, exist_ok=True)
+        pending.write_text(str(size))
+        try:
+            self._finish_pending_resize(volume.uuid, address)
+        except OSError:
+            # A rejected grow must not poison discovery of the pool.
+            # If MDS already grew, retain the marker to finish that operation.
+            if target.spec().size == spec.size and size > spec.size:
+                pending.unlink(missing_ok=True)
+            raise
