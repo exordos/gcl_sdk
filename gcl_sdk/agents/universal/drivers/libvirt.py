@@ -1052,6 +1052,10 @@ class LibvirtPoolDriver(pool_base.AbstractPoolDriver):
         )
         machines = self._list_machines(domains)
 
+        storage_pools, volumes = self._list_local_storage(domains)
+        return pool, storage_pools, machines, volumes
+
+    def _list_local_storage(self, domains):
         storage_pools = []
         volumes = []
         for name in self._storage_pool_names():
@@ -1077,7 +1081,7 @@ class LibvirtPoolDriver(pool_base.AbstractPoolDriver):
             self._fill_thin_storage_pool(thin_pool, pool_volumes)
             storage_pools.append(thin_pool)
 
-        return pool, tuple(storage_pools), machines, volumes
+        return tuple(storage_pools), volumes
 
     def list_volumes(
         self, machine: tp.Optional[pool_base.Machine] = None

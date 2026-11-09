@@ -1142,6 +1142,12 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
             project_id=self.project_id,
         )
 
+    def _existing_dp_volume(self, pool: MetaPool) -> MachineVolume:
+        volume = pool.dp_volume_map[self.uuid]
+        volume.storage_location = self.storage_location
+        volume.storage_policy = self.storage_policy
+        return volume
+
     def _is_root_volume(self) -> bool:
         return self.machine and self.index == 0
 
@@ -1206,12 +1212,7 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
         if self.uuid in pool.dp_volume_map:
             # The volume already exists in the data plane
             # Reuse it
-            dp_volume = pool.dp_volume_map[self.uuid]
-            # storage_location isn't discoverable by the driver (unlike
-            # storage_pool, it has no physical signature to probe) - self
-            # is always the authority, overlay it before any driver call.
-            dp_volume.storage_location = self.storage_location
-            dp_volume.storage_policy = self.storage_policy
+            dp_volume = self._existing_dp_volume(pool)
         else:
             # Find a storage pool matching this volume's tier/ephemeral
             # request with enough room for it.
@@ -1290,9 +1291,7 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
             raise ua_driver_exc.ResourceNotFound(resource=self)
 
         driver: AbstractPoolDriver = pool.load_driver()
-        dp_volume = pool.dp_volume_map[self.uuid]
-        dp_volume.storage_location = self.storage_location
-        dp_volume.storage_policy = self.storage_policy
+        dp_volume = self._existing_dp_volume(pool)
         self._detach_volume(pool, driver, dp_volume)
         self._delete_volume(pool, driver, dp_volume)
 
@@ -1302,9 +1301,7 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
             raise ua_driver_exc.ResourceNotFound(resource=self)
 
         driver: AbstractPoolDriver = pool.load_driver()
-        dp_volume: MachineVolume = pool.dp_volume_map[self.uuid]
-        dp_volume.storage_location = self.storage_location
-        dp_volume.storage_policy = self.storage_policy
+        dp_volume = self._existing_dp_volume(pool)
         machine = dp_volume.machine
         unknown_action = True
 

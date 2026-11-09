@@ -15,7 +15,9 @@
 #    under the License.
 from __future__ import annotations
 
+import os
 from pathlib import Path
+import pwd
 import subprocess
 
 from restalchemy.dm import properties
@@ -32,7 +34,30 @@ OST_CONFIG_DIR = Path("/etc/rawstor/ost")
 OST_UNIT_DIR = Path("/etc/systemd/system")
 
 
-class MetaStorageNode(meta.MetaCoordinatorDataPlaneModel):
+def _prepare_file_backing(path):
+    """Create a dedicated backing without following filesystem symlinks."""
+    account = pwd.getpwnam("rawstor")
+    fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        parts = Path(path).parts[1:]
+        for index, part in enumerate(parts):
+            try:
+                os.mkdir(part, mode=0o755, dir_fd=fd)
+            except FileExistsError:
+                pass
+            child = os.open(
+                part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd
+            )
+            os.close(fd)
+            fd = child
+            if index == len(parts) - 1:
+                os.fchown(fd, account.pw_uid, account.pw_gid)
+                os.fchmod(fd, 0o750)
+    finally:
+        os.close(fd)
+
+
+class MetaStorageNode(meta.MetaDataPlaneModel):
     cluster = properties.property(types.UUID(), required=True)
     agent = properties.property(types.AllowNone(types.UUID()), default=None)
     driver_spec = properties.property(
@@ -60,10 +85,7 @@ class MetaStorageNode(meta.MetaCoordinatorDataPlaneModel):
             # Native zvol creation and access to /dev/zfs require root on Linux.
             dropin = "[Service]\nUser=root\nGroup=root\n"
         else:
-            subprocess.run(
-                ["install", "-d", "-o", "rawstor", "-g", "rawstor", "-m", "0750", path],
-                check=True,
-            )
+            _prepare_file_backing(path)
             dropin = f"[Service]\nReadWritePaths={path}\n"
         config = OST_CONFIG_DIR / f"{self.uuid}.conf"
         previous_config = config.read_text() if config.exists() else None
@@ -71,14 +93,26 @@ class MetaStorageNode(meta.MetaCoordinatorDataPlaneModel):
             config,
             f"BIND_ADDR={self.driver_spec.bind_address}\nLOCATION={self.driver_spec.location}\n",
         )
-        unit_changed = _write_if_changed(
-            OST_UNIT_DIR / f"{self.unit_name}.d" / "exordos.conf", dropin
-        )
-        if unit_changed:
-            subprocess.run(["systemctl", "daemon-reload"], check=True)
-        subprocess.run(["systemctl", "enable", "--now", self.unit_name], check=True)
-        if unit_changed or (config_changed and previous_config is not None):
-            subprocess.run(["systemctl", "restart", self.unit_name], check=True)
+        unit_config = OST_UNIT_DIR / f"{self.unit_name}.d" / "exordos.conf"
+        previous_unit = unit_config.read_text() if unit_config.exists() else None
+        unit_changed = _write_if_changed(unit_config, dropin)
+        try:
+            if unit_changed:
+                subprocess.run(["systemctl", "daemon-reload"], check=True)
+            subprocess.run(["systemctl", "enable", "--now", self.unit_name], check=True)
+            if unit_changed or (config_changed and previous_config is not None):
+                subprocess.run(["systemctl", "restart", self.unit_name], check=True)
+        except subprocess.CalledProcessError:
+            for path, content in (
+                (config, previous_config),
+                (unit_config, previous_unit),
+            ):
+                if content is None:
+                    path.unlink(missing_ok=True)
+                else:
+                    _write_if_changed(path, content)
+            subprocess.run(["systemctl", "daemon-reload"], check=False)
+            raise
         import rawstor
 
         # A running unit alone is insufficient: verify the advertised OST responds.
@@ -120,9 +154,8 @@ class MetaStorageNode(meta.MetaCoordinatorDataPlaneModel):
         subprocess.run(["systemctl", "daemon-reload"], check=True)
 
 
-class StorageNodeAgentDriver(meta.MetaCoordinatorAgentDriver):
+class StorageNodeAgentDriver(meta.MetaFileStorageAgentDriver):
     __model_map__ = {"storage_node": MetaStorageNode}
-    __coordinator_map__ = {"storage_node": {}}
 
     def delete(self, resource):
         # The MDS agent has already requested the topology update. Do not require a healthy
@@ -130,4 +163,3 @@ class StorageNodeAgentDriver(meta.MetaCoordinatorAgentDriver):
         model = MetaStorageNode.from_ua_resource(resource)
         model.delete_from_dp()
         self._delete_from_meta(resource.kind, resource.uuid)
-        self._coordinator_storage[resource.kind].pop(resource.uuid, None)

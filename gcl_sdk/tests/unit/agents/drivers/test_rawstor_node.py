@@ -14,6 +14,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+from pathlib import Path
 import subprocess
 from unittest.mock import patch
 from uuid import uuid4
@@ -52,6 +53,16 @@ def node(tmp_path, monkeypatch):
     pytest.importorskip("rawstor")
     from gcl_sdk.agents.universal.drivers import rawstor_node
 
+    monkeypatch.setattr(
+        storage_capacity,
+        "OST_BACKING_ROOTS",
+        (*storage_capacity.OST_BACKING_ROOTS, str(tmp_path)),
+    )
+    monkeypatch.setattr(
+        rawstor_node,
+        "_prepare_file_backing",
+        lambda path: Path(path).mkdir(exist_ok=True),
+    )
     monkeypatch.setattr(rawstor_node, "OST_UNIT_DIR", tmp_path / "units")
     monkeypatch.setattr(rawstor_node, "OST_CONFIG_DIR", tmp_path / "config")
     model = rawstor_node.MetaStorageNode(
@@ -353,3 +364,59 @@ def test_restore_missing_ost_does_not_create_it(node):
             model.restore_from_dp()
     run.assert_not_called()
     assert not module.OST_CONFIG_DIR.exists()
+
+
+@pytest.mark.parametrize(
+    "location",
+    ["file:///etc", "file:///opt/universal_agent/.venv/bin", "file:///usr/bin"],
+)
+def test_rejects_system_backing_paths(location):
+    with pytest.raises(ValueError):
+        storage_capacity.validate_ost_configuration(location, "127.0.0.1:7777")
+
+
+def test_backing_symlink_is_rejected(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage_capacity, "OST_BACKING_ROOTS", (str(tmp_path),))
+    (tmp_path / "link").symlink_to("/etc", target_is_directory=True)
+    with pytest.raises(ValueError):
+        storage_capacity.validate_ost_configuration(
+            f"file://{tmp_path}/link", "127.0.0.1:7777"
+        )
+
+
+def test_restart_failure_preserves_configuration_for_retry(node):
+    model, module = node
+    with (
+        patch.object(
+            module.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)
+        ),
+        patch("rawstor.Location"),
+    ):
+        model.dump_to_dp()
+    config = module.OST_CONFIG_DIR / f"{model.uuid}.conf"
+    original = config.read_text()
+    model.driver_spec.bind_address = "0.0.0.0:7778"
+    commands = []
+
+    def restart(args, **kwargs):
+        commands.append(args)
+        if args[1] == "restart":
+            raise subprocess.CalledProcessError(1, args)
+        return subprocess.CompletedProcess(args, 0)
+
+    with (
+        patch.object(module.subprocess, "run", side_effect=restart),
+        pytest.raises(subprocess.CalledProcessError),
+    ):
+        model.update_on_dp()
+    assert config.read_text() == original
+    with (
+        patch.object(
+            module.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)
+        ) as run,
+        patch("rawstor.Location"),
+    ):
+        model.update_on_dp()
+    assert ["systemctl", "restart", model.unit_name] in [
+        call.args[0] for call in run.call_args_list
+    ]

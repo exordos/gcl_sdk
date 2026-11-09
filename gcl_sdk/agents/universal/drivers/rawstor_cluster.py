@@ -87,6 +87,15 @@ class AbstractStorageClusterDriver(abc.ABC):
     def _spec(self) -> AbstractStorageClusterDriverSpec:
         return self._cluster.driver_spec
 
+    def configure(self) -> None:
+        """Apply backend configuration when the driver requires it."""
+
+    def restore(self) -> None:
+        """Read backend configuration without changing the data plane."""
+
+    def delete(self) -> None:
+        """Remove backend configuration when the driver owns it."""
+
     @abc.abstractmethod
     def get_capacity(self) -> tp.Collection[pool_base.AbstractStoragePool]:
         """Report this cluster's storage pool(s) and their capacity."""
@@ -169,7 +178,13 @@ class RawstorStorageClusterDriver(AbstractStorageClusterDriver):
         )
         subprocess.run(["systemctl", "enable", "--now", self.unit_name], check=True)
         if config_changed and previous_config is not None:
-            subprocess.run(["systemctl", "restart", self.unit_name], check=True)
+            try:
+                subprocess.run(["systemctl", "restart", self.unit_name], check=True)
+            except subprocess.CalledProcessError:
+                _write_if_changed(config, previous_config)
+                if previous_topology is not None:
+                    _write_if_changed(topology, previous_topology)
+                raise
         elif topology_changed and previous_topology is not None:
             try:
                 subprocess.run(["systemctl", "reload", self.unit_name], check=True)
@@ -312,7 +327,7 @@ class RawstorStorageClusterDriver(AbstractStorageClusterDriver):
         return result
 
 
-class MetaStorageCluster(meta.MetaCoordinatorDataPlaneModel):
+class MetaStorageCluster(meta.MetaDataPlaneModel):
     """Storage cluster meta model.
 
     Much smaller than MetaPool: a storage cluster has no machines/volumes
@@ -371,8 +386,7 @@ class MetaStorageCluster(meta.MetaCoordinatorDataPlaneModel):
     def restore_from_dp(self, **kwargs) -> None:
         """Refresh this cluster's reported capacity."""
         driver = self.load_driver()
-        if isinstance(driver, RawstorStorageClusterDriver):
-            driver.restore()
+        driver.restore()
         try:
             self.storage_pools = list(driver.get_capacity())
         except OSError:
@@ -386,8 +400,7 @@ class MetaStorageCluster(meta.MetaCoordinatorDataPlaneModel):
     def dump_to_dp(self, **kwargs) -> None:
         """Configure the core MDS and report its capacity."""
         driver = self.load_driver()
-        if isinstance(driver, RawstorStorageClusterDriver):
-            driver.configure()
+        driver.configure()
         self.storage_pools = list(driver.get_capacity())
         self.status = pool_base.MachinePoolStatus.ACTIVE.value
 
@@ -396,13 +409,8 @@ class MetaStorageCluster(meta.MetaCoordinatorDataPlaneModel):
 
     def delete_from_dp(self, **kwargs) -> None:
         driver = self.load_driver()
-        if isinstance(driver, RawstorStorageClusterDriver):
-            driver.delete()
+        driver.delete()
 
 
-class StorageClusterAgentDriver(meta.MetaCoordinatorAgentDriver):
+class StorageClusterAgentDriver(meta.MetaFileStorageAgentDriver):
     __model_map__ = {"storage_cluster": MetaStorageCluster}
-
-    __coordinator_map__ = {
-        "storage_cluster": {},
-    }

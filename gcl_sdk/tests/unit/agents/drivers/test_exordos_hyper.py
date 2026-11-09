@@ -535,3 +535,67 @@ class TestResizeVolume:
 
         with pytest.raises(pool_base.VolumeResizeNotSupportedError):
             driver.resize_volume(volume)
+
+
+@pytest.mark.parametrize(
+    "location",
+    ["mds://host:7776/\nUser=root", 'mds://host:7776/"', "mds://host:7776/%i"],
+)
+def test_vhost_dropin_rejects_service_injection(tmp_path, location):
+    driver = _driver(tmp_path)
+    with pytest.raises(ValueError):
+        driver._write_remote_location_drop_in(sys_uuid.uuid4(), location)
+
+
+def test_local_disk_machine_is_also_prepared_for_remote_hotplug(tmp_path):
+    driver = _driver(tmp_path)
+    domain = MagicMock()
+    machine = pool_base.Machine(
+        uuid=sys_uuid.uuid4(),
+        project_id=sys_uuid.uuid4(),
+        name="local",
+        cores=1,
+        ram=512,
+    )
+    driver._add_volumes_to_domain(domain, machine, [])
+    domain.set_shared_memory.assert_called_once()
+
+
+def test_missing_vhost_template_does_not_block_object_cleanup(tmp_path, monkeypatch):
+    driver = _driver(tmp_path)
+    _redirect_vhost_drop_in(monkeypatch, driver, tmp_path)
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args[0], 0, stdout="not-found\n"
+        ),
+    )
+    stop = MagicMock()
+    monkeypatch.setattr(subprocess, "check_call", stop)
+    driver._stop_vhost(sys_uuid.uuid4())
+    stop.assert_not_called()
+
+
+def test_qcow2_discovery_does_not_require_rawstor_binding(tmp_path, monkeypatch):
+    import importlib.util
+    import sys
+
+    spec = importlib.util.spec_from_file_location(
+        "optional_rawstor_hyper", exordos_hyper.__file__
+    )
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, "rawstor", None)
+    spec.loader.exec_module(module)
+    driver = module.ExordosLocalHyperDriver(
+        pool_base.MachinePool(
+            uuid=sys_uuid.uuid4(),
+            name="local",
+            driver_spec=pool_base.ExordosLocalHyperDriverSpec(
+                connection_uri="test:///default", node=sys_uuid.uuid4(), storage_pool=[]
+            ),
+        )
+    )
+    driver.list_pool_resources()
+    with pytest.raises(RuntimeError, match="rawstor"):
+        module._rawstor_module()
