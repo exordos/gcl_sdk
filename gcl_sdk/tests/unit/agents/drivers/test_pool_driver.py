@@ -1014,3 +1014,33 @@ def test_failed_machine_resource_update_reconciles_capacity(actual_resources, re
             pool.dp_machine_map[machine.uuid].cores,
             pool.dp_machine_map[machine.uuid].ram,
         ) == actual_resources
+
+
+def test_legacy_pool_driver_instantiates_but_refuses_joint_resize():
+    # Implement the previous abstract interface using the existing dummy
+    # methods, without providing the new joint setter.
+    legacy_methods = {
+        name: getattr(pool_driver.DummyPoolDriver, name)
+        for name in pool_driver.AbstractPoolDriver.__abstractmethods__
+        if name != "set_machine_resources"
+    }
+    legacy_driver = type(
+        "LegacyPoolDriver", (pool_driver.AbstractPoolDriver,), legacy_methods
+    )()
+    machine = pool_driver.Machine(
+        uuid=sys_uuid.uuid4(),
+        name="vm",
+        cores=2,
+        ram=1024,
+        power_state="OFF",
+        project_id=pool_driver.SYSTEM_PROJECT_ID,
+    )
+    with (
+        mock.patch.object(legacy_driver, "set_machine_cores") as set_cores,
+        mock.patch.object(legacy_driver, "set_machine_ram") as set_ram,
+        pytest.raises(NotImplementedError, match="LegacyPoolDriver.*CPU and RAM"),
+    ):
+        legacy_driver.set_machine_resources(machine, 4, 4096)
+    set_cores.assert_not_called()
+    set_ram.assert_not_called()
+    assert (machine.cores, machine.ram, machine.power_state) == (2, 1024, "OFF")

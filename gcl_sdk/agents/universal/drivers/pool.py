@@ -629,9 +629,15 @@ class AbstractPoolDriver(abc.ABC):
     def get_volume(self, volume: sys_uuid.UUID) -> MachineVolume:
         """Get the volume by uuid."""
 
-    @abc.abstractmethod
     def set_machine_resources(self, machine: Machine, cores: int, ram: int) -> None:
-        """Set CPU and RAM together, preserving the machine's power state."""
+        """Set CPU and RAM together, preserving the machine's power state.
+
+        Optional for legacy drivers to implement. Refuse unsupported resizing
+        explicitly rather than falling back to separate, non-atomic setters.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support joint CPU and RAM resizing"
+        )
 
     @abc.abstractmethod
     def set_machine_cores(self, machine: Machine, cores: int) -> None:
