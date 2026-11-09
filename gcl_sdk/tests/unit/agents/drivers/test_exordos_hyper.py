@@ -792,3 +792,15 @@ def test_failed_grow_does_not_poison_discovery(resize_environment):
     assert error.value.errno == errno.ENOSPC
     assert not env.pending.exists()
     assert env.driver.get_volume(env.volume.uuid).size == 2
+
+
+def test_resize_retries_when_systemd_state_is_unavailable(resize_environment):
+    env = resize_environment
+    env.run.return_value.returncode = 1
+    with pytest.raises(subprocess.CalledProcessError):
+        env.driver.resize_volume(env.volume)
+    assert env.pending.exists()
+    env.notify.assert_not_called()
+    env.run.return_value.returncode = 0
+    assert env.driver.get_volume(env.volume.uuid).size == 3
+    assert not env.pending.exists()

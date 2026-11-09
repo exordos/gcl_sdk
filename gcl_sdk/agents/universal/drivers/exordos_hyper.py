@@ -280,6 +280,8 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
             subprocess.check_call(
                 ["systemctl", "kill", "--kill-whom=main", "--signal=HUP", unit]
             )
+        elif active.returncode not in (3, 4):
+            raise subprocess.CalledProcessError(active.returncode, active.args)
         # An inactive backend picks up the size when it starts. Keep the
         # marker on failure so discovery retries before reporting completion.
         pending.unlink()
@@ -617,7 +619,9 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
             raise ValueError("Rawstor disks can only grow by whole chunks")
         pending = Path(self._vhost_drop_in_dir(volume.uuid)) / "resize-pending"
         pending.parent.mkdir(parents=True, exist_ok=True)
-        pending.write_text(str(size))
+        staged = pending.with_suffix(".tmp")
+        staged.write_text(str(size))
+        staged.replace(pending)
         try:
             self._finish_pending_resize(volume.uuid, address)
         except OSError:
