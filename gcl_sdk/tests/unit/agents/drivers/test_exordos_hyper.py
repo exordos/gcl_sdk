@@ -804,3 +804,31 @@ def test_resize_retries_when_systemd_state_is_unavailable(resize_environment):
     env.run.return_value.returncode = 0
     assert env.driver.get_volume(env.volume.uuid).size == 3
     assert not env.pending.exists()
+
+
+def test_concurrent_discovery_keeps_resized_volume(resize_environment, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    env = resize_environment
+    env.pending.write_text(str(3 << 30))
+    barrier = Barrier(2)
+
+    def resize(size):
+        barrier.wait(timeout=5)
+        env.size["bytes"] = size
+
+    env.target.resize.side_effect = resize
+    domain = SimpleNamespace(UUIDString=lambda: str(sys_uuid.uuid4()))
+    monkeypatch.setattr(
+        env.driver,
+        "_rawstor_attachments",
+        lambda domains: {env.volume.uuid: (domain, 0)},
+    )
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(
+            executor.map(lambda _: env.driver._list_rawstor_volumes(()), range(2))
+        )
+    assert [len(result) for result in results] == [1, 1]
+    assert all(result[0].size == 3 for result in results)
+    assert not env.pending.exists()

@@ -284,7 +284,7 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
             raise subprocess.CalledProcessError(active.returncode, active.args)
         # An inactive backend picks up the size when it starts. Keep the
         # marker on failure so discovery retries before reporting completion.
-        pending.unlink()
+        pending.unlink(missing_ok=True)
 
     def _list_rawstor_volumes(
         self,
