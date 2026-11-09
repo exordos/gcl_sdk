@@ -221,13 +221,6 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
                 return disk
         return None
 
-    def _domains_with_xml(
-        self,
-    ) -> tp.Tuple[tp.Tuple[libvirt.virDomain, ET.Element], ...]:
-        return tuple(
-            (d, ET.fromstring(d.XMLDesc())) for d in self._client.listAllDomains()
-        )
-
     def _rawstor_attachments(
         self,
         domains: tp.Collection[tp.Tuple[libvirt.virDomain, ET.Element]],
@@ -401,7 +394,7 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
         volumes = self._list_rawstor_volumes(domains)
 
         if self._storage_pool_names():
-            volumes = volumes + list(super().list_volumes())
+            volumes.extend(self._list_local_volumes(domains))
 
         if machine is None:
             return volumes
@@ -446,14 +439,9 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
         # pre-existing disk adopted from before this pool existed, e.g.
         # the core bootstrap VM's).
         if self._storage_pool_names():
-            try:
-                found = super().get_volume(volume)
-                for observed in super().list_volumes():
-                    if observed.uuid == volume:
-                        return observed
-                return found
-            except pool_base.VolumeNotFoundError:
-                pass
+            for observed in self._list_local_volumes(domains):
+                if observed.uuid == volume:
+                    return observed
 
         raise pool_base.VolumeNotFoundError(volume=volume)
 
