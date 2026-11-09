@@ -397,6 +397,11 @@ def test_recreate_preserves_global_disk_order_across_pools():
             (root.uuid, 0),
             (data.uuid, 1),
         ]
+        driver.set_machine_resources(machine, 2, 1024)
+        assert disk_paths() == before
+        resized, ports = driver.get_machine(machine.uuid)
+        assert (resized.cores, resized.ram) == (2, 1024)
+        assert [(p.mac, p.source) for p in ports] == [(port.mac, port.source)]
         driver.recreate_machine(machine, ports=[port])
         assert disk_paths() == before
     finally:
@@ -475,3 +480,73 @@ class TestPowerState:
 
         domain.pMWakeup.assert_called_once()
         domain.create.assert_not_called()
+
+
+@pytest.mark.parametrize("active", [False, True])
+@pytest.mark.parametrize("autostart", [False, True])
+def test_joint_resource_update_preserves_domain_and_power(active, autostart):
+    driver = _local_driver()
+    machine = pool_base.Machine(
+        uuid=sys_uuid.uuid4(),
+        project_id=sys_uuid.uuid4(),
+        name="resize-test",
+        cores=1,
+        ram=512,
+    )
+    driver.create_machine(machine, [], [])
+    domain = driver._client.lookupByUUIDString(str(machine.uuid))
+    domain.setAutostart(autostart)
+    if not active:
+        domain.destroy()
+    before = ET.fromstring(domain.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE))
+    spy = mock.Mock(wraps=domain)
+    try:
+        with (
+            mock.patch.object(
+                driver, "_client_instance", wraps=driver._client
+            ) as client,
+        ):
+            client.lookupByUUIDString.return_value = spy
+            driver.set_machine_resources(machine, 2, 1024)
+            client.defineXML.assert_called_once()
+        assert spy.destroy.call_count == int(active)
+        updated = driver._client.lookupByUUIDString(str(machine.uuid))
+        assert bool(updated.isActive()) == active
+        assert bool(updated.autostart()) == autostart
+        after = ET.fromstring(updated.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE))
+        assert after.find("vcpu").text == "2"
+        assert after.find("memory").text == "1048576"
+        assert after.find("currentMemory").text == "1048576"
+        assert ET.tostring(after.find("devices")) == ET.tostring(before.find("devices"))
+        assert after.find("uuid").text == before.find("uuid").text
+        actual, _ = driver.get_machine(machine.uuid)
+        assert (actual.cores, actual.ram) == (2, 1024)
+    finally:
+        driver.delete_machine(machine, delete_volumes=False)
+
+
+@pytest.mark.parametrize(
+    "method, value, expected",
+    [
+        ("set_machine_cores", 2, (2, 512)),
+        ("set_machine_ram", 1024, (1, 1024)),
+    ],
+)
+def test_resource_setter_compatibility(method, value, expected):
+    driver = _local_driver()
+    machine = pool_base.Machine(
+        uuid=sys_uuid.uuid4(),
+        project_id=sys_uuid.uuid4(),
+        name="resize-wrapper",
+        cores=1,
+        ram=512,
+    )
+    driver.create_machine(machine, [], [])
+    driver.shutdown_machine(machine, force=True)
+    try:
+        getattr(driver, method)(machine, value)
+        actual, _ = driver.get_machine(machine.uuid)
+        assert (actual.cores, actual.ram) == expected
+        assert actual.power_state == pool_base.PowerState.OFF.value
+    finally:
+        driver.delete_machine(machine, delete_volumes=False)

@@ -1465,50 +1465,41 @@ class LibvirtPoolDriver(pool_base.AbstractPoolDriver):
         return self._domain2machine(domain)
 
     @dry_run_decorator()
-    def set_machine_cores(self, machine: pool_base.Machine, cores: int) -> None:
-        """Set machine cores."""
-        ports = self._list_interfaces(machine)
-        volumes = self.list_volumes(machine)
+    def set_machine_resources(
+        self, machine: pool_base.Machine, cores: int, ram: int
+    ) -> None:
+        """Apply CPU and RAM in one stop/start cycle, retaining attached devices.
 
-        # TODO(akremenetsky): It's only for backward compatibility
-        # This part has to be removed once all machines are migrated.
-        # Or this part can be reworked to convert legacy to new format.
+        An inactive domain stays inactive. Running domains are restarted;
+        callers requiring a graceful shutdown must stop the guest first.
+        """
         domain = self._client.lookupByUUIDString(str(machine.uuid))
-        legacy_domain = self._is_legacy_domain(ET.fromstring(domain.XMLDesc()))
-
-        self.delete_machine(machine, delete_volumes=False)
-
+        xml = XMLLibvirtInstance(domain.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE))
+        xml.set_vcpu(cores)
+        xml.set_memory(ram)
+        if machine.image is not None:
+            xml.set_image(machine.image)
+        was_active = bool(domain.isActive())
+        autostart = domain.autostart()
+        if was_active:
+            domain.destroy()
+        updated_domain = self._client.defineXML(xml.xml)
+        updated_domain.setAutostart(autostart)
+        if was_active:
+            updated_domain.create()
         machine.cores = cores
-        self.create_machine(
-            machine,
-            volumes=volumes,
-            ports=ports,
-            legacy_machine=legacy_domain,
-        )
-        LOG.debug("The domain %s was updated with cores %s", machine.uuid, cores)
-
-    @dry_run_decorator()
-    def set_machine_ram(self, machine: pool_base.Machine, ram: int) -> None:
-        """Set machine ram."""
-        ports = self._list_interfaces(machine)
-        volumes = self.list_volumes(machine)
-
-        # TODO(akremenetsky): It's only for backward compatibility
-        # This part has to be removed once all machines are migrated.
-        # Or this part can be reworked to convert legacy to new format.
-        domain = self._client.lookupByUUIDString(str(machine.uuid))
-        legacy_domain = self._is_legacy_domain(ET.fromstring(domain.XMLDesc()))
-
-        self.delete_machine(machine, delete_volumes=False)
-
         machine.ram = ram
-        self.create_machine(
-            machine,
-            volumes=volumes,
-            ports=ports,
-            legacy_machine=legacy_domain,
+        LOG.debug(
+            "The domain %s CPU and RAM updated to %s/%s", machine.uuid, cores, ram
         )
-        LOG.debug("The domain %s was updated with ram %s", machine.uuid, ram)
+
+    def set_machine_cores(self, machine: pool_base.Machine, cores: int) -> None:
+        """Set CPU while retaining RAM and power state."""
+        self.set_machine_resources(machine, cores, machine.ram)
+
+    def set_machine_ram(self, machine: pool_base.Machine, ram: int) -> None:
+        """Set RAM while retaining CPU and power state."""
+        self.set_machine_resources(machine, machine.cores, ram)
 
     @dry_run_decorator()
     def reset_machine(self, machine: pool_base.Machine) -> None:

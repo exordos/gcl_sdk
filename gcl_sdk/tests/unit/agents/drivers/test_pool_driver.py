@@ -606,8 +606,9 @@ class _PowerPoolDriver(pool_driver.DummyPoolDriver):
     def start_machine(self, machine):
         self.calls.append(("start",))
 
-    def set_machine_cores(self, machine, cores):
+    def set_machine_resources(self, machine, cores, ram):
         self.calls.append(("cores", cores))
+        super().set_machine_resources(machine, cores, ram)
 
 
 class TestMachinePowerState:
@@ -849,18 +850,13 @@ class TestMachinePowerState:
         self._iterate(pool, driver, uuid, "ON", cores=2)
         assert driver.calls == [("start",), ("cores", 2)]
 
-    def test_powered_off_machine_is_updated_then_powered_off_again(self):
+    def test_powered_off_machine_stays_off_after_resource_update(self):
         pool, driver, dp_machine, uuid = self._machine("OFF")
 
-        self._iterate(pool, driver, uuid, "OFF", cores=2)
+        assert self._iterate(pool, driver, uuid, "OFF", cores=2) == "OFF"
+        assert dp_machine.cores == 2
+        assert self._iterate(pool, driver, uuid, "OFF", cores=2) == "OFF"
         assert driver.calls == [("cores", 2)]
-
-        # Recreation of the domain started the machine
-        dp_machine.cores = 2
-        dp_machine.power_state = "ON"
-        self._iterate(pool, driver, uuid, "OFF", cores=2)
-
-        assert driver.calls == [("cores", 2), ("shutdown", False)]
 
     def test_vanished_machine_drops_its_operations(self):
         pool, driver, dp_machine, uuid = self._machine("ON")
@@ -893,3 +889,95 @@ class TestMachinePowerState:
         machine._create_machine(driver, dp_machine, (), ())
 
         assert machine.power_state == expected
+
+
+@pytest.mark.parametrize(
+    "cores, ram, avail_cores, avail_ram, succeeds",
+    [
+        (4, 4096, 8, 8192, True),
+        (4, 4096, 8, 0, False),
+        (4, 4096, 0, 8192, False),
+        (4, 4096, 0, 0, False),
+        (1, 512, 0, 0, True),
+        (1, 512, -4, -4096, True),
+        (4, 1024, 8, -4096, True),
+        (2, 4096, -4, 8192, True),
+        (4, 1024, 8, 0, True),
+        (2, 4096, 0, 8192, True),
+    ],
+)
+def test_machine_resource_update_checks_both_deltas(
+    cores, ram, avail_cores, avail_ram, succeeds
+):
+    pool = pool_driver.MetaPool(
+        uuid=sys_uuid.uuid4(), driver_spec=pool_driver.DummyPoolDriverSpec()
+    )
+    machine = pool_driver.Machine(
+        uuid=sys_uuid.uuid4(),
+        name="vm",
+        cores=2,
+        ram=1024,
+        power_state="OFF",
+        project_id=pool_driver.SYSTEM_PROJECT_ID,
+    )
+    pool.dp_machine_map = {machine.uuid: machine}
+    pool.avail_cores, pool.avail_ram = avail_cores, avail_ram
+    driver = pool_driver.DummyPoolDriver(pool)
+    target = pool_driver.MetaMachine(
+        uuid=machine.uuid,
+        name=machine.name,
+        cores=cores,
+        ram=ram,
+        pool=pool.uuid,
+        project_id=machine.project_id,
+    )
+    with (
+        mock.patch.object(pool_driver.MetaPool, "load_driver", return_value=driver),
+        mock.patch.object(
+            driver, "set_machine_resources", wraps=driver.set_machine_resources
+        ) as resize,
+    ):
+        target.update_on_dp(pool, volumes=())
+    if succeeds:
+        resize.assert_called_once_with(machine, cores, ram)
+        assert (machine.cores, machine.ram, machine.power_state) == (cores, ram, "OFF")
+        assert (pool.avail_cores, pool.avail_ram) == (
+            avail_cores - (cores - 2),
+            avail_ram - (ram - 1024),
+        )
+    else:
+        resize.assert_not_called()
+        assert target.status == pool_driver.MachineStatus.ERROR.value
+        assert (machine.cores, machine.ram) == (2, 1024)
+        assert (pool.avail_cores, pool.avail_ram) == (avail_cores, avail_ram)
+
+
+def test_failed_machine_resource_update_does_not_allocate_capacity():
+    pool = pool_driver.MetaPool(
+        uuid=sys_uuid.uuid4(), driver_spec=pool_driver.DummyPoolDriverSpec()
+    )
+    machine = pool_driver.Machine(
+        uuid=sys_uuid.uuid4(),
+        name="vm",
+        cores=2,
+        ram=1024,
+        project_id=pool_driver.SYSTEM_PROJECT_ID,
+    )
+    pool.dp_machine_map = {machine.uuid: machine}
+    pool.avail_cores, pool.avail_ram = 8, 8192
+    driver = pool_driver.DummyPoolDriver(pool)
+    target = pool_driver.MetaMachine(
+        uuid=machine.uuid,
+        name=machine.name,
+        cores=4,
+        ram=4096,
+        pool=pool.uuid,
+        project_id=machine.project_id,
+    )
+    with (
+        mock.patch.object(pool_driver.MetaPool, "load_driver", return_value=driver),
+        mock.patch.object(driver, "set_machine_resources", side_effect=RuntimeError),
+        pytest.raises(RuntimeError),
+    ):
+        target.update_on_dp(pool, volumes=())
+    assert (pool.avail_cores, pool.avail_ram) == (8, 8192)

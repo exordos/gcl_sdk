@@ -630,6 +630,10 @@ class AbstractPoolDriver(abc.ABC):
         """Get the volume by uuid."""
 
     @abc.abstractmethod
+    def set_machine_resources(self, machine: Machine, cores: int, ram: int) -> None:
+        """Set CPU and RAM together, preserving the machine's power state."""
+
+    @abc.abstractmethod
     def set_machine_cores(self, machine: Machine, cores: int) -> None:
         """Set machine cores."""
 
@@ -761,6 +765,11 @@ class DummyPoolDriver(AbstractPoolDriver):
 
     def detach_port(self, machine: Machine, port: Port) -> None:
         """Detach the port."""
+
+    def set_machine_resources(self, machine: Machine, cores: int, ram: int) -> None:
+        """Set CPU and RAM together without changing the power state."""
+        machine.cores = cores
+        machine.ram = ram
 
     def set_machine_cores(self, machine: Machine, cores: int) -> None:
         """Set machine cores."""
@@ -1691,56 +1700,28 @@ class MetaMachine(meta.MetaCoordinatorDataPlaneModel):
                 self._from_dp_machine(*driver.get_machine(self.uuid))
                 return
 
-        # Cores
-        if self.cores != dp_machine.cores:
+        # Validate both deltas before changing either resource. Existing
+        # machines cannot be rescheduled automatically when capacity is short.
+        if self.cores != dp_machine.cores or self.ram != dp_machine.ram:
             unknown_action = False
-
-            # Mark the machine as error if the pool doesn't have enough
-            # resources to update the machine. In the `create` case
-            # the machine is marked as `NEED_RESCHEDULE` but it's not
-            # possible in this case as we need to migrate the machine.
-            # Such functionality is not implemented yet.
             need_cores = self.cores - dp_machine.cores
-            if not self._has_enough_resources(pool, cores=need_cores):
+            need_ram = self.ram - dp_machine.ram
+            if not self._has_enough_resources(
+                pool,
+                cores=need_cores if need_cores > 0 else None,
+                ram=need_ram if need_ram > 0 else None,
+            ):
                 self.status = MachineStatus.ERROR.value
-                LOG.error("Not enough Cores to update the machine %s", self.uuid)
+                LOG.error("Not enough CPU or RAM to update machine %s", self.uuid)
                 return
 
-            # NOTE(akremenetsky): Legacy machines always have image=None.
-            # Therefore we cannot update the image without modifying XML.
-            # To make things simpler, the image is enriched when cores
-            # are changed. This avoids the need to modify XML directly.
-            # This "helper" has to be removed after full migration.
+            # Preserve the legacy image enrichment used by resource updates.
             if dp_machine.image is None:
                 dp_machine.image = self.image
-                LOG.info(
-                    "Enriched legacy machine %s with image %s.",
-                    self.uuid,
-                    self.image,
-                )
 
-            driver.set_machine_cores(dp_machine, self.cores)
-            self._allocate_resources(pool, cores=need_cores)
-            LOG.info("The machine %s cores updated.", self.uuid)
-
-        # Ram
-        if self.ram != dp_machine.ram:
-            unknown_action = False
-
-            # Mark the machine as error if the pool doesn't have enough
-            # resources to update the machine. In the `create` case
-            # the machine is marked as `NEED_RESCHEDULE` but it's not
-            # possible in this case as we need to migrate the machine.
-            # Such functionality is not implemented yet.
-            need_ram = self.ram - dp_machine.ram
-            if not self._has_enough_resources(pool, ram=need_ram):
-                self.status = MachineStatus.ERROR.value
-                LOG.error("Not enough RAM to update the machine %s", self.uuid)
-                return
-
-            driver.set_machine_ram(dp_machine, self.ram)
-            self._allocate_resources(pool, ram=need_ram)
-            LOG.info("The machine %s ram updated.", self.uuid)
+            driver.set_machine_resources(dp_machine, self.cores, self.ram)
+            self._allocate_resources(pool, cores=need_cores, ram=need_ram)
+            LOG.info("The machine %s CPU and RAM updated.", self.uuid)
 
         # TODO(akremenetsky): Actually update image logic is more suitable for
         # volumes update but for backward compatibility we keep it here.
