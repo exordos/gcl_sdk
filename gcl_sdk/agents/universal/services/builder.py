@@ -38,7 +38,15 @@ LOG = logging.getLogger(__name__)
 class UniversalBuilderService(
     svc_common.RegistrableUAServiceMixin, looper_basic.BasicService
 ):
-    """The universal builder service."""
+    """The universal builder service.
+
+    The service automatically speeds up (boosts) its iterations when the
+    iteration performs actual work with resources and returns back to the
+    default pace when there is no work anymore. The boost mode of the
+    ``gcl_looper`` services is used for it. To protect the system from a
+    buggy business logic which reports work all the time, the boost
+    overheat protection is enabled by default.
+    """
 
     def __init__(
         self,
@@ -46,11 +54,22 @@ class UniversalBuilderService(
         service_spec: svc_common.UAServiceSpec | None = None,
         iter_min_period: float = 3,
         iter_pause: float = 0.1,
+        boost_period: float = 0.5,
+        boost_iterations: int = 5,
+        boost_max_iterations: int | None = 100,
+        boost_cooldown_iterations: int | None = 200,
     ):
         super().__init__(iter_min_period, iter_pause)
         self._instance_model = instance_model
         self._service_spec = service_spec
         self._iteration_context: dict[str, tp.Any] = {}
+        self._boost_period = boost_period
+        self._boost_iterations = boost_iterations
+        self._boost_work_performed = False
+        self.configure_boost_protection(
+            boost_max_iterations,
+            boost_cooldown_iterations,
+        )
 
     # RegistrableUAServiceMixin interface
 
@@ -636,6 +655,7 @@ class UniversalBuilderService(
             instance.get_resource_kind(),
             target_resource.uuid,
         )
+        self._notify_boost_work()
 
     @sql_utils.savepoint()
     def _actualize_outdated_instance_derivatives(
@@ -713,6 +733,7 @@ class UniversalBuilderService(
         if actual_resource is not None:
             target_resource.full_hash = actual_resource.full_hash
         target_resource.update()
+        self._notify_boost_work()
 
     @sql_utils.savepoint()
     def _actualize_outdated_instance_all_derivatives(
@@ -795,6 +816,7 @@ class UniversalBuilderService(
         if actual_resource is not None:
             target_resource.full_hash = actual_resource.full_hash
         target_resource.update()
+        self._notify_boost_work()
 
     @sql_utils.savepoint()
     def _actualize_new_instance(self, instance: models.InstanceMixin) -> None:
@@ -858,6 +880,7 @@ class UniversalBuilderService(
             instance_resource.kind,
             instance_resource.uuid,
         )
+        self._notify_boost_work()
 
     def _actualize_new_instances(
         self, instances: tp.Collection[models.InstanceMixin] = ()
@@ -967,6 +990,7 @@ class UniversalBuilderService(
             instance.get_resource_kind(),
             resource.uuid,
         )
+        self._notify_boost_work()
 
     def _actualize_updated_instances(self) -> None:
         """Actualize updated instances changed by user."""
@@ -1285,6 +1309,7 @@ class UniversalBuilderService(
                         resource.kind,
                         resource.uuid,
                     )
+                self._notify_boost_work()
 
             except Exception:
                 LOG.exception(
@@ -1391,6 +1416,7 @@ class UniversalBuilderService(
         else:
             target_resource.master_full_hash = master.full_hash
         target_resource.save()
+        self._notify_boost_work()
 
     def _actualize_outdated_master_instances(
         self,
@@ -1480,6 +1506,7 @@ class UniversalBuilderService(
             instance.get_resource_kind(),
             target_resource.uuid,
         )
+        self._notify_boost_work()
 
         return new_tracked_instances
 
@@ -1621,6 +1648,25 @@ class UniversalBuilderService(
 
     # Misc methods
 
+    def _notify_boost_work(self) -> None:
+        """Mark that the iteration performed actual work with resources.
+
+        The method must be called by the actualizing methods after
+        successful persisting of the changes. Actual work is the signal to
+        speed up the next iterations (the boost mode).
+        """
+        self._boost_work_performed = True
+
+    def _apply_boost_state(self) -> None:
+        """Apply the boost mode if the iteration has performed work.
+
+        A work iteration refreshes the boost for `boost_iterations` next
+        iterations. If there is no work anymore, the boost simply expires
+        after the last refresh, returning the service to the default pace.
+        """
+        if self._boost_work_performed:
+            self.boost(self._boost_period, iterations=self._boost_iterations)
+
     def _model_iteration(self) -> None:
         """Perfrom iteration for the particular instance model."""
         try:
@@ -1689,9 +1735,11 @@ class UniversalBuilderService(
 
     def _iteration(self) -> None:
         """Service iteration."""
+        self._boost_work_performed = False
         with contexts.Context().session_manager():
             self._iteration_context = self.prepare_iteration()
             self._model_iteration()
+        self._apply_boost_state()
 
 
 class CollectionUniversalBuilderService(UniversalBuilderService):
@@ -1703,6 +1751,10 @@ class CollectionUniversalBuilderService(UniversalBuilderService):
         service_spec: svc_common.UAServiceSpec | None = None,
         iter_min_period: float = 3,
         iter_pause: float = 0.1,
+        boost_period: float = 0.5,
+        boost_iterations: int = 5,
+        boost_max_iterations: int | None = 100,
+        boost_cooldown_iterations: int | None = 200,
     ):
         if len(instance_models) == 0:
             raise ValueError("The instance models collection is empty.")
@@ -1713,6 +1765,10 @@ class CollectionUniversalBuilderService(UniversalBuilderService):
             service_spec=service_spec,
             iter_min_period=iter_min_period,
             iter_pause=iter_pause,
+            boost_period=boost_period,
+            boost_iterations=boost_iterations,
+            boost_max_iterations=boost_max_iterations,
+            boost_cooldown_iterations=boost_cooldown_iterations,
         )
 
         self._instance_models = instance_models
@@ -1720,6 +1776,7 @@ class CollectionUniversalBuilderService(UniversalBuilderService):
     def _iteration(self) -> None:
         """Service iteration."""
         context_ready = False
+        self._boost_work_performed = False
 
         for instance_model in self._instance_models:
             # Focus on the particular instance model.
@@ -1735,3 +1792,5 @@ class CollectionUniversalBuilderService(UniversalBuilderService):
 
         # Reset the instance model.
         self._instance_model = None
+
+        self._apply_boost_state()
