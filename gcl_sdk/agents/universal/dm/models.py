@@ -132,25 +132,35 @@ class Payload(models.Model, models.SimpleViewMixin):
         self, hash_method: tp.Callable[[str | bytes], str] = xxhash.xxh3_64
     ) -> None:
         m = hash_method()
-        # Only the ``hash``/``full_hash`` strings are needed here and both are
-        # already present in the stored simple-view representations, so read
-        # them straight from the resource dicts instead of restoring every
-        # resource. This avoids deserializing (and decrypting) the whole payload
-        # on every hash calculation while producing an identical result.
-        caps_hashes = [
-            resource.get("hash", "")
-            for resource in self._iter_resource_dicts(self.capabilities)
-        ]
+        # Read hashes and parent links from stored resource views rather than
+        # restoring every resource on each calculation.
+        capability_resources = list(self._iter_resource_dicts(self.capabilities))
+        caps_hashes = [resource.get("hash", "") for resource in capability_resources]
         facts_hashes = [
             resource.get("full_hash", "")
             for resource in self._iter_resource_dicts(self.facts)
         ]
         caps_hashes.sort()
         facts_hashes.sort()
-        hashes = caps_hashes
-        hashes.extend(facts_hashes)
+        hashes = caps_hashes + facts_hashes
+        parent_links = sorted(
+            (
+                resource.get("kind", ""),
+                resource.get("uuid", ""),
+                str(resource["master"]),
+            )
+            for resource in capability_resources
+            if resource.get("master") is not None
+        )
+        hash_data = (
+            {"resources": hashes, "parents": parent_links}
+            if parent_links
+            else hashes
+        )
         m.update(
-            json.dumps(hashes, separators=(",", ":"), sort_keys=True).encode("utf-8")
+            json.dumps(hash_data, separators=(",", ":"), sort_keys=True).encode(
+                "utf-8"
+            )
         )
         self.hash = m.hexdigest()
 
@@ -173,7 +183,11 @@ class Payload(models.Model, models.SimpleViewMixin):
         """
         Lists all resources by capability or all resources if capability is None.
         """
-        return self._resources(self.capabilities, capability)
+        return self._resources(
+            self.capabilities,
+            capability,
+            include_master=True,
+        )
 
     def add_caps_resource(
         self, resource: Resource, skip_fields: tuple[str, ...] = ()
@@ -232,7 +246,12 @@ class Payload(models.Model, models.SimpleViewMixin):
         os.replace(tmp_file, payload_path)
 
     @classmethod
-    def _resources(cls, source: dict, res_filter: str | None = None) -> list[Resource]:
+    def _resources(
+        cls,
+        source: dict,
+        res_filter: str | None = None,
+        include_master: bool = False,
+    ) -> list[Resource]:
         """
         Lists all resources by capability/fact or all resources in the basket.
         """
@@ -243,12 +262,28 @@ class Payload(models.Model, models.SimpleViewMixin):
             except KeyError:
                 return []
 
-            return [Resource.restore_from_simple_view(**r) for r in data]
+            resources = []
+            for resource_data in data:
+                resource_data = resource_data.copy()
+                master = None
+                if include_master:
+                    master = resource_data.pop("master", None)
+                resource = Resource.restore_from_simple_view(**resource_data)
+                if master is not None:
+                    resource.master = master
+                resources.append(resource)
+            return resources
 
         # Lists all resources
         resources = []
         for res_filter in source:
-            resources.extend(cls._resources(source, res_filter))
+            resources.extend(
+                cls._resources(
+                    source,
+                    res_filter,
+                    include_master=include_master,
+                )
+            )
 
         return resources
 
@@ -259,13 +294,18 @@ class Payload(models.Model, models.SimpleViewMixin):
         resource: Resource,
         skip_fields: tuple[str, ...] = (),
     ) -> None:
+        resource_data = resource.dump_to_simple_view(skip=skip_fields)
+        if hasattr(resource, "master") and "master" not in skip_fields:
+            master = getattr(resource, "master")
+            resource_data["master"] = str(master) if master is not None else None
+
         try:
             dest[resource.kind]["resources"].append(
-                resource.dump_to_simple_view(skip=skip_fields)
+                resource_data
             )
         except KeyError:
             dest[resource.kind] = {
-                "resources": [resource.dump_to_simple_view(skip=skip_fields)]
+                "resources": [resource_data]
             }
 
     @classmethod
@@ -380,7 +420,6 @@ class UniversalAgent(
             caps_resources,
             skip_fields=(
                 "agent",
-                "master",
                 "master_hash",
                 "master_full_hash",
                 "tracked_at",
