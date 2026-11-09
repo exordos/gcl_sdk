@@ -78,15 +78,13 @@ class MetaStorageNode(meta.MetaDataPlaneModel):
         path = storage_capacity.validate_ost_configuration(
             self.driver_spec.location, self.driver_spec.bind_address
         )
-        is_zfs = self.driver_spec.location.startswith("zfs://")
-        if is_zfs:
-            # Provision pools/datasets explicitly; reconciliation never formats disks.
-            subprocess.run(["zfs", "list", "-H", "-o", "name", path], check=True)
-            # Native zvol creation and access to /dev/zfs require root on Linux.
-            dropin = "[Service]\nUser=root\nGroup=root\n"
-        else:
+        if self.driver_spec.location.startswith("file://"):
             _prepare_file_backing(path)
             dropin = f"[Service]\nReadWritePaths={path}\n"
+        else:
+            # Native storage backends manage devices and require root.
+            # Rawstor validates the URI; backing stores are provisioned externally.
+            dropin = "[Service]\nUser=root\nGroup=root\n"
         config = OST_CONFIG_DIR / f"{self.uuid}.conf"
         previous_config = config.read_text() if config.exists() else None
         config_changed = _write_if_changed(
