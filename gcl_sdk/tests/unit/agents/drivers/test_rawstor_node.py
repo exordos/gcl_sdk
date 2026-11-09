@@ -36,6 +36,9 @@ def test_ost_configuration_accepts_ipv6_and_dedicated_directory():
     "location,bind",
     [
         ("file:///", "0.0.0.0:7777"),
+        ("lvm://vg\nUser=root", "0.0.0.0:7777"),
+        ("lvm://vg\x00", "0.0.0.0:7777"),
+        ("future://backend/%i", "0.0.0.0:7777"),
         ("file:///data/../ost", "0.0.0.0:7777"),
         ("file:///data/%i", "0.0.0.0:7777"),
         ("file:///data/ost", "0.0.0.0:7777\nRestart=no"),
@@ -272,63 +275,50 @@ def test_agent_delete_does_not_contact_or_restart_an_unreachable_ost(node, tmp_p
 
 
 @pytest.mark.parametrize(
-    "location,expected",
+    "location",
     [
-        ("zfs://tank", "tank"),
-        ("zfs://tank/ost1", "tank/ost1"),
-        ("zfs://pool_1/rawstor/ost-1", "pool_1/rawstor/ost-1"),
+        "zfs://tank/ost1",
+        "lvm://rawstor-ost",
+        "future://backend/path",
     ],
 )
-def test_ost_configuration_accepts_zfs(location, expected):
+def test_ost_configuration_passes_backend_uri_to_rawstor(location):
     assert (
         storage_capacity.validate_ost_configuration(location, "0.0.0.0:7777")
-        == expected
+        == location
     )
 
 
 @pytest.mark.parametrize(
     "location",
     [
-        "ZFS://tank/ost",
-        "zfs:///tank",
-        "zfs://tank/../ost",
-        "zfs://tank/ost/",
-        "zfs://tank//ost",
-        "zfs://user@tank/ost",
-        "zfs://tank/ost@snapshot",
-        "zfs://tank/ost%20one",
+        "zfs://tank/ost1",
+        "lvm://rawstor-ost",
+        "future://backend/path",
     ],
 )
-def test_ost_configuration_rejects_invalid_zfs(location):
-    with pytest.raises(ValueError):
-        storage_capacity.validate_ost_configuration(location, "0.0.0.0:7777")
-
-
-def test_zfs_reconcile_uses_existing_dataset_and_privileged_template_dropin(node):
+def test_native_backing_is_not_prepared_by_agent(node, location):
     model, module = node
-    model.driver_spec.location = "zfs://tank/ost1"
+    model.driver_spec.location = location
     with (
         patch.object(
             module.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)
         ) as run,
         patch("rawstor.Location"),
+        patch.object(module, "_prepare_file_backing") as prepare_file,
     ):
         model.dump_to_dp()
-        commands = [call.args[0] for call in run.call_args_list]
-        assert ["zfs", "list", "-H", "-o", "name", "tank/ost1"] in commands
-        assert not any(
-            command[0] == "install" or "create" in command for command in commands
-        )
+        prepare_file.assert_not_called()
+        assert all(call.args[0][0] == "systemctl" for call in run.call_args_list)
+        config = (module.OST_CONFIG_DIR / f"{model.uuid}.conf").read_text()
+        assert f"LOCATION={location}\n" in config
         dropin = (
             module.OST_UNIT_DIR / f"{model.unit_name}.d" / "exordos.conf"
         ).read_text()
         assert "User=root" in dropin and "Group=root" in dropin
-        assert not (module.OST_UNIT_DIR / model.unit_name).exists()
         run.reset_mock()
         model.delete_from_dp()
-        assert not any(
-            command.args[0][0] in ("zfs", "zpool") for command in run.call_args_list
-        )
+        assert all(call.args[0][0] == "systemctl" for call in run.call_args_list)
 
 
 def test_restore_reads_changed_config_without_applying_it(node):

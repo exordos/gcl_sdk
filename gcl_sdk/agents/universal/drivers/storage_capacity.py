@@ -25,20 +25,21 @@ DOMAIN_DEPTH = {"dc": 1, "row": 2, "rack": 3, "server": 4}
 
 
 def validate_ost_configuration(location, bind_address):
-    """Validate file/ZFS backing and systemd arguments without specifiers."""
+    """Validate service arguments and paths the agent prepares itself."""
     uri = urlparse(location)
     if (
-        uri.query
-        or uri.fragment
-        or any(c.isspace() for c in location)
+        not uri.scheme
+        or any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in location)
         or "%" in location
         or any(c in location for c in ('"', "'", "\\", "$"))
-        or any(p in (".", "..") for p in uri.path.split("/"))
     ):
         raise ValueError("Invalid OST backing URI")
     if uri.scheme == "file":
         if (
-            not location.startswith("file:///")
+            uri.query
+            or uri.fragment
+            or any(p in (".", "..") for p in uri.path.split("/"))
+            or not location.startswith("file:///")
             or uri.netloc
             or not uri.path.startswith("/")
             or uri.path == "/"
@@ -54,17 +55,8 @@ def validate_ost_configuration(location, bind_address):
         if directory.resolve() != directory:
             raise ValueError("OST backing must not traverse symlinks")
         backing = uri.path
-    elif uri.scheme == "zfs":
-        backing = uri.netloc + uri.path
-        if (
-            not location.startswith("zfs://")
-            or not uri.netloc
-            or not all(c.isascii() and (c.isalnum() or c in "_-/.") for c in backing)
-            or any(not part or part in (".", "..") for part in backing.split("/"))
-        ):
-            raise ValueError("OST ZFS backing must be zfs://POOL[/DATASET]")
     else:
-        raise ValueError("OST backing scheme must be file or zfs")
+        backing = location
     try:
         bind = urlparse("ost://" + bind_address)
         ipaddress.ip_address(bind.hostname)
