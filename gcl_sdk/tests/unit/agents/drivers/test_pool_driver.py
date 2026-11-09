@@ -952,7 +952,16 @@ def test_machine_resource_update_checks_both_deltas(
         assert (pool.avail_cores, pool.avail_ram) == (avail_cores, avail_ram)
 
 
-def test_failed_machine_resource_update_does_not_allocate_capacity():
+@pytest.mark.parametrize(
+    "actual_resources, readable",
+    [
+        ((2, 1024), True),
+        ((4, 4096), True),
+        ((1, 512), True),
+        ((2, 1024), False),
+    ],
+)
+def test_failed_machine_resource_update_reconciles_capacity(actual_resources, readable):
     pool = pool_driver.MetaPool(
         uuid=sys_uuid.uuid4(), driver_spec=pool_driver.DummyPoolDriverSpec()
     )
@@ -977,7 +986,31 @@ def test_failed_machine_resource_update_does_not_allocate_capacity():
     with (
         mock.patch.object(pool_driver.MetaPool, "load_driver", return_value=driver),
         mock.patch.object(driver, "set_machine_resources", side_effect=RuntimeError),
+        mock.patch.object(
+            driver,
+            "get_machine",
+            return_value=(
+                pool_driver.Machine(
+                    uuid=machine.uuid,
+                    project_id=machine.project_id,
+                    name="vm",
+                    cores=actual_resources[0],
+                    ram=actual_resources[1],
+                ),
+                (),
+            ),
+            side_effect=None if readable else RuntimeError,
+        ),
         pytest.raises(RuntimeError),
     ):
         target.update_on_dp(pool, volumes=())
-    assert (pool.avail_cores, pool.avail_ram) == (8, 8192)
+    expected = actual_resources if readable else (4, 4096)
+    assert (pool.avail_cores, pool.avail_ram) == (
+        8 - (expected[0] - 2),
+        8192 - (expected[1] - 1024),
+    )
+    if readable:
+        assert (
+            pool.dp_machine_map[machine.uuid].cores,
+            pool.dp_machine_map[machine.uuid].ram,
+        ) == actual_resources

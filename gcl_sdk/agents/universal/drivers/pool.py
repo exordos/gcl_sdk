@@ -1719,7 +1719,30 @@ class MetaMachine(meta.MetaCoordinatorDataPlaneModel):
             if dp_machine.image is None:
                 dp_machine.image = self.image
 
-            driver.set_machine_resources(dp_machine, self.cores, self.ram)
+            old_cores, old_ram = dp_machine.cores, dp_machine.ram
+            try:
+                driver.set_machine_resources(dp_machine, self.cores, self.ram)
+            except Exception:
+                # A driver rollback can fail too. Charge what actually persisted
+                # so subsequent updates in this iteration cannot overbook it.
+                try:
+                    actual, ports = driver.get_machine(self.uuid)
+                except Exception:
+                    LOG.exception(
+                        "Cannot read machine %s after failed resize", self.uuid
+                    )
+                    # Reserve positive deltas until the next data-plane refresh
+                    # when the outcome is unknown; never release capacity here.
+                    self._allocate_resources(
+                        pool, cores=max(need_cores, 0), ram=max(need_ram, 0)
+                    )
+                else:
+                    pool.dp_machine_map[self.uuid] = actual
+                    pool.dp_port_map[self.uuid] = ports
+                    self._allocate_resources(
+                        pool, cores=actual.cores - old_cores, ram=actual.ram - old_ram
+                    )
+                raise
             self._allocate_resources(pool, cores=need_cores, ram=need_ram)
             LOG.info("The machine %s CPU and RAM updated.", self.uuid)
 

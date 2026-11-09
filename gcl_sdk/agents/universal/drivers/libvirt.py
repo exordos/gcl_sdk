@@ -1470,23 +1470,53 @@ class LibvirtPoolDriver(pool_base.AbstractPoolDriver):
     ) -> None:
         """Apply CPU and RAM in one stop/start cycle, retaining attached devices.
 
-        An inactive domain stays inactive. Running domains are restarted;
-        callers requiring a graceful shutdown must stop the guest first.
+        Inactive and paused domains retain their state. Running domains are
+        restarted; callers requiring a graceful shutdown must stop them first.
+        Restore the original definition and state if applying the resize fails.
         """
         domain = self._client.lookupByUUIDString(str(machine.uuid))
-        xml = XMLLibvirtInstance(domain.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE))
+        original_xml = domain.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE)
+        xml = XMLLibvirtInstance(original_xml)
         xml.set_vcpu(cores)
         xml.set_memory(ram)
         if machine.image is not None:
             xml.set_image(machine.image)
         was_active = bool(domain.isActive())
+        state, _ = domain.state()
+        if was_active and state not in (
+            libvirt.VIR_DOMAIN_RUNNING,
+            libvirt.VIR_DOMAIN_BLOCKED,
+            libvirt.VIR_DOMAIN_PAUSED,
+        ):
+            raise ValueError("Stop or wake the guest before resizing in this state")
+        start_flags = (
+            libvirt.VIR_DOMAIN_START_PAUSED if state == libvirt.VIR_DOMAIN_PAUSED else 0
+        )
         autostart = domain.autostart()
-        if was_active:
-            domain.destroy()
-        updated_domain = self._client.defineXML(xml.xml)
-        updated_domain.setAutostart(autostart)
-        if was_active:
-            updated_domain.create()
+        definition_attempted = False
+        try:
+            if was_active:
+                domain.destroy()
+            definition_attempted = True
+            updated_domain = self._client.defineXML(xml.xml)
+            updated_domain.setAutostart(autostart)
+            if was_active:
+                updated_domain.createWithFlags(start_flags)
+        except libvirt.libvirtError:
+            try:
+                current = self._client.lookupByUUIDString(str(machine.uuid))
+                if definition_attempted:
+                    if current.isActive():
+                        current.destroy()
+                    current = self._client.defineXML(original_xml)
+                    current.setAutostart(autostart)
+                if was_active and not current.isActive():
+                    current.createWithFlags(start_flags)
+            except libvirt.libvirtError:
+                LOG.exception(
+                    "Failed to roll back resource resize for %s", machine.uuid
+                )
+            raise
         machine.cores = cores
         machine.ram = ram
         LOG.debug(
