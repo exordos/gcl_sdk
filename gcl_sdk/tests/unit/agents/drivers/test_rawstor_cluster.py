@@ -40,6 +40,13 @@ from gcl_sdk.agents.universal.drivers import pool as pool_base  # noqa: E402
 from gcl_sdk.agents.universal.drivers import rawstor_cluster  # noqa: E402
 from gcl_sdk.infra import constants as ic  # noqa: E402
 
+CORE_NODE_UUID = sys_uuid.UUID("e56b440c-b5fd-4537-b0ab-c9a311bfa851")
+
+
+@pytest.fixture(autouse=True)
+def core_node_identity(monkeypatch):
+    monkeypatch.setattr(rawstor_cluster.ua_utils, "node_uuid", lambda: CORE_NODE_UUID)
+
 
 def _cluster(tmp_path, tier=ic.DiskTier.HOT.value, ephemeral=False):
     # rawstor's "file://" location is a real, local, daemon-less backend
@@ -242,7 +249,7 @@ class TestCoreMDSLifecycle:
         witness_uuid = sys_uuid.uuid5(cluster_uuid, "mds-witness")
         assert topology == (
             f"{cluster_uuid} ost://10.0.0.5:7777 1 data,witness {cluster_uuid}\n"
-            f"{witness_uuid} ost://10.20.0.2:7776 100 witness mds-10.20.0.2\n"
+            f"{witness_uuid} ost://10.20.0.2:7776 100 witness {CORE_NODE_UUID}\n"
         )
         config = (tmp_path / "config" / f"{cluster_uuid}.conf").read_text()
         assert config == "BIND_ADDR=10.20.0.2:7776\n"
@@ -367,7 +374,7 @@ class TestCoreMDSLifecycle:
         assert config.read_text() == "BIND_ADDR=core.example:7776\n"
         topology = tmp_path / "config" / f"{driver._cluster.uuid}.topology"
         assert (
-            "ost://core.example:7776 100 witness mds-core.example"
+            f"ost://core.example:7776 100 witness {CORE_NODE_UUID}"
             in topology.read_text()
         )
         assert driver._cluster.driver_spec.endpoint == "mds://core.example:7776/"
@@ -616,7 +623,7 @@ def test_cluster_restore_only_reads_actual_topology(tmp_path, monkeypatch, role)
     witness_uuid = sys_uuid.uuid5(cluster.uuid, "mds-witness")
     content = (
         f"{node_uuid} ost://127.0.0.1:7777 100 {role} dc/server\n"
-        f"{witness_uuid} ost://127.0.0.1:7776 100 witness mds-127.0.0.1\n"
+        f"{witness_uuid} ost://127.0.0.1:7776 100 witness {CORE_NODE_UUID}\n"
     )
     topology = tmp_path / f"{cluster.uuid}.topology"
     topology.write_text(content)
@@ -755,4 +762,43 @@ def test_coordinator_recreates_missing_mds_witness_without_exposing_it_as_a_node
         assert (
             actual.value["driver_spec"]["nodes"]
             == resource.value["driver_spec"]["nodes"]
+        )
+
+
+def test_witness_dns_address_is_separate_from_mds_bind(tmp_path, monkeypatch):
+    cluster = _cluster(tmp_path)
+    cluster.driver_spec.endpoint = "mds://127.0.0.1:7776/"
+    cluster.driver_spec.witness_endpoint = "ost://core.local.genesis-core.tech:7776"
+    monkeypatch.setattr(rawstor_cluster, "MDS_CONFIG_DIR", tmp_path / "config")
+    driver = rawstor_cluster.RawstorStorageClusterDriver(cluster)
+    with patch.object(rawstor_cluster.subprocess, "run") as run:
+        driver.configure()
+        run.return_value.returncode = 0
+        driver.restore()
+    assert (
+        tmp_path / "config" / f"{cluster.uuid}.conf"
+    ).read_text() == "BIND_ADDR=127.0.0.1:7776\n"
+    topology = (tmp_path / "config" / f"{cluster.uuid}.topology").read_text()
+    assert (
+        f"ost://core.local.genesis-core.tech:7776 100 witness {CORE_NODE_UUID}\n"
+        in topology
+    )
+    assert cluster.driver_spec.endpoint == "mds://127.0.0.1:7776/"
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "ost://core:7776?x=1",
+        "ost://core:7776#x",
+        "ost://core:7776\nextra",
+        "mds://core:7776",
+    ],
+)
+def test_witness_endpoint_rejects_invalid_topology_uri(tmp_path, endpoint):
+    cluster = _cluster(tmp_path)
+    cluster.driver_spec.witness_endpoint = endpoint
+    with pytest.raises(ValueError):
+        rawstor_cluster.RawstorStorageClusterDriver(cluster)._witness_topology_line(
+            "127.0.0.1:7776"
         )
