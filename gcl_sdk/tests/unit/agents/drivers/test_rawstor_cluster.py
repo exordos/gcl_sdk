@@ -22,6 +22,7 @@ import time
 import types
 from unittest.mock import call
 from unittest.mock import patch
+from urllib.parse import urlparse
 import uuid as sys_uuid
 
 import pytest
@@ -353,27 +354,22 @@ class TestCoreMDSLifecycle:
             in (tmp_path / "config" / f"{second._cluster.uuid}.conf").read_text()
         )
 
-    @pytest.mark.parametrize("address", ["10.20.0.2", "2001:db8::2"])
-    def test_hostname_endpoint_is_resolved_for_bind(
-        self, tmp_path, monkeypatch, address
+    def test_hostname_endpoint_is_preserved_for_bind_and_restore(
+        self, tmp_path, monkeypatch
     ):
         driver = self._driver(tmp_path, monkeypatch)
         driver._cluster.driver_spec.endpoint = "mds://core.example:7776/"
-        with (
-            patch.object(rawstor_cluster.subprocess, "run"),
-            patch.object(
-                rawstor_cluster.socket,
-                "getaddrinfo",
-                return_value=[(None, None, None, "", (address, 7776))],
-            ) as resolve,
-        ):
+        with patch.object(rawstor_cluster.subprocess, "run") as run:
             driver.configure()
-        resolve.assert_called_once_with(
-            "core.example", 7776, type=rawstor_cluster.socket.SOCK_STREAM
-        )
-        host = f"[{address}]" if ":" in address else address
+            run.return_value.returncode = 0
+            driver.restore()
         config = tmp_path / "config" / f"{driver._cluster.uuid}.conf"
-        assert config.read_text() == f"BIND_ADDR={host}:7776\n"
+        assert config.read_text() == "BIND_ADDR=core.example:7776\n"
+        topology = tmp_path / "config" / f"{driver._cluster.uuid}.topology"
+        assert (
+            "ost://core.example:7776 100 witness mds-core.example"
+            in topology.read_text()
+        )
         assert driver._cluster.driver_spec.endpoint == "mds://core.example:7776/"
 
     def test_delete_stops_only_this_clusters_mds(self, tmp_path, monkeypatch):
@@ -435,12 +431,11 @@ def test_two_core_mds_instances_create_enumerate_and_recover_disks(
     def start_mds(cluster):
         db = rawstor_cluster.MDS_STATE_DIR / str(cluster.uuid) / "mds.db"
         db.parent.mkdir(parents=True, exist_ok=True)
-        endpoint_port = cluster.driver_spec.endpoint.split(":")[-1].rstrip("/")
         return start(
             os.environ["RAWSTOR_TEST_MDS"],
             [
                 "--bind",
-                f"127.0.0.1:{endpoint_port}",
+                urlparse(cluster.driver_spec.endpoint).netloc,
                 "--db",
                 str(db),
                 "--topology",
@@ -456,8 +451,9 @@ def test_two_core_mds_instances_create_enumerate_and_recover_disks(
     try:
         mds_processes = []
         for index in range(2):
+            host = "localhost" if index == 0 else "127.0.0.1"
             cluster = _cluster(tmp_path)
-            cluster.driver_spec.endpoint = f"mds://127.0.0.1:{port()}/"
+            cluster.driver_spec.endpoint = f"mds://{host}:{port()}/"
             cluster.driver_spec.pools = (
                 rawstor_cluster.storage_capacity.default_policies(cluster.uuid)
             )
@@ -470,7 +466,7 @@ def test_two_core_mds_instances_create_enumerate_and_recover_disks(
                     os.environ["RAWSTOR_TEST_OST"],
                     [
                         "--bind",
-                        f"127.0.0.1:{ost_port}",
+                        f"{host}:{ost_port}",
                         "--workers",
                         "1",
                         "--queue-size",
@@ -480,7 +476,7 @@ def test_two_core_mds_instances_create_enumerate_and_recover_disks(
                     f"ost{index}-{member}.log",
                 )
                 nodes[str(sys_uuid.uuid4())] = {
-                    "endpoint": f"ost://127.0.0.1:{ost_port}",
+                    "endpoint": f"ost://{host}:{ost_port}",
                     "weight": 1.0,
                     "failure_domain_path": f"dc/row/rack{member}/server{member}",
                 }
