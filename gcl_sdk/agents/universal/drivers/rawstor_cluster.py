@@ -16,12 +16,10 @@
 from __future__ import annotations
 
 import abc
-import ipaddress
 import logging
 import math
 import os
 from pathlib import Path
-import socket
 import subprocess
 import tempfile
 import time
@@ -157,16 +155,8 @@ class RawstorStorageClusterDriver(AbstractStorageClusterDriver):
             )
         config = MDS_CONFIG_DIR / f"{self._cluster.uuid}.conf"
         previous_config = config.read_text() if config.exists() else None
-        try:
-            address = ipaddress.ip_address(mds.hostname)
-        except ValueError:
-            address = ipaddress.ip_address(
-                socket.getaddrinfo(mds.hostname, mds.port, type=socket.SOCK_STREAM)[0][
-                    4
-                ][0]
-            )
-        host = f"[{address}]" if address.version == 6 else str(address)
-        bind = f"{host}:{mds.port}"
+        bind = mds.netloc
+        storage_capacity.validate_bind_address(bind)
         lines.append(self._witness_topology_line(bind))
         content = f"BIND_ADDR={bind}\n"
         config_changed = _write_if_changed(config, content)
@@ -202,16 +192,7 @@ class RawstorStorageClusterDriver(AbstractStorageClusterDriver):
         values = dict(line.split("=", 1) for line in config.read_text().splitlines())
         actual_bind = values["BIND_ADDR"]
         endpoint = urlparse(self._spec.endpoint)
-        addresses = socket.getaddrinfo(
-            endpoint.hostname, endpoint.port, type=socket.SOCK_STREAM
-        )
-        expected_binds = {
-            f"[{entry[4][0]}]:{endpoint.port}"
-            if ":" in entry[4][0]
-            else f"{entry[4][0]}:{endpoint.port}"
-            for entry in addresses
-        }
-        if actual_bind not in expected_binds:
+        if actual_bind != endpoint.netloc:
             self._spec.endpoint = f"mds://{actual_bind}/"
         nodes = {}
         witness = self._witness_topology_line(actual_bind).split()

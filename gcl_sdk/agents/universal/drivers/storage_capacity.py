@@ -15,7 +15,6 @@
 #    under the License.
 """Shared rawstor admission budget, in bytes (pool figures are not additive)."""
 
-import ipaddress
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -57,24 +56,29 @@ def validate_ost_configuration(location, bind_address):
         backing = uri.path
     else:
         backing = location
+    validate_bind_address(bind_address)
+    return backing
+
+
+def validate_bind_address(bind_address):
     try:
         bind = urlparse("ost://" + bind_address)
-        ipaddress.ip_address(bind.hostname)
         if (
-            not bind.port
+            not bind.hostname
+            or not bind.port
             or bind.path
             or bind.query
             or bind.fragment
             or bind.username
             or any(c.isspace() for c in bind_address)
             or "%" in bind_address
+            or any(ord(c) < 32 or ord(c) == 127 or c in "\"'\\$" for c in bind_address)
         ):
             raise ValueError()
     except (ValueError, TypeError):
         raise ValueError(
-            "OST bind must be an IP address and port (IPv6 in brackets)"
+            "Rawstor bind must be a host and port (IPv6 in brackets)"
         ) from None
-    return backing
 
 
 def domain(node, level):

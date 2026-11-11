@@ -410,3 +410,25 @@ def test_restart_failure_preserves_configuration_for_retry(node):
     assert ["systemctl", "restart", model.unit_name] in [
         call.args[0] for call in run.call_args_list
     ]
+
+
+def test_ost_configuration_accepts_dns_bind():
+    assert (
+        storage_capacity.validate_ost_configuration("lvm://vg", "ost.example:7777")
+        == "lvm://vg"
+    )
+
+
+@pytest.mark.parametrize(
+    "bind",
+    [
+        "host\nUser=root:7777",
+        "host%H:7777",
+        'host"bad:7777',
+        "host$HOME:7777",
+        "host\x00:7777",
+    ],
+)
+def test_ost_configuration_rejects_unsafe_dns_bind(bind):
+    with pytest.raises(ValueError):
+        storage_capacity.validate_ost_configuration("lvm://vg", bind)
