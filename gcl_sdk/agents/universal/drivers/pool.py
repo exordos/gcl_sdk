@@ -555,6 +555,8 @@ class RawstorStorageClusterAgentSpec(RawstorStorageClusterDriverSpec):
     endpoint = properties.property(types.String(max_length=2048), required=True)
     # OST advertised to the core MDS. Empty for legacy direct-OST clusters.
     ost_endpoint = properties.property(types.String(max_length=2048), default="")
+    # Witness address may use internal DNS independently of the MDS bind address.
+    witness_endpoint = properties.property(types.String(max_length=2048), default="")
     # Keyed by stable OST/pool UUIDs; supplied by the control plane.
     nodes = properties.property(types.Dict(), default=dict)
     pools = properties.property(types.Dict(), default=dict)

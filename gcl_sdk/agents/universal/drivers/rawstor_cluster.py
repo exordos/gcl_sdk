@@ -33,6 +33,7 @@ from restalchemy.dm import types
 from restalchemy.dm import types_dynamic
 
 from gcl_sdk.agents.universal import constants as c
+from gcl_sdk.agents.universal import utils as ua_utils
 from gcl_sdk.agents.universal.drivers import exceptions as driver_exc
 from gcl_sdk.agents.universal.drivers import meta
 from gcl_sdk.agents.universal.drivers import pool as pool_base
@@ -111,8 +112,18 @@ class RawstorStorageClusterDriver(AbstractStorageClusterDriver):
 
     def _witness_topology_line(self, bind: str) -> str:
         witness_uuid = sys_uuid.uuid5(self._cluster.uuid, "mds-witness")
-        host = urlparse(f"ost://{bind}").hostname
-        return f"{witness_uuid} ost://{bind} 100 witness mds-{host}\n"
+        endpoint = self._spec.witness_endpoint or f"ost://{bind}"
+        parsed = urlparse(endpoint)
+        if (
+            parsed.scheme != "ost"
+            or parsed.path not in ("", "/")
+            or parsed.query
+            or parsed.fragment
+            or any(c.isspace() for c in endpoint)
+        ):
+            raise ValueError("Witness endpoint must be ost://host:port")
+        storage_capacity.validate_bind_address(parsed.netloc)
+        return f"{witness_uuid} {endpoint.rstrip('/')} 100 witness {ua_utils.node_uuid()}\n"
 
     def configure(self) -> None:
         if not self._spec.endpoint.startswith("mds://"):
