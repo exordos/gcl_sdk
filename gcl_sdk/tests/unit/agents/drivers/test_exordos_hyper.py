@@ -832,3 +832,151 @@ def test_concurrent_discovery_keeps_resized_volume(resize_environment, monkeypat
     assert [len(result) for result in results] == [1, 1]
     assert all(result[0].size == 3 for result in results)
     assert not env.pending.exists()
+
+
+def _power_domain(driver, monkeypatch, *, active, shared, volume_uuid=None):
+    memory = (
+        '<memoryBacking><source type="memfd"/><access mode="shared"/></memoryBacking>'
+        if shared
+        else ""
+    )
+    disk = (
+        f'<disk type="vhostuser" device="disk"><source type="unix" path="{driver._socket_path(volume_uuid)}"/></disk>'
+        if volume_uuid
+        else ""
+    )
+    xml = f"<domain><name>legacy</name><metadata><marker>keep</marker></metadata>{memory}<devices>{disk}</devices></domain>"
+    domain = MagicMock()
+    domain.XMLDesc.return_value = xml
+    domain.isActive.return_value = active
+    domain.state.return_value = (exordos_hyper.libvirt.VIR_DOMAIN_SHUTOFF, 0)
+    client = MagicMock()
+    client.lookupByUUIDString.return_value = domain
+    client.defineXML.return_value = domain
+    monkeypatch.setattr(driver, "_client_instance", client, raising=False)
+    return domain, client
+
+
+@pytest.mark.parametrize("shared", [False, True])
+def test_cold_start_prepares_legacy_memory_and_starts_backend_first(
+    tmp_path, monkeypatch, shared
+):
+    driver = _driver(tmp_path)
+    volume_uuid = sys_uuid.uuid4()
+    domain, client = _power_domain(
+        driver, monkeypatch, active=False, shared=shared, volume_uuid=volume_uuid
+    )
+    monkeypatch.setattr(
+        driver, "_read_remote_location", lambda uuid: "mds://core:7776/"
+    )
+    order = []
+    monkeypatch.setattr(driver, "_start_vhost", lambda uuid: order.append(uuid))
+    domain.create.side_effect = lambda: order.append("qemu")
+    driver.start_machine(SimpleNamespace(uuid=sys_uuid.uuid4()))
+    assert order == [volume_uuid, "qemu"]
+    if not shared:
+        root = ET.fromstring(client.defineXML.call_args.args[0])
+        assert root.find("memoryBacking/source").get("type") == "memfd"
+        assert root.find("memoryBacking/access").get("mode") == "shared"
+        assert root.find("metadata/marker").text == "keep"
+    else:
+        client.defineXML.assert_not_called()
+
+
+def test_backend_start_failure_prevents_qemu_start(tmp_path, monkeypatch):
+    driver = _driver(tmp_path)
+    volume_uuid = sys_uuid.uuid4()
+    domain, _ = _power_domain(
+        driver, monkeypatch, active=False, shared=True, volume_uuid=volume_uuid
+    )
+    monkeypatch.setattr(
+        driver, "_read_remote_location", lambda uuid: "mds://core:7776/"
+    )
+    monkeypatch.setattr(
+        driver,
+        "_start_vhost",
+        MagicMock(side_effect=RuntimeError("backend unavailable")),
+    )
+    with pytest.raises(RuntimeError, match="backend unavailable"):
+        driver.start_machine(SimpleNamespace(uuid=sys_uuid.uuid4()))
+    domain.create.assert_not_called()
+
+
+def test_missing_backend_configuration_does_not_start_default_target(
+    tmp_path, monkeypatch
+):
+    driver = _driver(tmp_path)
+    domain, _ = _power_domain(
+        driver, monkeypatch, active=False, shared=True, volume_uuid=sys_uuid.uuid4()
+    )
+    monkeypatch.setattr(driver, "_read_remote_location", lambda uuid: None)
+    backend = MagicMock()
+    monkeypatch.setattr(driver, "_start_vhost", backend)
+    with pytest.raises(RuntimeError, match="Missing Rawstor backend configuration"):
+        driver.start_machine(SimpleNamespace(uuid=sys_uuid.uuid4()))
+    backend.assert_not_called()
+    domain.create.assert_not_called()
+
+
+@pytest.mark.parametrize("active,shared", [(False, False), (True, False), (True, True)])
+def test_hotplug_upgrades_only_stopped_legacy_domains(
+    tmp_path, monkeypatch, active, shared
+):
+    driver = _driver(tmp_path)
+    domain, client = _power_domain(driver, monkeypatch, active=active, shared=shared)
+    backend = MagicMock()
+    monkeypatch.setattr(driver, "_start_vhost", backend)
+    volume = pool_base.MachineVolume(
+        uuid=sys_uuid.uuid4(),
+        project_id=sys_uuid.uuid4(),
+        machine=sys_uuid.uuid4(),
+        storage_location="mds://core:7776/",
+    )
+    if active and not shared:
+        with pytest.raises(RuntimeError, match="Shut down and start"):
+            driver.attach_volume(volume)
+        backend.assert_not_called()
+        client.defineXML.assert_not_called()
+        domain.attachDeviceFlags.assert_not_called()
+        return
+    driver.attach_volume(volume)
+    flags = domain.attachDeviceFlags.call_args.args[1]
+    assert flags == (
+        exordos_hyper.libvirt.VIR_DOMAIN_AFFECT_CONFIG
+        | (exordos_hyper.libvirt.VIR_DOMAIN_AFFECT_LIVE if active else 0)
+    )
+    assert client.defineXML.called is (not shared)
+
+
+def test_paused_vm_restarts_backend_before_resume(tmp_path, monkeypatch):
+    driver = _driver(tmp_path)
+    volume_uuid = sys_uuid.uuid4()
+    domain, client = _power_domain(
+        driver, monkeypatch, active=True, shared=True, volume_uuid=volume_uuid
+    )
+    domain.state.return_value = (exordos_hyper.libvirt.VIR_DOMAIN_PAUSED, 0)
+    monkeypatch.setattr(
+        driver, "_read_remote_location", lambda uuid: "mds://core:7776/"
+    )
+    order = []
+    monkeypatch.setattr(driver, "_start_vhost", lambda uuid: order.append(uuid))
+    domain.resume.side_effect = lambda: order.append("resume")
+    driver.start_machine(SimpleNamespace(uuid=sys_uuid.uuid4()))
+    assert order == [volume_uuid, "resume"]
+    client.defineXML.assert_not_called()
+    domain.create.assert_not_called()
+
+
+def test_start_ignores_unrelated_vhost_socket(tmp_path, monkeypatch):
+    driver = _driver(tmp_path)
+    domain, _ = _power_domain(
+        driver, monkeypatch, active=False, shared=True, volume_uuid=sys_uuid.uuid4()
+    )
+    domain.XMLDesc.return_value = domain.XMLDesc.return_value.replace(
+        "/run/rawstor/", "/run/other/"
+    )
+    backend = MagicMock()
+    monkeypatch.setattr(driver, "_start_vhost", backend)
+    driver.start_machine(SimpleNamespace(uuid=sys_uuid.uuid4()))
+    backend.assert_not_called()
+    domain.create.assert_called_once()

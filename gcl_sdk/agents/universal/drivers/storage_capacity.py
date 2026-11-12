@@ -18,6 +18,8 @@
 from pathlib import Path
 from urllib.parse import urlparse
 
+from gcl_sdk.agents.universal.drivers import rawstor_specs
+
 OST_BACKING_ROOTS = ("/var/lib/rawstor/ost", "/data", "/srv/rawstor", "/mnt/rawstor")
 
 DOMAIN_DEPTH = {"dc": 1, "row": 2, "rack": 3, "server": 4}
@@ -138,14 +140,6 @@ def default_policies(cluster_uuid):
 
 
 def validate_policy(policy):
-    if policy["failure_domain"] not in {"ost", "server", "rack", "row", "dc"}:
-        raise ValueError("Unknown failure domain")
-    if not 1 <= policy["mirrors"] <= 255:
-        raise ValueError("Mirrors must be between 1 and 255")
-    chunk = policy["chunk_size"]
-    if chunk <= 0 or chunk & (chunk - 1) or chunk > 1 << 30:
-        raise ValueError("Chunk size must be a power of two no larger than 1 GiB")
-    if policy["tier"] not in {"COLD", "WARM", "HOT"}:
-        raise ValueError("Unknown disk tier")
-    if not isinstance(policy["ephemeral"], bool):
-        raise ValueError("Ephemeral must be boolean")
+    """Validate an admission policy using the same schema as agent payloads."""
+    if not rawstor_specs.RawstorPoolPolicy().validate({"name": "", **policy}):
+        raise ValueError("Invalid Rawstor pool policy")
