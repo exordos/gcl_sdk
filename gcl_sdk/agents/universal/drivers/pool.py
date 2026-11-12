@@ -559,7 +559,9 @@ class RawstorStorageClusterAgentSpec(RawstorStorageClusterDriverSpec):
     witness_endpoint = properties.property(types.String(max_length=2048), default="")
     # Keyed by stable OST/pool UUIDs; supplied by the control plane.
     nodes = properties.property(types.Dict(), default=dict)
-    pools = properties.property(types.Dict(), default=dict)
+    pools = properties.property(
+        types.TypedDict(rawstor_specs.RawstorPoolPolicy()), default=dict
+    )
     managed = properties.property(types.Boolean(), default=False)
     tier = properties.property(
         types.Enum([s.value for s in ic.DiskTier]),

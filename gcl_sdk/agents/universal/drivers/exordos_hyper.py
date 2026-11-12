@@ -24,6 +24,7 @@ import subprocess
 import time
 import typing as tp
 import uuid as sys_uuid
+from xml.dom import minidom
 from xml.etree import ElementTree as ET
 
 import libvirt
@@ -333,6 +334,41 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
 
         return volumes
 
+    def _ensure_shared_memory(self, domain, domain_xml):
+        root = ET.fromstring(domain_xml)
+        access = root.find("memoryBacking/access")
+        if access is not None and access.get("mode") == "shared":
+            return domain
+        if domain.isActive():
+            raise RuntimeError(
+                "Rawstor disks require shared memory. Shut down and start this "
+                "VM before attaching the disk; shared memory cannot be added live."
+            )
+        document = minidom.parseString(domain_xml)
+        libvirt_driver.XMLLibvirtInstance.domain_set_shared_memory(document)
+        return self._client.defineXML(document.toxml())
+
+    @libvirt_driver.dry_run_decorator()
+    def start_machine(self, machine: pool_base.Machine) -> None:
+        domain = self._client.lookupByUUIDString(str(machine.uuid))
+        domain_xml = domain.XMLDesc()
+        if not domain.isActive():
+            # Upgrade legacy definitions before their next cold start.
+            self._ensure_shared_memory(domain, domain_xml)
+        root = ET.fromstring(domain_xml)
+        for disk in root.findall("./devices/disk[@type='vhostuser']"):
+            source = disk.find("source")
+            path = source.get("path") if source is not None else None
+            volume_uuid = self._uuid_from_socket_path(path) if path else None
+            if volume_uuid is None or path != self._socket_path(volume_uuid):
+                continue
+            if self._read_remote_location(volume_uuid) is None:
+                raise RuntimeError(
+                    f"Missing Rawstor backend configuration for volume {volume_uuid}"
+                )
+            self._start_vhost(volume_uuid)
+        super().start_machine(machine)
+
     def _add_volumes_to_domain(
         self,
         domain: "libvirt_driver.XMLLibvirtInstance",
@@ -545,12 +581,14 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
                 raise pool_base.MachineNotFoundError(machine=volume.machine)
             raise
 
-        domain_element = ET.fromstring(domain.XMLDesc())
+        domain_xml = domain.XMLDesc()
+        domain_element = ET.fromstring(domain_xml)
         if self._find_rawstor_disk(domain_element, volume.uuid) is not None:
             raise pool_base.VolumeAlreadyAttachedError(
                 volume=volume.uuid, machine=volume.machine
             )
 
+        domain = self._ensure_shared_memory(domain, domain_xml)
         self._start_vhost(volume.uuid, storage_location=volume.storage_location)
 
         devices = len(domain_element.findall(".//devices/disk"))
@@ -559,7 +597,9 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
             self._socket_path(volume.uuid), device_name
         )
 
-        flags = libvirt.VIR_DOMAIN_AFFECT_LIVE | libvirt.VIR_DOMAIN_AFFECT_CONFIG
+        flags = libvirt.VIR_DOMAIN_AFFECT_CONFIG
+        if domain.isActive():
+            flags |= libvirt.VIR_DOMAIN_AFFECT_LIVE
         try:
             domain.attachDeviceFlags(disk_xml, flags)
         except libvirt.libvirtError as e:

@@ -297,7 +297,6 @@ class RawstorStorageClusterDriver(AbstractStorageClusterDriver):
         }
         result = []
         for pool_uuid, policy in self._spec.pools.items():
-            storage_capacity.validate_policy(policy)
             available = storage_capacity.available_by_policy(nodes, policy) >> 30
             result.append(
                 pool_base.ThinStoragePool(
