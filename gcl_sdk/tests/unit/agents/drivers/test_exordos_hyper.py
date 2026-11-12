@@ -980,3 +980,27 @@ def test_start_ignores_unrelated_vhost_socket(tmp_path, monkeypatch):
     driver.start_machine(SimpleNamespace(uuid=sys_uuid.uuid4()))
     backend.assert_not_called()
     domain.create.assert_called_once()
+
+
+@pytest.mark.parametrize("active", [False, True])
+def test_detach_uses_live_flags_only_for_running_domains(tmp_path, monkeypatch, active):
+    driver = _driver(tmp_path)
+    volume_uuid = sys_uuid.uuid4()
+    domain, _ = _power_domain(
+        driver, monkeypatch, active=active, shared=True, volume_uuid=volume_uuid
+    )
+    stopped = MagicMock()
+    monkeypatch.setattr(driver, "_stop_vhost", stopped)
+    volume = pool_base.MachineVolume(
+        uuid=volume_uuid,
+        project_id=sys_uuid.uuid4(),
+        machine=sys_uuid.uuid4(),
+        storage_location="mds://core:7776/",
+    )
+    driver.detach_volume(volume)
+    flags = domain.detachDeviceFlags.call_args.args[1]
+    assert flags == (
+        exordos_hyper.libvirt.VIR_DOMAIN_AFFECT_CONFIG
+        | (exordos_hyper.libvirt.VIR_DOMAIN_AFFECT_LIVE if active else 0)
+    )
+    stopped.assert_called_once_with(volume_uuid)
