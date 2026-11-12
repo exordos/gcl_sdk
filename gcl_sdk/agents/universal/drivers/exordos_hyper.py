@@ -632,7 +632,9 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
                 volume=volume.uuid, machine=volume.machine
             )
 
-        flags = libvirt.VIR_DOMAIN_AFFECT_LIVE | libvirt.VIR_DOMAIN_AFFECT_CONFIG
+        flags = libvirt.VIR_DOMAIN_AFFECT_CONFIG
+        if domain.isActive():
+            flags |= libvirt.VIR_DOMAIN_AFFECT_LIVE
         try:
             domain.detachDeviceFlags(ET.tostring(disk, "unicode"), flags)
         except libvirt.libvirtError as e:
