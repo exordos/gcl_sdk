@@ -79,8 +79,8 @@ filesystem growth remain separate operations.
 
 ## Integration tests
 
-The pinned integration uses bindings `99.0.0+0.62c4ceb` from
-[Actions run 43012990263](https://github.com/rawstor/librawstor/actions/runs/43012990263).
+The pinned integration uses bindings `99.0.0+0.41a2714` from
+[Actions run 43517230510](https://github.com/rawstor/librawstor/actions/runs/43517230510).
 Use native packages and bindings from the same build.
 
 Set `RAWSTOR_TEST_MDS`, `RAWSTOR_TEST_OST` and `RAWSTOR_TEST_VHOST` to daemon paths
@@ -88,3 +88,26 @@ to run native integration tests. They cover multiple MDS instances, OSTs,
 replication, topology reload, resize and recovery. Set
 `RAWSTOR_TEST_ZFS_LOCATION` to an isolated pre-provisioned dataset and run the
 native node test as root to exercise a ZFS backend.
+
+## Project ownership
+
+Exordos maps each non-nil `project_id` to the same Rawstor tenant UUID.
+Creating a disk registers its tenant in the MDS idempotently, then creates the
+object through `mds://PROJECT_UUID@host:port/OBJECT_UUID`. Direct OST and file
+backends record the same owner without an MDS registry. The vhost drop-in
+retains the tenant-qualified location; discovery and retry after an agent
+restart restore the original project from it. Nil project UUIDs are rejected
+because Rawstor reserves nil for unfiltered listings rather than ownership.
+
+Capacity and deletion guards use unfiltered `Location.objects()` inventories
+covering every tenant. The previous iterable `Location` API is no longer
+available. Removing a disk does not remove its tenant: Rawstor tenant removal
+is cascading, and could delete other disks and versions of that project.
+Tenant identity currently records ownership and filters listings; Rawstor does
+not authenticate it or enforce rights. Authorization remains in Exordos.
+
+This build changes the handshake, wire frames and on-disk tenant metadata.
+Clients, bindings, MDS, OST and vhost must use the same compatible build. MDS
+rejects a database created before tenants, and Rawstor provides no migration.
+Recreate disposable development storage instead of mixing the old and new
+formats; package updates do not convert or erase existing data.

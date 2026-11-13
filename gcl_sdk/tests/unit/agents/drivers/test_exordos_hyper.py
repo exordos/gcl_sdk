@@ -160,15 +160,26 @@ class TestVolumeLifecycle:
         target = MagicMock()
         factory = MagicMock(return_value=target)
         monkeypatch.setattr(exordos_hyper.rawstor, "Target", factory)
+        registry = MagicMock()
+        monkeypatch.setattr(exordos_hyper.rawstor, "Location", lambda uri: registry)
         created = driver.create_volume(volume)
-        factory.assert_called_once_with(f"mds://10.20.0.2:7776/{volume.uuid}")
+        registry.create_tenant.assert_called_once_with(str(volume.project_id))
+        factory.assert_called_once_with(
+            f"mds://{volume.project_id}@10.20.0.2:7776/{volume.uuid}"
+        )
         target.create.assert_called_once_with(
             size=2 << 30, width=1, chunk_size=1 << 30, failure_domain="server"
         )
         assert created.storage_location == "mds://10.20.0.2:7776/"
-        assert driver._read_remote_location(volume.uuid) == "mds://10.20.0.2:7776/"
+        assert (
+            driver._read_remote_location(volume.uuid)
+            == f"mds://{volume.project_id}@10.20.0.2:7776/"
+        )
         with open(driver._vhost_drop_in_path(volume.uuid)) as f:
-            assert "Environment=LOCATION=mds://10.20.0.2:7776\n" in f.read()
+            assert (
+                f"Environment=LOCATION=mds://{volume.project_id}@10.20.0.2:7776\n"
+                in f.read()
+            )
 
     def test_mds_volume_uses_assigned_pool_policy(self, tmp_path, monkeypatch):
         _no_op_systemctl(monkeypatch)
@@ -188,15 +199,26 @@ class TestVolumeLifecycle:
         target = MagicMock()
         factory = MagicMock(return_value=target)
         monkeypatch.setattr(exordos_hyper.rawstor, "Target", factory)
+        registry = MagicMock()
+        monkeypatch.setattr(exordos_hyper.rawstor, "Location", lambda uri: registry)
         created = driver.create_volume(volume)
-        factory.assert_called_once_with(f"mds://10.20.0.2:7776/{volume.uuid}")
+        registry.create_tenant.assert_called_once_with(str(volume.project_id))
+        factory.assert_called_once_with(
+            f"mds://{volume.project_id}@10.20.0.2:7776/{volume.uuid}"
+        )
         target.create.assert_called_once_with(
             size=2 << 30, width=2, chunk_size=64 << 20, failure_domain="rack"
         )
         assert created.storage_location == "mds://10.20.0.2:7776/"
-        assert driver._read_remote_location(volume.uuid) == "mds://10.20.0.2:7776/"
+        assert (
+            driver._read_remote_location(volume.uuid)
+            == f"mds://{volume.project_id}@10.20.0.2:7776/"
+        )
         with open(driver._vhost_drop_in_path(volume.uuid)) as f:
-            assert "Environment=LOCATION=mds://10.20.0.2:7776\n" in f.read()
+            assert (
+                f"Environment=LOCATION=mds://{volume.project_id}@10.20.0.2:7776\n"
+                in f.read()
+            )
 
     def test_create_get_list_delete(self, tmp_path, monkeypatch):
         _no_op_systemctl(monkeypatch)
@@ -217,6 +239,11 @@ class TestVolumeLifecycle:
         assert fetched.uuid == volume.uuid
         assert fetched.size == 1
         assert fetched.machine is None
+        assert fetched.project_id == volume.project_id
+        target = exordos_hyper.rawstor.Target(
+            driver._target_uri(volume.uuid, driver._read_remote_location(volume.uuid))
+        )
+        assert target.meta()[0].tenant == str(volume.project_id)
 
         # list_volumes() only enumerates rawstor volumes attached to a
         # domain on this hypervisor (it has no way to enumerate a remote
@@ -690,7 +717,7 @@ def resize_environment(tmp_path, monkeypatch):
         size=3,
         storage_location="mds://core:7776/",
     )
-    driver._write_remote_location_drop_in(volume.uuid, volume.storage_location)
+    driver._write_remote_location_drop_in(volume.uuid, driver._rawstor_address(volume))
     size = {"bytes": 2 << 30}
     target = MagicMock()
     target.spec.side_effect = lambda: SimpleNamespace(
@@ -1004,3 +1031,65 @@ def test_detach_uses_live_flags_only_for_running_domains(tmp_path, monkeypatch, 
         | (exordos_hyper.libvirt.VIR_DOMAIN_AFFECT_LIVE if active else 0)
     )
     stopped.assert_called_once_with(volume_uuid)
+
+
+@pytest.mark.parametrize(
+    "endpoint", ["mds://core:7776/", "ost://host:7777", "file:///data/ost"]
+)
+def test_project_id_becomes_tenant_in_every_rawstor_uri(tmp_path, endpoint):
+    driver = _driver(tmp_path)
+    volume = pool_base.MachineVolume(
+        project_id=sys_uuid.uuid4(), storage_location=endpoint
+    )
+    address = driver._rawstor_address(volume)
+    assert exordos_hyper.rawstor.Target(
+        driver._target_uri(volume.uuid, address)
+    ).tenant == str(volume.project_id)
+    assert driver._project_from_location(address) == volume.project_id
+
+
+def test_nil_project_cannot_silently_become_default_tenant(tmp_path, monkeypatch):
+    driver = _driver(tmp_path)
+    registry = MagicMock()
+    monkeypatch.setattr(exordos_hyper.rawstor, "Location", registry)
+    volume = pool_base.MachineVolume(
+        project_id=sys_uuid.UUID(int=0), storage_location="mds://core:7776/"
+    )
+    with pytest.raises(ValueError, match="non-nil project_id"):
+        driver.create_volume(volume)
+    registry.assert_not_called()
+
+
+@pytest.mark.parametrize("registered", [False, True])
+def test_mds_registers_project_tenant_before_object_create(
+    tmp_path, monkeypatch, registered
+):
+    driver = _driver(tmp_path)
+    _no_op_systemctl(monkeypatch)
+    _redirect_vhost_drop_in(monkeypatch, driver, tmp_path)
+    project = sys_uuid.uuid4()
+    volume = pool_base.MachineVolume(
+        project_id=project, storage_location="mds://core:7776/", size=1
+    )
+    order = []
+    registry = MagicMock()
+
+    def register(tenant):
+        order.append(("tenant", tenant))
+        if registered:
+            raise FileExistsError()
+
+    registry.create_tenant.side_effect = register
+    target = MagicMock()
+    target.create.side_effect = lambda **kwargs: order.append(("object", str(project)))
+    target.spec.return_value = SimpleNamespace(size=1 << 30)
+    monkeypatch.setattr(exordos_hyper.rawstor, "Location", lambda uri: registry)
+    factory = MagicMock(return_value=target)
+    monkeypatch.setattr(exordos_hyper.rawstor, "Target", factory)
+    driver.create_volume(volume)
+    assert order == [("tenant", str(project)), ("object", str(project))]
+    factory.assert_called_once_with(f"mds://{project}@core:7776/{volume.uuid}")
+    restored = _driver(tmp_path)
+    _redirect_vhost_drop_in(monkeypatch, restored, tmp_path)
+    recovered = restored.get_volume(volume.uuid)
+    assert recovered.project_id == project
