@@ -257,21 +257,21 @@ class RawstorStorageClusterDriver(AbstractStorageClusterDriver):
                 tier=self._spec.tier,
                 ephemeral=self._spec.ephemeral,
             )
-            for target in location:
+            for target in location.objects():
                 storage_pool.allocate_capacity(target.spec().size >> 30)
             return [storage_pool]
         # Read completed MDS objects before sampling OST budgets. A creation
         # between the samples remains pending, rather than escaping both ledgers.
         objects = {}
         if self._spec.nodes:
-            for target in rawstor.Location(self._spec.endpoint):
+            for target in rawstor.Location(self._spec.endpoint).objects():
                 objects[target.uri.rstrip("/").rsplit("/", 1)[-1]] = target.spec().size
         nodes = []
         for node_uuid, node in self._spec.nodes.items():
             location = rawstor.Location(node["endpoint"])
             try:
                 info = location.info()
-                committed = sum(target.spec().size for target in location)
+                committed = sum(target.spec().size for target in location.objects())
                 nodes.append(
                     {
                         **node,

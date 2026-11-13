@@ -70,14 +70,11 @@ class _FakeLocation:
             used=self._used_gb << 30, total=self._total_gb << 30
         )
 
-    def __iter__(self):
+    def objects(self):
         return iter(())
 
 
 def _fake_location_info(monkeypatch, *, used_gb, total_gb):
-    # __iter__ must live on the class, not an instance attribute (as a
-    # plain SimpleNamespace(__iter__=...) used to try) - Python looks up
-    # dunder methods on the type, so `for x in obj` never saw it there.
     monkeypatch.setattr(
         rawstor_cluster.rawstor,
         "Location",
@@ -527,15 +524,58 @@ def test_two_core_mds_instances_create_enumerate_and_recover_disks(
                 == 8 << 20
             )
             assert all(
-                list(rawstor.Location(n["endpoint"]))
+                list(rawstor.Location(n["endpoint"]).objects())
                 for n in cluster.driver_spec.nodes.values()
             )
         assert [
-            target.uri for target in rawstor.Location(clusters[0].driver_spec.endpoint)
+            target.uri
+            for target in rawstor.Location(clusters[0].driver_spec.endpoint).objects()
         ] == [targets[0].uri]
         assert [
-            target.uri for target in rawstor.Location(clusters[1].driver_spec.endpoint)
+            target.uri
+            for target in rawstor.Location(clusters[1].driver_spec.endpoint).objects()
         ] == [targets[1].uri]
+
+        # An unscoped admin inventory must include every project, while
+        # tenant-scoped listings contain only that project's owned objects.
+        admin = rawstor.Location(clusters[0].driver_spec.endpoint)
+        tenants = [str(sys_uuid.uuid4()), str(sys_uuid.uuid4())]
+        scoped = []
+        owned = []
+        for tenant in tenants:
+            admin.create_tenant(tenant)
+            location = rawstor.Location(
+                clusters[0].driver_spec.endpoint.replace("mds://", f"mds://{tenant}@")
+            )
+            scoped.append(location)
+            owned.append(
+                location.create(
+                    size=4 << 20, width=2, chunk_size=4 << 20, failure_domain="rack"
+                )
+            )
+        assert set(admin.tenants()) >= set(tenants)
+        assert [target.uri for target in scoped[0].objects()] == [owned[0].uri]
+        assert [target.uri for target in scoped[1].objects()] == [owned[1].uri]
+        for tenant, target in zip(tenants, owned):
+            assert target.tenant == tenant
+            for chunk in target.chunks():
+                assert all(member.tenant == tenant for member in chunk.meta())
+        rawstor_cluster.RawstorStorageClusterDriver(clusters[0]).get_capacity()
+        assert all(
+            target.uri.rsplit("/", 1)[-1] in clusters[0].capacity_info["objects"]
+            for target in owned
+        )
+        owned[0].resize(8 << 20)
+        assert owned[0].spec().size == 8 << 20
+        for chunk in owned[0].chunks():
+            assert all(member.tenant == tenants[0] for member in chunk.meta())
+        owned[0].remove()
+        assert list(scoped[0].objects()) == []
+        assert owned[1].spec().size == 4 << 20
+        assert tenants[0] in set(admin.tenants())
+        owned[1].remove()
+        for tenant in tenants:
+            admin.remove_tenant(tenant)
 
         # Apply a topology edit through the real daemon's HUP handler.
         first = clusters[0]
@@ -566,7 +606,7 @@ def test_two_core_mds_instances_create_enumerate_and_recover_disks(
         ready(clusters[0])
         assert targets[0].spec().size == 8 << 20
         targets[0].remove()
-        assert list(rawstor.Location(clusters[0].driver_spec.endpoint)) == []
+        assert list(rawstor.Location(clusters[0].driver_spec.endpoint).objects()) == []
         assert targets[1].spec().size == 8 << 20
         targets[1].remove()
     finally:

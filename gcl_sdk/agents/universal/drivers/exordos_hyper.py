@@ -23,6 +23,8 @@ import shutil
 import subprocess
 import time
 import typing as tp
+from urllib.parse import urlsplit
+from urllib.parse import urlunsplit
 import uuid as sys_uuid
 from xml.dom import minidom
 from xml.etree import ElementTree as ET
@@ -85,7 +87,18 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
         StorageCluster, which carries its address explicitly on
         `volume.storage_location`.
         """
-        return volume.storage_location or None
+        if not volume.storage_location:
+            return None
+        tenant = sys_uuid.UUID(str(volume.project_id))
+        if tenant.int == 0:
+            raise ValueError("Rawstor requires a non-nil project_id as tenant")
+        uri = urlsplit(volume.storage_location)
+        endpoint = uri.netloc.rsplit("@", 1)[-1]
+        return urlunsplit(uri._replace(netloc=f"{tenant}@{endpoint}"))
+
+    def _project_from_location(self, address: str) -> sys_uuid.UUID:
+        tenant = urlsplit(address).username or _rawstor_module().DEFAULT_TENANT
+        return sys_uuid.UUID(tenant)
 
     def _target_uri(self, volume_uuid: sys_uuid.UUID, address: str) -> str:
         return f"{address.removesuffix('/')}/{volume_uuid}"
@@ -324,7 +337,7 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
                     uuid=volume_uuid,
                     machine=machine_uuid,
                     name=str(volume_uuid),
-                    project_id=pool_base.SYSTEM_PROJECT_ID,
+                    project_id=self._project_from_location(address),
                     size=spec.size >> 30,  # in GB
                     index=idx if idx is not None else libvirt_driver.MAX_VOLUME_INDEX,
                     status=pool_base.VolumeStatus.ACTIVE.value,
@@ -388,7 +401,9 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
             device = "vd" + chr(ord("a") + i)
 
             if rawstor_addresses[volume.uuid] is not None:
-                self._start_vhost(volume.uuid, storage_location=volume.storage_location)
+                self._start_vhost(
+                    volume.uuid, storage_location=rawstor_addresses[volume.uuid]
+                )
                 domain.add_vhostuser_disk(
                     socket_path=self._socket_path(volume.uuid),
                     device=device,
@@ -491,7 +506,7 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
                     uuid=volume,
                     machine=machine_uuid,
                     name=str(volume),
-                    project_id=pool_base.SYSTEM_PROJECT_ID,
+                    project_id=self._project_from_location(remote_address),
                     size=spec.size >> 30,  # in GB
                     index=idx if idx is not None else libvirt_driver.MAX_VOLUME_INDEX,
                     status=pool_base.VolumeStatus.ACTIVE.value,
@@ -514,6 +529,13 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
         if address is None:
             return super().create_volume(volume)
 
+        if urlsplit(address).scheme == "mds":
+            try:
+                _rawstor_module().Location(address).create_tenant(
+                    str(volume.project_id)
+                )
+            except FileExistsError:
+                pass
         target = _rawstor_module().Target(self._target_uri(volume.uuid, address))
         try:
             policy = volume.storage_policy
@@ -571,7 +593,8 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
         if volume.machine is None:
             raise ValueError("Cannot attach volume without machine")
 
-        if self._rawstor_address(volume) is None:
+        address = self._rawstor_address(volume)
+        if address is None:
             return super().attach_volume(volume)
 
         try:
@@ -589,7 +612,7 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
             )
 
         domain = self._ensure_shared_memory(domain, domain_xml)
-        self._start_vhost(volume.uuid, storage_location=volume.storage_location)
+        self._start_vhost(volume.uuid, storage_location=address)
 
         devices = len(domain_element.findall(".//devices/disk"))
         device_name = "vd" + chr(ord("a") + devices)
