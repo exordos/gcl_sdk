@@ -27,6 +27,12 @@ Key components:
 
 > **For a full overview of components, quick start guides, and advanced usage, visit the [documentation](https://exordos.github.io/gcl_sdk/).**
 
+## Rawstor storage clusters
+
+The SDK provides cluster, OST and hypervisor drivers for Rawstor storage.
+See [Rawstor driver documentation](docs/universal_agent/rawstor.md) for
+configuration, placement, VM lifecycle and integration tests.
+
 # 🔗 Related projects
 
 - Exordos Core is the main project of the Exordos ecosystem. You can find it [here](https://github.com/exordos/exordos_core).

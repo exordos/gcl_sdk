@@ -1,0 +1,145 @@
+#    Copyright 2026 Genesis Corporation.
+#
+#    All Rights Reserved.
+#
+#    Licensed under the Apache License, Version 2.0 (the "License"); you may
+#    not use this file except in compliance with the License. You may obtain
+#    a copy of the License at
+#
+#         http://www.apache.org/licenses/LICENSE-2.0
+#
+#    Unless required by applicable law or agreed to in writing, software
+#    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+#    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+#    License for the specific language governing permissions and limitations
+#    under the License.
+"""Shared rawstor admission budget, in bytes (pool figures are not additive)."""
+
+from pathlib import Path
+from urllib.parse import urlparse
+
+from gcl_sdk.agents.universal.drivers import rawstor_specs
+
+OST_BACKING_ROOTS = ("/var/lib/rawstor/ost", "/data", "/srv/rawstor", "/mnt/rawstor")
+
+DOMAIN_DEPTH = {"dc": 1, "row": 2, "rack": 3, "server": 4}
+
+
+def validate_ost_configuration(location, bind_address):
+    """Validate service arguments and paths the agent prepares itself."""
+    uri = urlparse(location)
+    if (
+        not uri.scheme
+        or any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in location)
+        or "%" in location
+        or any(c in location for c in ('"', "'", "\\", "$"))
+    ):
+        raise ValueError("Invalid OST backing URI")
+    if uri.scheme == "file":
+        if (
+            uri.query
+            or uri.fragment
+            or any(p in (".", "..") for p in uri.path.split("/"))
+            or not location.startswith("file:///")
+            or uri.netloc
+            or not uri.path.startswith("/")
+            or uri.path == "/"
+        ):
+            raise ValueError(
+                "OST backing store must be an absolute file:/// directory URI"
+            )
+        directory = Path(uri.path)
+        if not any(directory.parent == Path(root) for root in OST_BACKING_ROOTS):
+            raise ValueError(
+                "OST backing must be a dedicated directory below an approved storage root"
+            )
+        if directory.resolve() != directory:
+            raise ValueError("OST backing must not traverse symlinks")
+        backing = uri.path
+    else:
+        backing = location
+    validate_bind_address(bind_address)
+    return backing
+
+
+def validate_bind_address(bind_address):
+    try:
+        bind = urlparse("ost://" + bind_address)
+        if (
+            not bind.hostname
+            or not bind.port
+            or bind.path
+            or bind.query
+            or bind.fragment
+            or bind.username
+            or any(c.isspace() for c in bind_address)
+            or "%" in bind_address
+            or any(ord(c) < 32 or ord(c) == 127 or c in "\"'\\$" for c in bind_address)
+        ):
+            raise ValueError()
+    except (ValueError, TypeError):
+        raise ValueError(
+            "Rawstor bind must be a host and port (IPv6 in brackets)"
+        ) from None
+
+
+def domain(node, level):
+    if level == "ost":
+        return node["uuid"]
+    parts = node["failure_domain_path"].split("/")
+    # A short path omits outer levels; omitted domains are shared.
+    parts = [""] * (4 - len(parts)) + parts
+    return "/".join(parts[: DOMAIN_DEPTH[level]])
+
+
+def available_by_policy(nodes, policy, pending=()):
+    """Placement upper bound; MDS remains the final allocation authority.
+
+    Full pending sizes are withheld from each OST that could receive a
+    chunk. This is conservative until MDS publishes the allocated object.
+    All pools use the same pending collection, irrespective of policy.
+    """
+    groups = {}
+    pending_bytes = sum(pending)
+    for node in nodes:
+        budget = max(0, node["available"] - pending_bytes)
+        key = domain(node, policy["failure_domain"])
+        groups[key] = groups.get(key, 0) + budget
+    copies = policy["mirrors"]
+    if len(groups) < copies:
+        return 0
+    # A domain can hold at most one copy of each logical byte.
+    lo, hi = 0, sum(groups.values()) // copies
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if sum(min(free, mid) for free in groups.values()) >= copies * mid:
+            lo = mid
+        else:
+            hi = mid - 1
+    chunk = policy["chunk_size"]
+    return lo // chunk * chunk
+
+
+def default_policies(cluster_uuid):
+    import uuid
+
+    return {
+        str(uuid.uuid5(cluster_uuid, name)): {
+            "name": name,
+            "tier": "COLD",
+            "ephemeral": ephemeral,
+            "mirrors": mirrors,
+            "failure_domain": "server",
+            "chunk_size": 1 << 30,
+        }
+        for name, ephemeral, mirrors in [
+            ("persistent", False, 2),
+            ("ephemeral", True, 1),
+        ]
+    }
+
+
+def validate_policy(policy):
+    """Validate an admission policy using the same schema as agent payloads."""
+    if not rawstor_specs.RawstorPoolPolicy().validate({"name": "", **policy}):
+        raise ValueError("Invalid Rawstor pool policy")

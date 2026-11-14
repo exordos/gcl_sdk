@@ -1,0 +1,434 @@
+#    Copyright 2026 Genesis Corporation.
+#
+#    All Rights Reserved.
+#
+#    Licensed under the Apache License, Version 2.0 (the "License"); you may
+#    not use this file except in compliance with the License. You may obtain
+#    a copy of the License at
+#
+#         http://www.apache.org/licenses/LICENSE-2.0
+#
+#    Unless required by applicable law or agreed to in writing, software
+#    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+#    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+#    License for the specific language governing permissions and limitations
+#    under the License.
+
+from pathlib import Path
+import subprocess
+from unittest.mock import patch
+from uuid import uuid4
+
+import pytest
+
+from gcl_sdk.agents.universal.drivers import rawstor_specs
+from gcl_sdk.agents.universal.drivers import storage_capacity
+
+
+def test_ost_configuration_accepts_ipv6_and_dedicated_directory():
+    assert (
+        storage_capacity.validate_ost_configuration("file:///data/ost1", "[::]:7777")
+        == "/data/ost1"
+    )
+
+
+@pytest.mark.parametrize(
+    "location,bind",
+    [
+        ("file:///", "0.0.0.0:7777"),
+        ("lvm://vg\nUser=root", "0.0.0.0:7777"),
+        ("lvm://vg\x00", "0.0.0.0:7777"),
+        ("future://backend/%i", "0.0.0.0:7777"),
+        ("file:///data/../ost", "0.0.0.0:7777"),
+        ("file:///data/%i", "0.0.0.0:7777"),
+        ("file:///data/ost", "0.0.0.0:7777\nRestart=no"),
+        ("file:///data/ost", "0.0.0.0:65536"),
+        ("file://host/data/ost", "0.0.0.0:7777"),
+    ],
+)
+def test_ost_configuration_rejects_invalid_service_arguments(location, bind):
+    with pytest.raises(ValueError):
+        storage_capacity.validate_ost_configuration(location, bind)
+
+
+@pytest.fixture
+def node(tmp_path, monkeypatch):
+    pytest.importorskip("rawstor")
+    from gcl_sdk.agents.universal.drivers import rawstor_node
+
+    monkeypatch.setattr(
+        storage_capacity,
+        "OST_BACKING_ROOTS",
+        (*storage_capacity.OST_BACKING_ROOTS, str(tmp_path)),
+    )
+    monkeypatch.setattr(
+        rawstor_node,
+        "_prepare_file_backing",
+        lambda path: Path(path).mkdir(exist_ok=True),
+    )
+    monkeypatch.setattr(rawstor_node, "OST_UNIT_DIR", tmp_path / "units")
+    monkeypatch.setattr(rawstor_node, "OST_CONFIG_DIR", tmp_path / "config")
+    model = rawstor_node.MetaStorageNode(
+        uuid=uuid4(),
+        cluster=uuid4(),
+        driver_spec=rawstor_specs.RawstorNodeDriverSpec(
+            endpoint="ost://host:7777",
+            location=f"file://{tmp_path}/data",
+            bind_address="0.0.0.0:7777",
+            failure_domain_path="",
+        ),
+    )
+    return model, rawstor_node
+
+
+def test_reconcile_starts_ost_and_checks_advertised_endpoint(node):
+    model, module = node
+    with (
+        patch.object(
+            module.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)
+        ) as run,
+        patch("rawstor.Location") as location,
+    ):
+        model.dump_to_dp()
+        assert model.status == "ACTIVE"
+        location.assert_called_once_with(model.driver_spec.endpoint)
+        location.return_value.info.assert_called_once()
+        config = (module.OST_CONFIG_DIR / f"{model.uuid}.conf").read_text()
+        assert (
+            f"BIND_ADDR=0.0.0.0:7777\nLOCATION={model.driver_spec.location}\n" == config
+        )
+        assert not (module.OST_UNIT_DIR / model.unit_name).exists()
+        commands = [c.args[0] for c in run.call_args_list]
+        assert ["systemctl", "enable", "--now", model.unit_name] in commands
+        run.reset_mock()
+        model.restore_from_dp()
+        assert ["systemctl", "restart", model.unit_name] not in [
+            c.args[0] for c in run.call_args_list
+        ]
+
+
+def test_unreachable_ost_is_not_reported_ready_and_can_retry(node):
+    model, module = node
+    with (
+        patch.object(
+            module.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)
+        ),
+        patch("rawstor.Location") as location,
+    ):
+        location.return_value.info.side_effect = OSError("not ready")
+        with pytest.raises(OSError):
+            model.dump_to_dp()
+        assert model.status == "NEW"
+        location.return_value.info.side_effect = None
+        model.restore_from_dp()
+        assert model.status == "ACTIVE"
+
+
+def test_failed_service_start_is_not_reported_ready(node):
+    model, module = node
+    with patch.object(
+        module.subprocess,
+        "run",
+        side_effect=subprocess.CalledProcessError(1, "systemctl"),
+    ):
+        with pytest.raises(subprocess.CalledProcessError):
+            model.dump_to_dp()
+    assert model.status == "NEW"
+
+
+def test_update_restarts_changed_bind_and_delete_preserves_backing_data(node):
+    model, module = node
+    from pathlib import Path
+
+    backing = Path(model.driver_spec.location.removeprefix("file://"))
+    backing.mkdir()
+    data = backing / "data"
+    data.write_text("keep")
+    with (
+        patch.object(
+            module.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)
+        ) as run,
+        patch("rawstor.Location"),
+    ):
+        model.dump_to_dp()
+        run.reset_mock()
+        model.driver_spec.bind_address = "0.0.0.0:7778"
+        model.driver_spec.endpoint = "ost://host:7778"
+        model.update_on_dp()
+        assert ["systemctl", "restart", model.unit_name] in [
+            c.args[0] for c in run.call_args_list
+        ]
+        model.delete_from_dp()
+    assert not (module.OST_UNIT_DIR / model.unit_name).exists()
+    assert not (module.OST_CONFIG_DIR / f"{model.uuid}.conf").exists()
+    assert data.read_text() == "keep"
+
+
+@pytest.mark.parametrize("backing", ["file", "zfs"])
+def test_native_ost_launch_from_reconciled_config(node, monkeypatch, tmp_path, backing):
+    import os
+    import socket
+    import time
+
+    binary = os.environ.get("RAWSTOR_TEST_OST")
+    if not binary:
+        pytest.skip("Set RAWSTOR_TEST_OST to run the native OST lifecycle")
+    model, module = node
+    if backing == "zfs":
+        location = os.environ.get("RAWSTOR_TEST_ZFS_LOCATION")
+        if not location:
+            pytest.skip("Set RAWSTOR_TEST_ZFS_LOCATION to an isolated test dataset")
+        model.driver_spec.location = location
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    model.driver_spec.bind_address = f"127.0.0.1:{port}"
+    model.driver_spec.endpoint = f"ost://127.0.0.1:{port}"
+    processes = []
+    log = (tmp_path / "ost.log").open("w")
+    real_run = subprocess.run
+
+    def system_command(args, **kwargs):
+        if args[0] == "zfs":
+            return real_run(args, **kwargs)
+        elif args[0] == "install":
+            from pathlib import Path
+
+            Path(args[-1]).mkdir(exist_ok=True)
+        elif args[1] == "enable" and not processes:
+            config = dict(
+                line.split("=", 1)
+                for line in (module.OST_CONFIG_DIR / f"{model.uuid}.conf")
+                .read_text()
+                .splitlines()
+            )
+            # Use the same bind and backing URI consumed by the packaged template.
+            argv = [
+                binary,
+                "--bind",
+                config["BIND_ADDR"],
+                "--workers",
+                "1",
+                "--queue-size",
+                "256",
+                config["LOCATION"],
+            ]
+            processes.append(
+                subprocess.Popen(argv, stdout=log, stderr=subprocess.STDOUT)
+            )
+        elif args[1] == "disable":
+            for process in processes:
+                process.terminate()
+                process.wait(timeout=5)
+
+    monkeypatch.setattr(module.subprocess, "run", system_command)
+    try:
+        deadline = time.monotonic() + 10
+        while True:
+            try:
+                model.dump_to_dp()
+                break
+            except OSError:
+                assert not processes or processes[0].poll() is None
+                assert time.monotonic() < deadline
+                time.sleep(0.02)
+        assert model.status == "ACTIVE"
+        import rawstor
+
+        assert rawstor.Location(model.driver_spec.endpoint).info().total > 0
+        if backing == "zfs":
+            target = rawstor.Location(model.driver_spec.endpoint).create(
+                size=8 << 20, width=1
+            )
+            assert target.spec().size == 8 << 20
+            snapshot = target.create_version()
+            assert snapshot.spec().size == 8 << 20
+            snapshot.remove()
+            target.remove()
+        model.delete_from_dp()
+        assert processes[0].poll() is not None
+        assert not (module.OST_UNIT_DIR / model.unit_name).exists()
+    finally:
+        for process in processes:
+            if process.poll() is None:
+                process.terminate()
+                process.wait(timeout=5)
+        log.close()
+
+
+def test_agent_delete_does_not_contact_or_restart_an_unreachable_ost(node, tmp_path):
+    model, module = node
+    driver = module.StorageNodeAgentDriver(meta_file=str(tmp_path / "meta.json"))
+    driver.start()
+    resource = model.to_ua_resource("storage_node")
+    with (
+        patch.object(
+            module.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)
+        ) as run,
+        patch("rawstor.Location") as location,
+    ):
+        location.return_value.info.side_effect = OSError("unreachable")
+        driver.delete(resource)
+    location.assert_not_called()
+    commands = [call.args[0] for call in run.call_args_list]
+    assert not any("enable" in command or "restart" in command for command in commands)
+
+
+@pytest.mark.parametrize(
+    "location",
+    [
+        "zfs://tank/ost1",
+        "lvm://rawstor-ost",
+        "future://backend/path",
+    ],
+)
+def test_ost_configuration_passes_backend_uri_to_rawstor(location):
+    assert (
+        storage_capacity.validate_ost_configuration(location, "0.0.0.0:7777")
+        == location
+    )
+
+
+@pytest.mark.parametrize(
+    "location",
+    [
+        "zfs://tank/ost1",
+        "lvm://rawstor-ost",
+        "future://backend/path",
+    ],
+)
+def test_native_backing_is_not_prepared_by_agent(node, location):
+    model, module = node
+    model.driver_spec.location = location
+    with (
+        patch.object(
+            module.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)
+        ) as run,
+        patch("rawstor.Location"),
+        patch.object(module, "_prepare_file_backing") as prepare_file,
+    ):
+        model.dump_to_dp()
+        prepare_file.assert_not_called()
+        assert all(call.args[0][0] == "systemctl" for call in run.call_args_list)
+        config = (module.OST_CONFIG_DIR / f"{model.uuid}.conf").read_text()
+        assert f"LOCATION={location}\n" in config
+        dropin = (
+            module.OST_UNIT_DIR / f"{model.unit_name}.d" / "exordos.conf"
+        ).read_text()
+        assert "User=root" in dropin and "Group=root" in dropin
+        run.reset_mock()
+        model.delete_from_dp()
+        assert all(call.args[0][0] == "systemctl" for call in run.call_args_list)
+
+
+def test_restore_reads_changed_config_without_applying_it(node):
+    model, module = node
+    with patch.object(module.subprocess, "run"), patch("rawstor.Location"):
+        model.dump_to_dp()
+    config = module.OST_CONFIG_DIR / f"{model.uuid}.conf"
+    content = "BIND_ADDR=127.0.0.1:8888\nLOCATION=file:///other/ost\n"
+    config.write_text(content)
+    with (
+        patch.object(
+            module.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)
+        ) as run,
+        patch("rawstor.Location"),
+        patch.object(module, "_write_if_changed") as write,
+    ):
+        model.restore_from_dp()
+    write.assert_not_called()
+    assert model.driver_spec.bind_address == "127.0.0.1:8888"
+    assert model.driver_spec.location == "file:///other/ost"
+    assert config.read_text() == content
+    assert [call.args[0] for call in run.call_args_list] == [
+        ["systemctl", "is-active", "--quiet", model.unit_name]
+    ]
+
+
+def test_restore_missing_ost_does_not_create_it(node):
+    from gcl_sdk.agents.universal.drivers import exceptions
+
+    model, module = node
+    with patch.object(module.subprocess, "run") as run:
+        with pytest.raises(exceptions.ResourceNotFound):
+            model.restore_from_dp()
+    run.assert_not_called()
+    assert not module.OST_CONFIG_DIR.exists()
+
+
+@pytest.mark.parametrize(
+    "location",
+    ["file:///etc", "file:///opt/universal_agent/.venv/bin", "file:///usr/bin"],
+)
+def test_rejects_system_backing_paths(location):
+    with pytest.raises(ValueError):
+        storage_capacity.validate_ost_configuration(location, "127.0.0.1:7777")
+
+
+def test_backing_symlink_is_rejected(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage_capacity, "OST_BACKING_ROOTS", (str(tmp_path),))
+    (tmp_path / "link").symlink_to("/etc", target_is_directory=True)
+    with pytest.raises(ValueError):
+        storage_capacity.validate_ost_configuration(
+            f"file://{tmp_path}/link", "127.0.0.1:7777"
+        )
+
+
+def test_restart_failure_preserves_configuration_for_retry(node):
+    model, module = node
+    with (
+        patch.object(
+            module.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)
+        ),
+        patch("rawstor.Location"),
+    ):
+        model.dump_to_dp()
+    config = module.OST_CONFIG_DIR / f"{model.uuid}.conf"
+    original = config.read_text()
+    model.driver_spec.bind_address = "0.0.0.0:7778"
+    commands = []
+
+    def restart(args, **kwargs):
+        commands.append(args)
+        if args[1] == "restart":
+            raise subprocess.CalledProcessError(1, args)
+        return subprocess.CompletedProcess(args, 0)
+
+    with (
+        patch.object(module.subprocess, "run", side_effect=restart),
+        pytest.raises(subprocess.CalledProcessError),
+    ):
+        model.update_on_dp()
+    assert config.read_text() == original
+    with (
+        patch.object(
+            module.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)
+        ) as run,
+        patch("rawstor.Location"),
+    ):
+        model.update_on_dp()
+    assert ["systemctl", "restart", model.unit_name] in [
+        call.args[0] for call in run.call_args_list
+    ]
+
+
+def test_ost_configuration_accepts_dns_bind():
+    assert (
+        storage_capacity.validate_ost_configuration("lvm://vg", "ost.example:7777")
+        == "lvm://vg"
+    )
+
+
+@pytest.mark.parametrize(
+    "bind",
+    [
+        "host\nUser=root:7777",
+        "host%H:7777",
+        'host"bad:7777',
+        "host$HOME:7777",
+        "host\x00:7777",
+    ],
+)
+def test_ost_configuration_rejects_unsafe_dns_bind(bind):
+    with pytest.raises(ValueError):
+        storage_capacity.validate_ost_configuration("lvm://vg", bind)
