@@ -95,7 +95,8 @@ def test_reconcile_starts_ost_and_checks_advertised_endpoint(node):
         location.return_value.info.assert_called_once()
         config = (module.OST_CONFIG_DIR / f"{model.uuid}.conf").read_text()
         assert (
-            f"BIND_ADDR=0.0.0.0:7777\nLOCATION={model.driver_spec.location}\n" == config
+            f'BIND_ADDR=0.0.0.0:7777\nLOCATION={model.driver_spec.location}\nEXTRA_ARGS="--insecure"\n'
+            == config
         )
         assert not (module.OST_UNIT_DIR / model.unit_name).exists()
         commands = [c.args[0] for c in run.call_args_list]

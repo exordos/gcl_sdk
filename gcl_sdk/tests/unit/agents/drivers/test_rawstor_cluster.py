@@ -249,7 +249,7 @@ class TestCoreMDSLifecycle:
             f"{witness_uuid} ost://10.20.0.2:7776 100 witness {CORE_NODE_UUID}\n"
         )
         config = (tmp_path / "config" / f"{cluster_uuid}.conf").read_text()
-        assert config == "BIND_ADDR=10.20.0.2:7776\n"
+        assert config == 'BIND_ADDR=10.20.0.2:7776\nEXTRA_ARGS="--insecure"\n'
         assert (
             call(["systemctl", "enable", "--now", driver.unit_name], check=True)
             in run.call_args_list
@@ -368,7 +368,10 @@ class TestCoreMDSLifecycle:
             run.return_value.returncode = 0
             driver.restore()
         config = tmp_path / "config" / f"{driver._cluster.uuid}.conf"
-        assert config.read_text() == "BIND_ADDR=core.example:7776\n"
+        assert (
+            config.read_text()
+            == 'BIND_ADDR=core.example:7776\nEXTRA_ARGS="--insecure"\n'
+        )
         topology = tmp_path / "config" / f"{driver._cluster.uuid}.topology"
         assert (
             f"ost://core.example:7776 100 witness {CORE_NODE_UUID}"
@@ -817,7 +820,7 @@ def test_witness_dns_address_is_separate_from_mds_bind(tmp_path, monkeypatch):
         driver.restore()
     assert (
         tmp_path / "config" / f"{cluster.uuid}.conf"
-    ).read_text() == "BIND_ADDR=127.0.0.1:7776\n"
+    ).read_text() == 'BIND_ADDR=127.0.0.1:7776\nEXTRA_ARGS="--insecure"\n'
     topology = (tmp_path / "config" / f"{cluster.uuid}.topology").read_text()
     assert (
         f"ost://core.local.genesis-core.tech:7776 100 witness {CORE_NODE_UUID}\n"

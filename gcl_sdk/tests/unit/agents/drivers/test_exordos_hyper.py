@@ -177,7 +177,7 @@ class TestVolumeLifecycle:
         )
         with open(driver._vhost_drop_in_path(volume.uuid)) as f:
             assert (
-                f"Environment=LOCATION=mds://{volume.project_id}@10.20.0.2:7776\n"
+                f'Environment=LOCATION=mds://{volume.project_id}@10.20.0.2:7776\nEnvironment="EXTRA_ARGS=--insecure"\n'
                 in f.read()
             )
 
@@ -216,7 +216,7 @@ class TestVolumeLifecycle:
         )
         with open(driver._vhost_drop_in_path(volume.uuid)) as f:
             assert (
-                f"Environment=LOCATION=mds://{volume.project_id}@10.20.0.2:7776\n"
+                f'Environment=LOCATION=mds://{volume.project_id}@10.20.0.2:7776\nEnvironment="EXTRA_ARGS=--insecure"\n'
                 in f.read()
             )
 

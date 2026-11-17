@@ -79,8 +79,8 @@ filesystem growth remain separate operations.
 
 ## Integration tests
 
-The pinned integration uses bindings `99.0.0+0.41a2714` from
-[Actions run 43517230510](https://github.com/rawstor/librawstor/actions/runs/43517230510).
+The pinned integration uses bindings `99.0.0+0.19267e6` from
+[Actions run 44049992498](https://github.com/rawstor/librawstor/actions/runs/44049992498).
 Use native packages and bindings from the same build.
 
 Set `RAWSTOR_TEST_MDS`, `RAWSTOR_TEST_OST` and `RAWSTOR_TEST_VHOST` to daemon paths
@@ -103,11 +103,23 @@ Capacity and deletion guards use unfiltered `Location.objects()` inventories
 covering every tenant. The previous iterable `Location` API is no longer
 available. Removing a disk does not remove its tenant: Rawstor tenant removal
 is cascading, and could delete other disks and versions of that project.
-Tenant identity currently records ownership and filters listings; Rawstor does
-not authenticate it or enforce rights. Authorization remains in Exordos.
+This integration runs Rawstor in explicit insecure mode; tenant UUIDs record
+ownership and filter listings, without authenticating callers.
 
 This build changes the handshake, wire frames and on-disk tenant metadata.
 Clients, bindings, MDS, OST and vhost must use the same compatible build. MDS
 rejects a database created before tenants, and Rawstor provides no migration.
 Recreate disposable development storage instead of mixing the old and new
 formats; package updates do not convert or erase existing data.
+
+## Transport mode
+
+The integration currently starts MDS, OST and vhost with explicit
+`EXTRA_ARGS="--insecure"`. Connections are plaintext and peers are not
+authenticated. TLS and SPIFFE issuance are maintained in a separate branch
+layered on the storage integration.
+
+Build 44049992498 exposes service command-line arguments, but its Python
+bindings do not yet expose insecure initialization. Agent-side operation
+requires a subsequent build with that public API; the service flag alone
+does not configure the bindings.

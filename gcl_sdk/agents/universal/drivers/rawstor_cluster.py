@@ -169,7 +169,7 @@ class RawstorStorageClusterDriver(AbstractStorageClusterDriver):
         bind = mds.netloc
         storage_capacity.validate_bind_address(bind)
         lines.append(self._witness_topology_line(bind))
-        content = f"BIND_ADDR={bind}\n"
+        content = f'BIND_ADDR={bind}\nEXTRA_ARGS="--insecure"\n'
         config_changed = _write_if_changed(config, content)
         topology = MDS_CONFIG_DIR / f"{self._cluster.uuid}.topology"
         previous_topology = topology.read_text() if topology.exists() else None

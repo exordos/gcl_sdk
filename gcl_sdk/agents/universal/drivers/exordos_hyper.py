@@ -142,7 +142,7 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
         with open(self._vhost_drop_in_path(volume_uuid), "w") as f:
             # The package's ExecStart appends /%i to LOCATION.
             f.write(
-                f"[Service]\nEnvironment=LOCATION={storage_location.removesuffix('/')}\n"
+                f'[Service]\nEnvironment=LOCATION={storage_location.removesuffix("/")}\nEnvironment="EXTRA_ARGS=--insecure"\n'
             )
         subprocess.check_call(["systemctl", "daemon-reload"])
 

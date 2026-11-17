@@ -89,7 +89,7 @@ class MetaStorageNode(meta.MetaDataPlaneModel):
         previous_config = config.read_text() if config.exists() else None
         config_changed = _write_if_changed(
             config,
-            f"BIND_ADDR={self.driver_spec.bind_address}\nLOCATION={self.driver_spec.location}\n",
+            f'BIND_ADDR={self.driver_spec.bind_address}\nLOCATION={self.driver_spec.location}\nEXTRA_ARGS="--insecure"\n',
         )
         unit_config = OST_UNIT_DIR / f"{self.unit_name}.d" / "exordos.conf"
         previous_unit = unit_config.read_text() if unit_config.exists() else None
