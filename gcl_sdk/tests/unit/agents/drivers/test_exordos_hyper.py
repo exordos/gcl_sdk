@@ -27,7 +27,7 @@ import pytest
 # level. They ship as optional extras (not installed in every dev/CI
 # environment), so skip this module instead of failing collection.
 pytest.importorskip("libvirt")
-pytest.importorskip("rawstor")
+pytest.importorskip("rawstor").initialize(insecure=True)
 
 from gcl_sdk.agents.universal.drivers import exordos_hyper  # noqa: E402
 from gcl_sdk.agents.universal.drivers import libvirt as libvirt_driver  # noqa: E402
@@ -1093,3 +1093,10 @@ def test_mds_registers_project_tenant_before_object_create(
     _redirect_vhost_drop_in(monkeypatch, restored, tmp_path)
     recovered = restored.get_volume(volume.uuid)
     assert recovered.project_id == project
+
+
+def test_remote_client_selects_insecure_before_using_bindings(monkeypatch):
+    module = SimpleNamespace(initialize=MagicMock())
+    monkeypatch.setattr(exordos_hyper, "rawstor", module)
+    assert exordos_hyper._rawstor_module() is module
+    module.initialize.assert_called_once_with(insecure=True)

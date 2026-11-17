@@ -49,6 +49,7 @@ def _rawstor_module():
         raise RuntimeError(
             "Rawstor bindings are required for remote disks; run hypervisors init"
         )
+    rawstor.initialize(insecure=True)
     return rawstor
 
 

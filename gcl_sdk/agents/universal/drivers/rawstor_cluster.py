@@ -42,6 +42,8 @@ from gcl_sdk.common import utils
 
 LOG = logging.getLogger(__name__)
 
+rawstor.initialize(insecure=True)
+
 # Re-exported for convenience/backward-compat of existing imports of this
 # module - the driver_spec classes themselves live in pool.py (alongside
 # the other driver specs) so exordos_core can reference them without

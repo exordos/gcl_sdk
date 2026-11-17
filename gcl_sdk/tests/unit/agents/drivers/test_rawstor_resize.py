@@ -31,6 +31,7 @@ import pytest
 
 pytest.importorskip("libvirt")
 rawstor = pytest.importorskip("rawstor")
+rawstor.initialize(insecure=True)
 from gcl_sdk.agents.universal.drivers import exordos_hyper  # noqa: E402
 from gcl_sdk.agents.universal.drivers import pool  # noqa: E402
 
@@ -92,6 +93,7 @@ def test_live_resize_preserves_data_and_notifies_qemu():
                 "ost",
                 [
                     os.environ["RAWSTOR_TEST_OST"],
+                    "--insecure",
                     "--bind",
                     f"127.0.0.1:{op}",
                     "--workers",
@@ -108,6 +110,7 @@ def test_live_resize_preserves_data_and_notifies_qemu():
                 "mds",
                 [
                     os.environ["RAWSTOR_TEST_MDS"],
+                    "--insecure",
                     "--bind",
                     f"127.0.0.1:{mp}",
                     "--db",
@@ -135,6 +138,7 @@ def test_live_resize_preserves_data_and_notifies_qemu():
                 "vhost",
                 [
                     os.environ["RAWSTOR_TEST_VHOST"],
+                    "--insecure",
                     "--socket-path",
                     str(work / "disk.sock"),
                     target,

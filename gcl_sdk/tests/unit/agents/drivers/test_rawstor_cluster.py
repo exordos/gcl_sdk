@@ -35,6 +35,8 @@ pytest.importorskip("rawstor")
 
 import rawstor  # noqa: E402
 
+rawstor.initialize(insecure=True)
+
 from gcl_sdk.agents.universal.dm import models as ua_models  # noqa: E402
 from gcl_sdk.agents.universal.drivers import pool as pool_base  # noqa: E402
 from gcl_sdk.agents.universal.drivers import rawstor_cluster  # noqa: E402
@@ -416,7 +418,10 @@ def test_two_core_mds_instances_create_enumerate_and_recover_disks(
         stream = (tmp_path / name).open("a")
         streams.append(stream)
         process = subprocess.Popen(
-            [binary, *args], env=env, stdout=stream, stderr=subprocess.STDOUT
+            [binary, "--insecure", *args],
+            env=env,
+            stdout=stream,
+            stderr=subprocess.STDOUT,
         )
         processes.append(process)
         return process

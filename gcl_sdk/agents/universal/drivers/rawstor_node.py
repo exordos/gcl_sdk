@@ -113,6 +113,8 @@ class MetaStorageNode(meta.MetaDataPlaneModel):
             raise
         import rawstor
 
+        rawstor.initialize(insecure=True)
+
         # A running unit alone is insufficient: verify the advertised OST responds.
         rawstor.Location(self.driver_spec.endpoint).info()
         self.status = "ACTIVE"
@@ -130,6 +132,8 @@ class MetaStorageNode(meta.MetaDataPlaneModel):
         if active.returncode:
             raise driver_exc.ResourceNotFound(resource=self)
         import rawstor
+
+        rawstor.initialize(insecure=True)
 
         try:
             rawstor.Location(self.driver_spec.endpoint).info()

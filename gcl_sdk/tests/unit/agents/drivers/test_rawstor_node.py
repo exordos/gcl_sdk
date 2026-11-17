@@ -206,6 +206,7 @@ def test_native_ost_launch_from_reconciled_config(node, monkeypatch, tmp_path, b
             # Use the same bind and backing URI consumed by the packaged template.
             argv = [
                 binary,
+                "--insecure",
                 "--bind",
                 config["BIND_ADDR"],
                 "--workers",
