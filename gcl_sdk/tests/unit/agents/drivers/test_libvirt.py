@@ -397,6 +397,11 @@ def test_recreate_preserves_global_disk_order_across_pools():
             (root.uuid, 0),
             (data.uuid, 1),
         ]
+        driver.set_machine_resources(machine, 2, 1024)
+        assert disk_paths() == before
+        resized, ports = driver.get_machine(machine.uuid)
+        assert (resized.cores, resized.ram) == (2, 1024)
+        assert [(p.mac, p.source) for p in ports] == [(port.mac, port.source)]
         driver.recreate_machine(machine, ports=[port])
         assert disk_paths() == before
     finally:
@@ -475,3 +480,255 @@ class TestPowerState:
 
         domain.pMWakeup.assert_called_once()
         domain.create.assert_not_called()
+
+
+@pytest.fixture
+def test_driver_paused_start(monkeypatch):
+    # libvirt's test:/// driver rejects START_PAUSED, unlike QEMU. Emulate
+    # only that binding call; keep real domain definitions and state changes.
+    original = libvirt.virDomain.createWithFlags
+    calls = []
+
+    def create_with_flags(domain, flags=0):
+        calls.append(flags)
+        result = original(domain, flags & ~libvirt.VIR_DOMAIN_START_PAUSED)
+        if flags & libvirt.VIR_DOMAIN_START_PAUSED:
+            domain.suspend()
+        return result
+
+    monkeypatch.setattr(libvirt.virDomain, "createWithFlags", create_with_flags)
+    return calls
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        libvirt.VIR_DOMAIN_SHUTOFF,
+        libvirt.VIR_DOMAIN_RUNNING,
+        libvirt.VIR_DOMAIN_PAUSED,
+    ],
+)
+@pytest.mark.parametrize("autostart", [False, True])
+def test_joint_resource_update_preserves_domain_and_power(
+    state, autostart, test_driver_paused_start
+):
+    driver = _local_driver()
+    machine = pool_base.Machine(
+        uuid=sys_uuid.uuid4(),
+        project_id=sys_uuid.uuid4(),
+        name="resize-test",
+        cores=1,
+        ram=512,
+    )
+    driver.create_machine(machine, [], [])
+    domain = driver._client.lookupByUUIDString(str(machine.uuid))
+    domain.setAutostart(autostart)
+    active = state != libvirt.VIR_DOMAIN_SHUTOFF
+    if not active:
+        domain.destroy()
+    elif state == libvirt.VIR_DOMAIN_PAUSED:
+        domain.suspend()
+    before = ET.fromstring(domain.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE))
+    spy = mock.Mock(wraps=domain)
+    try:
+        with (
+            mock.patch.object(
+                driver, "_client_instance", wraps=driver._client
+            ) as client,
+        ):
+            client.lookupByUUIDString.return_value = spy
+            driver.set_machine_resources(machine, 2, 1024)
+            client.defineXML.assert_called_once()
+        assert spy.destroy.call_count == int(active)
+        updated = driver._client.lookupByUUIDString(str(machine.uuid))
+        assert bool(updated.isActive()) == active
+        assert updated.state()[0] == state
+        expected_flags = (
+            libvirt.VIR_DOMAIN_START_PAUSED if state == libvirt.VIR_DOMAIN_PAUSED else 0
+        )
+        assert test_driver_paused_start == ([expected_flags] if active else [])
+        assert bool(updated.autostart()) == autostart
+        after = ET.fromstring(updated.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE))
+        assert after.find("vcpu").text == "2"
+        assert after.find("memory").text == "1048576"
+        assert after.find("currentMemory").text == "1048576"
+        assert ET.tostring(after.find("devices")) == ET.tostring(before.find("devices"))
+        assert after.find("uuid").text == before.find("uuid").text
+        actual, _ = driver.get_machine(machine.uuid)
+        assert (actual.cores, actual.ram) == (2, 1024)
+    finally:
+        driver.delete_machine(machine, delete_volumes=False)
+
+
+@pytest.mark.parametrize(
+    "method, value, expected",
+    [
+        ("set_machine_cores", 2, (2, 512)),
+        ("set_machine_ram", 1024, (1, 1024)),
+    ],
+)
+def test_resource_setter_compatibility(method, value, expected):
+    driver = _local_driver()
+    machine = pool_base.Machine(
+        uuid=sys_uuid.uuid4(),
+        project_id=sys_uuid.uuid4(),
+        name="resize-wrapper",
+        cores=1,
+        ram=512,
+    )
+    driver.create_machine(machine, [], [])
+    driver.shutdown_machine(machine, force=True)
+    try:
+        getattr(driver, method)(machine, value)
+        actual, _ = driver.get_machine(machine.uuid)
+        assert (actual.cores, actual.ram) == expected
+        assert actual.power_state == pool_base.PowerState.OFF.value
+    finally:
+        driver.delete_machine(machine, delete_volumes=False)
+
+
+@pytest.mark.parametrize(
+    "state, stage",
+    [
+        (state, stage)
+        for state in (
+            libvirt.VIR_DOMAIN_SHUTOFF,
+            libvirt.VIR_DOMAIN_RUNNING,
+            libvirt.VIR_DOMAIN_PAUSED,
+        )
+        for stage in ("destroy", "define", "autostart", "start")
+        if state != libvirt.VIR_DOMAIN_SHUTOFF or stage in ("define", "autostart")
+    ],
+)
+@pytest.mark.parametrize("after_effect", [False, True])
+def test_resource_resize_failure_restores_configuration_and_state(
+    state, stage, after_effect, test_driver_paused_start
+):
+    driver = _local_driver()
+    machine = pool_base.Machine(
+        uuid=sys_uuid.uuid4(),
+        project_id=sys_uuid.uuid4(),
+        name="resize-failure",
+        cores=1,
+        ram=512,
+    )
+    driver.create_machine(machine, [], [])
+    connection = driver._client
+    domain = connection.lookupByUUIDString(str(machine.uuid))
+    domain.setAutostart(False)
+    if state == libvirt.VIR_DOMAIN_SHUTOFF:
+        domain.destroy()
+    elif state == libvirt.VIR_DOMAIN_PAUSED:
+        domain.suspend()
+    original_xml = domain.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE)
+    failure = libvirt.libvirtError("injected resize failure")
+    injected = False
+
+    def call(step, method, *args):
+        nonlocal injected
+        if stage == step and not injected:
+            injected = True
+            if after_effect:
+                method(*args)
+            raise failure
+        return method(*args)
+
+    def wrap(current):
+        wrapped = mock.Mock(wraps=current)
+        wrapped.destroy.side_effect = lambda: call("destroy", current.destroy)
+        wrapped.setAutostart.side_effect = lambda value: call(
+            "autostart", current.setAutostart, value
+        )
+        wrapped.createWithFlags.side_effect = lambda flags: call(
+            "start", current.createWithFlags, flags
+        )
+        return wrapped
+
+    try:
+        with mock.patch.object(driver, "_client_instance", wraps=connection) as client:
+            client.lookupByUUIDString.side_effect = lambda uuid: wrap(
+                connection.lookupByUUIDString(uuid)
+            )
+            client.defineXML.side_effect = lambda xml: wrap(
+                call("define", connection.defineXML, xml)
+            )
+            with pytest.raises(libvirt.libvirtError) as caught:
+                driver.set_machine_resources(machine, 2, 1024)
+            assert caught.value is failure
+        assert injected
+        restored = connection.lookupByUUIDString(str(machine.uuid))
+        assert restored.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE) == original_xml
+        assert restored.state()[0] == state
+        assert not restored.autostart()
+        assert (machine.cores, machine.ram) == (1, 512)
+        actual, _ = driver.get_machine(machine.uuid)
+        assert (actual.cores, actual.ram) == (1, 512)
+        # A retry after a failed attempt still applies the requested resources.
+        driver.set_machine_resources(machine, 2, 1024)
+        assert restored.state()[0] == state
+        actual, _ = driver.get_machine(machine.uuid)
+        assert (actual.cores, actual.ram) == (2, 1024)
+    finally:
+        driver.delete_machine(machine, delete_volumes=False)
+
+
+def test_resource_resize_rejects_suspended_guest_before_changes():
+    driver = _local_driver()
+    domain = mock.Mock()
+    domain.state.return_value = (libvirt.VIR_DOMAIN_PMSUSPENDED, 0)
+    domain.isActive.return_value = 1
+    domain.XMLDesc.return_value = libvirt_driver.domain_template
+    machine = pool_base.Machine(
+        uuid=sys_uuid.uuid4(),
+        project_id=sys_uuid.uuid4(),
+        name="suspended",
+        cores=1,
+        ram=512,
+    )
+    with mock.patch.object(driver, "_client_instance") as client:
+        client.lookupByUUIDString.return_value = domain
+        with pytest.raises(ValueError, match="Stop or wake"):
+            driver.set_machine_resources(machine, 2, 1024)
+        domain.destroy.assert_not_called()
+        client.defineXML.assert_not_called()
+
+
+def test_failed_resize_rollback_preserves_original_error(caplog):
+    driver = _local_driver()
+    machine = pool_base.Machine(
+        uuid=sys_uuid.uuid4(),
+        project_id=sys_uuid.uuid4(),
+        name="failed-rollback",
+        cores=1,
+        ram=512,
+    )
+    driver.create_machine(machine, [], [])
+    connection = driver._client
+    failure = libvirt.libvirtError("resize start failed")
+    rollback_failure = libvirt.libvirtError("rollback definition failed")
+    definitions = 0
+
+    def define(xml):
+        nonlocal definitions
+        definitions += 1
+        if definitions == 2:
+            raise rollback_failure
+        updated = mock.Mock(wraps=connection.defineXML(xml))
+        updated.createWithFlags.side_effect = failure
+        return updated
+
+    try:
+        with mock.patch.object(driver, "_client_instance", wraps=connection) as client:
+            client.defineXML.side_effect = define
+            with pytest.raises(libvirt.libvirtError) as caught:
+                driver.set_machine_resources(machine, 2, 1024)
+        assert caught.value is failure
+        assert definitions == 2
+        assert "Failed to roll back resource resize" in caplog.text
+        assert "rollback definition failed" in caplog.text
+        actual, _ = driver.get_machine(machine.uuid)
+        assert (actual.cores, actual.ram) == (2, 1024)
+        assert actual.power_state == pool_base.PowerState.OFF.value
+        assert (machine.cores, machine.ram) == (1, 512)
+    finally:
+        driver.delete_machine(machine, delete_volumes=False)

@@ -1465,50 +1465,71 @@ class LibvirtPoolDriver(pool_base.AbstractPoolDriver):
         return self._domain2machine(domain)
 
     @dry_run_decorator()
-    def set_machine_cores(self, machine: pool_base.Machine, cores: int) -> None:
-        """Set machine cores."""
-        ports = self._list_interfaces(machine)
-        volumes = self.list_volumes(machine)
+    def set_machine_resources(
+        self, machine: pool_base.Machine, cores: int, ram: int
+    ) -> None:
+        """Apply CPU and RAM in one stop/start cycle, retaining attached devices.
 
-        # TODO(akremenetsky): It's only for backward compatibility
-        # This part has to be removed once all machines are migrated.
-        # Or this part can be reworked to convert legacy to new format.
+        Inactive and paused domains retain their state. Running domains are
+        restarted; callers requiring a graceful shutdown must stop them first.
+        Restore the original definition and state if applying the resize fails.
+        """
         domain = self._client.lookupByUUIDString(str(machine.uuid))
-        legacy_domain = self._is_legacy_domain(ET.fromstring(domain.XMLDesc()))
-
-        self.delete_machine(machine, delete_volumes=False)
-
+        original_xml = domain.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE)
+        xml = XMLLibvirtInstance(original_xml)
+        xml.set_vcpu(cores)
+        xml.set_memory(ram)
+        if machine.image is not None:
+            xml.set_image(machine.image)
+        was_active = bool(domain.isActive())
+        state, _ = domain.state()
+        if was_active and state not in (
+            libvirt.VIR_DOMAIN_RUNNING,
+            libvirt.VIR_DOMAIN_BLOCKED,
+            libvirt.VIR_DOMAIN_PAUSED,
+        ):
+            raise ValueError("Stop or wake the guest before resizing in this state")
+        start_flags = (
+            libvirt.VIR_DOMAIN_START_PAUSED if state == libvirt.VIR_DOMAIN_PAUSED else 0
+        )
+        autostart = domain.autostart()
+        definition_attempted = False
+        try:
+            if was_active:
+                domain.destroy()
+            definition_attempted = True
+            updated_domain = self._client.defineXML(xml.xml)
+            updated_domain.setAutostart(autostart)
+            if was_active:
+                updated_domain.createWithFlags(start_flags)
+        except libvirt.libvirtError:
+            try:
+                current = self._client.lookupByUUIDString(str(machine.uuid))
+                if definition_attempted:
+                    if current.isActive():
+                        current.destroy()
+                    current = self._client.defineXML(original_xml)
+                    current.setAutostart(autostart)
+                if was_active and not current.isActive():
+                    current.createWithFlags(start_flags)
+            except libvirt.libvirtError:
+                LOG.exception(
+                    "Failed to roll back resource resize for %s", machine.uuid
+                )
+            raise
         machine.cores = cores
-        self.create_machine(
-            machine,
-            volumes=volumes,
-            ports=ports,
-            legacy_machine=legacy_domain,
-        )
-        LOG.debug("The domain %s was updated with cores %s", machine.uuid, cores)
-
-    @dry_run_decorator()
-    def set_machine_ram(self, machine: pool_base.Machine, ram: int) -> None:
-        """Set machine ram."""
-        ports = self._list_interfaces(machine)
-        volumes = self.list_volumes(machine)
-
-        # TODO(akremenetsky): It's only for backward compatibility
-        # This part has to be removed once all machines are migrated.
-        # Or this part can be reworked to convert legacy to new format.
-        domain = self._client.lookupByUUIDString(str(machine.uuid))
-        legacy_domain = self._is_legacy_domain(ET.fromstring(domain.XMLDesc()))
-
-        self.delete_machine(machine, delete_volumes=False)
-
         machine.ram = ram
-        self.create_machine(
-            machine,
-            volumes=volumes,
-            ports=ports,
-            legacy_machine=legacy_domain,
+        LOG.debug(
+            "The domain %s CPU and RAM updated to %s/%s", machine.uuid, cores, ram
         )
-        LOG.debug("The domain %s was updated with ram %s", machine.uuid, ram)
+
+    def set_machine_cores(self, machine: pool_base.Machine, cores: int) -> None:
+        """Set CPU while retaining RAM and power state."""
+        self.set_machine_resources(machine, cores, machine.ram)
+
+    def set_machine_ram(self, machine: pool_base.Machine, ram: int) -> None:
+        """Set RAM while retaining CPU and power state."""
+        self.set_machine_resources(machine, machine.cores, ram)
 
     @dry_run_decorator()
     def reset_machine(self, machine: pool_base.Machine) -> None:
