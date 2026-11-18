@@ -90,16 +90,16 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
         """
         if not volume.storage_location:
             return None
-        tenant = sys_uuid.UUID(str(volume.project_id))
-        if tenant.int == 0:
-            raise ValueError("Rawstor requires a non-nil project_id as tenant")
+        account = sys_uuid.UUID(str(volume.project_id))
+        if account.int == 0:
+            raise ValueError("Rawstor requires a non-nil project_id as account")
         uri = urlsplit(volume.storage_location)
         endpoint = uri.netloc.rsplit("@", 1)[-1]
-        return urlunsplit(uri._replace(netloc=f"{tenant}@{endpoint}"))
+        return urlunsplit(uri._replace(netloc=f"{account}@{endpoint}"))
 
     def _project_from_location(self, address: str) -> sys_uuid.UUID:
-        tenant = urlsplit(address).username or _rawstor_module().DEFAULT_TENANT
-        return sys_uuid.UUID(tenant)
+        account = urlsplit(address).username or _rawstor_module().DEFAULT_ACCOUNT
+        return sys_uuid.UUID(account)
 
     def _target_uri(self, volume_uuid: sys_uuid.UUID, address: str) -> str:
         return f"{address.removesuffix('/')}/{volume_uuid}"
@@ -532,7 +532,7 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
 
         if urlsplit(address).scheme == "mds":
             try:
-                _rawstor_module().Location(address).create_tenant(
+                _rawstor_module().Location(address).create_account(
                     str(volume.project_id)
                 )
             except FileExistsError:

@@ -545,15 +545,15 @@ def test_two_core_mds_instances_create_enumerate_and_recover_disks(
         ] == [targets[1].uri]
 
         # An unscoped admin inventory must include every project, while
-        # tenant-scoped listings contain only that project's owned objects.
+        # account-scoped listings contain only that project's owned objects.
         admin = rawstor.Location(clusters[0].driver_spec.endpoint)
-        tenants = [str(sys_uuid.uuid4()), str(sys_uuid.uuid4())]
+        accounts = [str(sys_uuid.uuid4()), str(sys_uuid.uuid4())]
         scoped = []
         owned = []
-        for tenant in tenants:
-            admin.create_tenant(tenant)
+        for account in accounts:
+            admin.create_account(account)
             location = rawstor.Location(
-                clusters[0].driver_spec.endpoint.replace("mds://", f"mds://{tenant}@")
+                clusters[0].driver_spec.endpoint.replace("mds://", f"mds://{account}@")
             )
             scoped.append(location)
             owned.append(
@@ -561,13 +561,13 @@ def test_two_core_mds_instances_create_enumerate_and_recover_disks(
                     size=4 << 20, width=2, chunk_size=4 << 20, failure_domain="rack"
                 )
             )
-        assert set(admin.tenants()) >= set(tenants)
+        assert set(admin.accounts()) >= set(accounts)
         assert [target.uri for target in scoped[0].objects()] == [owned[0].uri]
         assert [target.uri for target in scoped[1].objects()] == [owned[1].uri]
-        for tenant, target in zip(tenants, owned):
-            assert target.tenant == tenant
+        for account, target in zip(accounts, owned):
+            assert target.account == account
             for chunk in target.chunks():
-                assert all(member.tenant == tenant for member in chunk.meta())
+                assert all(member.account == account for member in chunk.meta())
         rawstor_cluster.RawstorStorageClusterDriver(clusters[0]).get_capacity()
         assert all(
             target.uri.rsplit("/", 1)[-1] in clusters[0].capacity_info["objects"]
@@ -576,14 +576,14 @@ def test_two_core_mds_instances_create_enumerate_and_recover_disks(
         owned[0].resize(8 << 20)
         assert owned[0].spec().size == 8 << 20
         for chunk in owned[0].chunks():
-            assert all(member.tenant == tenants[0] for member in chunk.meta())
+            assert all(member.account == accounts[0] for member in chunk.meta())
         owned[0].remove()
         assert list(scoped[0].objects()) == []
         assert owned[1].spec().size == 4 << 20
-        assert tenants[0] in set(admin.tenants())
+        assert accounts[0] in set(admin.accounts())
         owned[1].remove()
-        for tenant in tenants:
-            admin.remove_tenant(tenant)
+        for account in accounts:
+            admin.remove_account(account)
 
         # Apply a topology edit through the real daemon's HUP handler.
         first = clusters[0]

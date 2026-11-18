@@ -79,8 +79,8 @@ filesystem growth remain separate operations.
 
 ## Integration tests
 
-The pinned integration uses bindings `99.0.0+0.6c915fe` from
-[Actions run 44059493520](https://github.com/rawstor/librawstor/actions/runs/44059493520).
+The pinned integration uses bindings `99.0.0+0.eee4365` from
+[Actions run 44297955553](https://github.com/rawstor/librawstor/actions/runs/44297955553).
 Use native packages and bindings from the same build.
 
 Set `RAWSTOR_TEST_MDS`, `RAWSTOR_TEST_OST` and `RAWSTOR_TEST_VHOST` to daemon paths
@@ -91,24 +91,24 @@ native node test as root to exercise a ZFS backend.
 
 ## Project ownership
 
-Exordos maps each non-nil `project_id` to the same Rawstor tenant UUID.
-Creating a disk registers its tenant in the MDS idempotently, then creates the
+Exordos maps each non-nil `project_id` to the same Rawstor account UUID.
+Creating a disk registers its account in the MDS idempotently, then creates the
 object through `mds://PROJECT_UUID@host:port/OBJECT_UUID`. Direct OST and file
 backends record the same owner without an MDS registry. The vhost drop-in
-retains the tenant-qualified location; discovery and retry after an agent
+retains the account-qualified location; discovery and retry after an agent
 restart restore the original project from it. Nil project UUIDs are rejected
 because Rawstor reserves nil for unfiltered listings rather than ownership.
 
 Capacity and deletion guards use unfiltered `Location.objects()` inventories
-covering every tenant. The previous iterable `Location` API is no longer
-available. Removing a disk does not remove its tenant: Rawstor tenant removal
+covering every account. The previous iterable `Location` API is no longer
+available. Removing a disk does not remove its account: Rawstor account removal
 is cascading, and could delete other disks and versions of that project.
-This integration runs Rawstor in explicit insecure mode; tenant UUIDs record
+This integration runs Rawstor in explicit insecure mode; account UUIDs record
 ownership and filter listings, without authenticating callers.
 
-This build changes the handshake, wire frames and on-disk tenant metadata.
+This build changes the handshake, wire frames and on-disk account metadata.
 Clients, bindings, MDS, OST and vhost must use the same compatible build. MDS
-rejects a database created before tenants, and Rawstor provides no migration.
+rejects a database created before accounts, and Rawstor provides no migration.
 Recreate disposable development storage instead of mixing the old and new
 formats; package updates do not convert or erase existing data.
 
@@ -122,3 +122,8 @@ layered on the storage integration.
 Agents and the API explicitly call `rawstor.initialize(insecure=True)` before
 loading native `Target` or `Location` types. This matches the service transport
 mode; setting any `RAWSTOR_TLS_*` options in insecure mode is rejected.
+
+Build 44297955553 also renames the MDS SQLite schema from
+`tenants`/`tenant_id` to `accounts`/`account_id`. Existing databases with the
+old names are not migrated by this build. A package update does not convert
+that metadata or delete existing storage.

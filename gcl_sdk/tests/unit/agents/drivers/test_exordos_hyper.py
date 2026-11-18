@@ -163,7 +163,7 @@ class TestVolumeLifecycle:
         registry = MagicMock()
         monkeypatch.setattr(exordos_hyper.rawstor, "Location", lambda uri: registry)
         created = driver.create_volume(volume)
-        registry.create_tenant.assert_called_once_with(str(volume.project_id))
+        registry.create_account.assert_called_once_with(str(volume.project_id))
         factory.assert_called_once_with(
             f"mds://{volume.project_id}@10.20.0.2:7776/{volume.uuid}"
         )
@@ -202,7 +202,7 @@ class TestVolumeLifecycle:
         registry = MagicMock()
         monkeypatch.setattr(exordos_hyper.rawstor, "Location", lambda uri: registry)
         created = driver.create_volume(volume)
-        registry.create_tenant.assert_called_once_with(str(volume.project_id))
+        registry.create_account.assert_called_once_with(str(volume.project_id))
         factory.assert_called_once_with(
             f"mds://{volume.project_id}@10.20.0.2:7776/{volume.uuid}"
         )
@@ -243,7 +243,7 @@ class TestVolumeLifecycle:
         target = exordos_hyper.rawstor.Target(
             driver._target_uri(volume.uuid, driver._read_remote_location(volume.uuid))
         )
-        assert target.meta()[0].tenant == str(volume.project_id)
+        assert target.meta()[0].account == str(volume.project_id)
 
         # list_volumes() only enumerates rawstor volumes attached to a
         # domain on this hypervisor (it has no way to enumerate a remote
@@ -1036,7 +1036,7 @@ def test_detach_uses_live_flags_only_for_running_domains(tmp_path, monkeypatch, 
 @pytest.mark.parametrize(
     "endpoint", ["mds://core:7776/", "ost://host:7777", "file:///data/ost"]
 )
-def test_project_id_becomes_tenant_in_every_rawstor_uri(tmp_path, endpoint):
+def test_project_id_becomes_account_in_every_rawstor_uri(tmp_path, endpoint):
     driver = _driver(tmp_path)
     volume = pool_base.MachineVolume(
         project_id=sys_uuid.uuid4(), storage_location=endpoint
@@ -1044,11 +1044,11 @@ def test_project_id_becomes_tenant_in_every_rawstor_uri(tmp_path, endpoint):
     address = driver._rawstor_address(volume)
     assert exordos_hyper.rawstor.Target(
         driver._target_uri(volume.uuid, address)
-    ).tenant == str(volume.project_id)
+    ).account == str(volume.project_id)
     assert driver._project_from_location(address) == volume.project_id
 
 
-def test_nil_project_cannot_silently_become_default_tenant(tmp_path, monkeypatch):
+def test_nil_project_cannot_silently_become_default_account(tmp_path, monkeypatch):
     driver = _driver(tmp_path)
     registry = MagicMock()
     monkeypatch.setattr(exordos_hyper.rawstor, "Location", registry)
@@ -1061,7 +1061,7 @@ def test_nil_project_cannot_silently_become_default_tenant(tmp_path, monkeypatch
 
 
 @pytest.mark.parametrize("registered", [False, True])
-def test_mds_registers_project_tenant_before_object_create(
+def test_mds_registers_project_account_before_object_create(
     tmp_path, monkeypatch, registered
 ):
     driver = _driver(tmp_path)
@@ -1074,12 +1074,12 @@ def test_mds_registers_project_tenant_before_object_create(
     order = []
     registry = MagicMock()
 
-    def register(tenant):
-        order.append(("tenant", tenant))
+    def register(account):
+        order.append(("account", account))
         if registered:
             raise FileExistsError()
 
-    registry.create_tenant.side_effect = register
+    registry.create_account.side_effect = register
     target = MagicMock()
     target.create.side_effect = lambda **kwargs: order.append(("object", str(project)))
     target.spec.return_value = SimpleNamespace(size=1 << 30)
@@ -1087,7 +1087,7 @@ def test_mds_registers_project_tenant_before_object_create(
     factory = MagicMock(return_value=target)
     monkeypatch.setattr(exordos_hyper.rawstor, "Target", factory)
     driver.create_volume(volume)
-    assert order == [("tenant", str(project)), ("object", str(project))]
+    assert order == [("account", str(project)), ("object", str(project))]
     factory.assert_called_once_with(f"mds://{project}@core:7776/{volume.uuid}")
     restored = _driver(tmp_path)
     _redirect_vhost_drop_in(monkeypatch, restored, tmp_path)
