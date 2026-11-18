@@ -331,7 +331,9 @@ class Node(
         ra_types.Enum([t.value for t in pc.NodeType]),
         default=pc.NodeType.VM.value,
     )
-    default_network = properties.property(ra_types.Dict(), default=dict)
+    default_network = properties.property(
+        ra_types.AllowNone(ra_types.Dict()), default=None
+    )
     disk_spec = properties.property(
         types_dynamic.KindModelSelectorType(
             types_dynamic.KindModelType(RootDiskSpec),
@@ -362,7 +364,7 @@ class Node(
 
         Refer to the Resource model for more details about target fields.
         """
-        return frozenset(
+        fields = frozenset(
             (
                 "uuid",
                 "name",
@@ -375,6 +377,9 @@ class Node(
                 "hostname",
             )
         )
+        if self.default_network is not None:
+            fields = fields | frozenset(("default_network",))
+        return fields
 
 
 class AbstractSetDiskSpec(
@@ -504,7 +509,9 @@ class NodeSet(
         ra_types.Enum([t.value for t in pc.NodeType]),
         default=pc.NodeType.VM.value,
     )
-    default_network = properties.property(ra_types.Dict(), default=dict)
+    default_network = properties.property(
+        ra_types.AllowNone(ra_types.Dict()), default=None
+    )
     disk_spec = properties.property(
         types_dynamic.KindModelSelectorType(
             types_dynamic.KindModelType(SetRootDiskSpec),
@@ -529,7 +536,7 @@ class NodeSet(
 
         Refer to the Resource model for more details about target fields.
         """
-        return frozenset(
+        fields = frozenset(
             (
                 "uuid",
                 "name",
@@ -540,8 +547,13 @@ class NodeSet(
                 "set_type",
                 "project_id",
                 "disk_spec",
+                # Otherwise a set pinned to a network arrives unpinned.
+                "default_network",
             )
         )
+        if self.default_network is None:
+            fields = fields - frozenset(("default_network",))
+        return fields
 
 
 class AbstractTarget(types_dynamic.AbstractKindModel, ra_models.SimpleViewMixin):

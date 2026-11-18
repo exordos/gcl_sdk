@@ -215,6 +215,17 @@ so changing the declaration does not rehash resources that already exist
 until the next update. Legacy storage files written before this feature are
 read as before and the hashes of such resources do not change.
 
+## Database models
+
+`DatabaseBackendClient` restores models through `restore_from_simple_view()` or
+`from_ua_resource()` and persists them with `insert()`/`update()`. Models enforce
+their constraints in these persistence methods.
+
+`ModelSpec.filters` limits lookups and listings. With `inject_filter_fields=True`
+(the default), omitted filter fields are also supplied during creation. For
+example, a project filter supplies `project_id` and scopes the agent to that
+project; declarations must use the same project.
+
 ## Register the driver
 
 ```toml

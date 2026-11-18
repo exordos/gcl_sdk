@@ -18,8 +18,14 @@ from __future__ import annotations
 from unittest import mock
 import uuid as sys_uuid
 
+from cryptography.exceptions import InvalidTag
+import pytest
+import requests
+
+from gcl_sdk.agents.universal.api import crypto
 from gcl_sdk.agents.universal.clients.orch import http as orch_http
 from gcl_sdk.agents.universal.dm import models
+from gcl_sdk.clients.http import base
 
 
 class TestHttpOrchClientAgentsUpdate:
@@ -55,3 +61,35 @@ class TestHttpOrchClientAgentsUpdate:
             facts=agent.facts,
             name=agent.name,
         )
+
+
+def test_unencrypted_agent_identifies_itself():
+    import requests
+    from gcl_sdk.clients.http import base
+
+    node = sys_uuid.uuid4()
+    request = requests.Request(
+        "DELETE",
+        "http://boot/v1/kind/fact/resources/resource",
+        auth=base.NodeIdentityAuth(node),
+    ).prepare()
+    assert request.headers["X-Genesis-Node-UUID"] == str(node)
+
+
+@pytest.mark.parametrize(
+    ("status", "body"),
+    [(200, b""), (200, b"invalid ciphertext"), (204, b"invalid ciphertext")],
+)
+def test_encrypted_success_response_requires_valid_ciphertext(status, body):
+    key = crypto.generate_key()
+    encryptor = base.Encryptor(key, sys_uuid.uuid4())
+    response = requests.Response()
+    response.status_code = status
+    response._content = body
+    _, response.headers = encryptor.encrypt({})
+    http_client = mock.Mock()
+    http_client.get.return_value = response
+    client = base.CollectionBaseClient("http://localhost", encryptor=encryptor)
+
+    with pytest.raises(InvalidTag):
+        client._do_request(http_client.get, "http://localhost/v1/agents/")
