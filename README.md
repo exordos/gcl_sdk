@@ -27,13 +27,6 @@ Key components:
 
 > **For a full overview of components, quick start guides, and advanced usage, visit the [documentation](https://exordos.github.io/gcl_sdk/).**
 
-## Load-balancer HTTP/2
-
-In the universal agent's LB payload, set `"http2": false` on an HTTPS
-entry in `vhosts` to disable HTTP/2 while keeping TLS enabled. The property
-defaults to `true` and has no effect on plain HTTP vhosts. The component
-building the LB payload must pass this property through to the agent.
-
 # 🔗 Related projects
 
 - Exordos Core is the main project of the Exordos ecosystem. You can find it [here](https://github.com/exordos/exordos_core).
