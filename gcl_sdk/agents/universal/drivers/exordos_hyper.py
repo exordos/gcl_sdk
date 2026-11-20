@@ -546,7 +546,7 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
             target.create(
                 size=volume.size << 30,
                 width=policy.get("mirrors", 1),
-                chunk_size=policy.get("chunk_size", 1 << 30)
+                chunk_size=pool_base.rawstor_specs.RAWSTOR_CHUNK_SIZE
                 if address.startswith("mds://")
                 else 0,
                 **placement,

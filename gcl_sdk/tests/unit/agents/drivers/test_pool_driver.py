@@ -1018,7 +1018,6 @@ class TestStorageLocationPropagation:
             storage_policy={
                 "mirrors": 2,
                 "failure_domain": "rack",
-                "chunk_size": 1 << 30,
             },
         )
 

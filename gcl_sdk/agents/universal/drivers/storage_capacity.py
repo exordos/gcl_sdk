@@ -116,7 +116,7 @@ def available_by_policy(nodes, policy, pending=()):
             lo = mid
         else:
             hi = mid - 1
-    chunk = policy["chunk_size"]
+    chunk = rawstor_specs.RAWSTOR_CHUNK_SIZE
     return lo // chunk * chunk
 
 
@@ -130,7 +130,6 @@ def default_policies(cluster_uuid):
             "ephemeral": ephemeral,
             "mirrors": mirrors,
             "failure_domain": "server",
-            "chunk_size": 1 << 30,
         }
         for name, ephemeral, mirrors in [
             ("persistent", False, 2),

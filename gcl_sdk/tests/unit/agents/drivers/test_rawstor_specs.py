@@ -15,11 +15,6 @@ INVALID_VALUES = [
     ("mirrors", 256),
     ("mirrors", True),
     ("mirrors", "2"),
-    ("chunk_size", 0),
-    ("chunk_size", 3 << 20),
-    ("chunk_size", 2 << 30),
-    ("chunk_size", True),
-    ("chunk_size", "1024"),
     ("failure_domain", "unknown"),
     ("tier", "unknown"),
     ("ephemeral", 1),
@@ -67,7 +62,7 @@ def test_agent_policy_roundtrip_and_schema_expose_nested_fields():
     )
     assert nested["mirrors"]["minimum"] == 1
     assert nested["mirrors"]["maximum"] == 255
-    assert nested["chunk_size"]["maximum"] == 1 << 30
+    assert "chunk_size" not in nested
     assert set(nested["failure_domain"]["enum"]) == {
         d.value for d in rawstor_specs.FailureDomain
     }

@@ -25,17 +25,11 @@ class PolicyInteger(types.Integer):
         return not isinstance(value, bool) and super().validate(value)
 
 
-class ChunkSize(PolicyInteger):
-    def __init__(self):
-        super().__init__(min_value=1, max_value=1 << 30)
-
-    def validate(self, value):
-        return super().validate(value) and value & (value - 1) == 0
+RAWSTOR_CHUNK_SIZE = 1 << 30
 
 
 _POLICY_FIELDS = {
     "mirrors": PolicyInteger(min_value=1, max_value=255),
-    "chunk_size": ChunkSize(),
     "failure_domain": types.Enum([domain.value for domain in FailureDomain]),
 }
 
@@ -69,7 +63,6 @@ class RawstorPoolPolicy(common_types.SchematicType):
 class RawstorPoolDriverSpec(types_dynamic.AbstractKindModel, models.SimpleViewMixin):
     KIND = "rawstor"
     mirrors = properties.property(_POLICY_FIELDS["mirrors"], default=2)
-    chunk_size = properties.property(_POLICY_FIELDS["chunk_size"], default=1 << 30)
     failure_domain = properties.property(
         _POLICY_FIELDS["failure_domain"], default="server"
     )

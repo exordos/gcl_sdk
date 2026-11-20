@@ -309,7 +309,6 @@ class RawstorStorageClusterDriver(AbstractStorageClusterDriver):
                     ephemeral=policy["ephemeral"],
                     driver_spec=pool_base.rawstor_specs.RawstorPoolDriverSpec(
                         mirrors=policy["mirrors"],
-                        chunk_size=policy["chunk_size"],
                         failure_domain=policy["failure_domain"],
                     ),
                     capacity_usable=available,

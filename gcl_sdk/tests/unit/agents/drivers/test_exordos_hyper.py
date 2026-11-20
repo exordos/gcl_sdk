@@ -192,7 +192,6 @@ class TestVolumeLifecycle:
             storage_location="mds://10.20.0.2:7776/",
             storage_policy={
                 "mirrors": 2,
-                "chunk_size": 64 << 20,
                 "failure_domain": "rack",
             },
         )
@@ -207,7 +206,7 @@ class TestVolumeLifecycle:
             f"mds://{volume.project_id}@10.20.0.2:7776/{volume.uuid}"
         )
         target.create.assert_called_once_with(
-            size=2 << 30, width=2, chunk_size=64 << 20, failure_domain="rack"
+            size=2 << 30, width=2, chunk_size=1 << 30, failure_domain="rack"
         )
         assert created.storage_location == "mds://10.20.0.2:7776/"
         assert (

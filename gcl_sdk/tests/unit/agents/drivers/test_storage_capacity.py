@@ -15,8 +15,6 @@
 #    under the License.
 import uuid
 
-import pytest
-
 from gcl_sdk.agents.universal.drivers import storage_capacity as capacity
 
 GIB = 1 << 30
@@ -31,7 +29,7 @@ def node(host, free):
 
 
 def policy(mirrors):
-    return {"mirrors": mirrors, "failure_domain": "server", "chunk_size": GIB}
+    return {"mirrors": mirrors, "failure_domain": "server"}
 
 
 def test_two_pools_share_one_physical_budget():
@@ -79,10 +77,3 @@ def test_default_policies_have_stable_identity_and_distinct_replication():
         ("COLD", True, 1),
         ("COLD", False, 2),
     }
-
-
-@pytest.mark.parametrize("chunk", [0, 3 * GIB, 2 * GIB])
-def test_policy_rejects_unsupported_chunk_sizes(chunk):
-    p = next(iter(capacity.default_policies(uuid.uuid4()).values()))
-    with pytest.raises(ValueError):
-        capacity.validate_policy({**p, "chunk_size": chunk})

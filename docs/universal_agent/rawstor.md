@@ -13,8 +13,8 @@ Core constructs a `RawstorStorageClusterAgentSpec` snapshot with UUID-keyed
 `nodes` and `pools` from the separate node and pool resources.
 
 Pool snapshots use a typed nested schema. `tier` and `failure_domain` are enums,
-`ephemeral` is boolean, and `mirrors` ranges from 1 to 255. `chunk_size` must be
-a positive power of two no larger than 1 GiB. Invalid payloads fail during
+`ephemeral` is boolean, and `mirrors` ranges from 1 to 255. Chunk size is fixed
+internally at 1 GiB and is not part of pool configuration. Invalid payloads fail during
 parsing, before configuring services or querying capacity.
 
 Drivers use the packaged `rawstor-mds@.service` and `rawstor-ost@.service`
