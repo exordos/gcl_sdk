@@ -91,6 +91,7 @@ nav:
     - Capability driver Quick start: universal_agent/capability_driver_quick_start.md
     - Metadata driver Quick start: universal_agent/metadata_driver_quick_start.md
     - Direct driver Quick start: universal_agent/direct_driver_quick_start.md
+    - Rawstor drivers: universal_agent/rawstor.md
   - Universal Builder:
     - Universal Builder: universal_builder/universal_builder.md
     - Universal Builder Quick start: universal_builder/universal_builder_quick_start.md
