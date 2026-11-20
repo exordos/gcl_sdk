@@ -79,8 +79,8 @@ filesystem growth remain separate operations.
 
 ## Integration tests
 
-The pinned integration uses bindings `99.0.0+0.eee4365` from
-[Actions run 44297955553](https://github.com/rawstor/librawstor/actions/runs/44297955553).
+The pinned integration uses bindings `0.3.0` from
+[Rawstor v0.3.0](https://github.com/rawstor/librawstor/releases/tag/v0.3.0).
 Use native packages and bindings from the same build.
 
 Set `RAWSTOR_TEST_MDS`, `RAWSTOR_TEST_OST` and `RAWSTOR_TEST_VHOST` to daemon paths
