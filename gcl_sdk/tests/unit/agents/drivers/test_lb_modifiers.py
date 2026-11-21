@@ -157,6 +157,25 @@ def test_cors_headers_land_inside_the_route_location(lb):
     assert "proxy_pass http://pool_a;" in body
 
 
+@pytest.mark.parametrize("http2", [None, True, False])
+@pytest.mark.parametrize("proto,port", [("http", 80), ("https", 443)])
+def test_vhost_http2(lb, http2, proto, port):
+    vhost = _cors_vhost()
+    vhost.update(proto=proto, port=port, proxy_proto_from="10.0.0.0/8")
+    if http2 is not None:
+        vhost["http2"] = http2
+
+    rendered = lb._gen_vhost_l7(vhost, is_default=True)
+
+    protocol = ""
+    if proto == "https":
+        protocol = " ssl" + (" http2" if http2 is not False else "")
+    assert (
+        f"listen 0.0.0.0:{port}{protocol} proxy_protocol default_server;"
+        in rendered
+    )
+
+
 def test_cors_preflight_headers_survive_a_non_2xx_response(lb):
     # Browsers reject a preflight whose 4xx response lost the CORS headers,
     # so every rendered add_header must carry `always`.
