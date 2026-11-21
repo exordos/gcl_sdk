@@ -183,3 +183,33 @@ def test_emptied_self_renders_siblings_only(shared_meta):
     _l4, l7 = _render(lb_a)
     assert "listen 0.0.0.0:80;" not in l7
     assert "listen 0.0.0.0:8443" in l7
+
+
+def test_port_without_catch_all_gets_a_rejecting_default(shared_meta):
+    # No "_" vhost on a port: nginx would make the first named vhost the
+    # default and proxy every unmatched Host/SNI to its backend.
+    lb_a, _lb_b = shared_meta
+    lb_a.vhosts[0]["domains"] = ["site.example"]
+    view_b = lb_a._common_storage["paas_lb_agent"]["resources"][str(UUID_B)]
+    view_b["vhosts"][0]["domains"] = ["other.example"]
+
+    _l4, l7 = _render(lb_a)
+    for port in (80, 8443):
+        fallback = f"""\
+server {{
+listen 0.0.0.0:{port} default_server;
+ssl_reject_handshake on;
+return 444;
+}}"""
+        assert fallback in l7
+    assert l7.count("default_server") == 2
+
+
+def test_catch_all_port_gets_no_fallback(shared_meta):
+    # A "_" vhost already is the port's default; a second one would make
+    # nginx refuse the whole config.
+    lb_a, _lb_b = shared_meta
+
+    _l4, l7 = _render(lb_a)
+    assert l7.count("default_server") == 2
+    assert "ssl_reject_handshake" not in l7
