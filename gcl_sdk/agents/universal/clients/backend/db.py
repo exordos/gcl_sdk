@@ -55,6 +55,11 @@ class ModelSpec(tp.NamedTuple):
     # This is used to be able to filter resources on the list method
     inject_filter_fields: bool = True
 
+    # For nested resources, the parent kind and relationship field used to
+    # attach the resource to its parent model.
+    parent_kind: str | None = None
+    parent_field: str = "parent"
+
     @classmethod
     def from_collection(
         cls,
@@ -82,8 +87,54 @@ class DatabaseBackendClient(base.AbstractBackendClient):
     ):
         super().__init__()
         self._model_spec_map = {m.kind: m for m in model_specs}
+        for spec in self._model_spec_map.values():
+            if spec.parent_kind and spec.parent_kind not in self._model_spec_map:
+                raise ValueError(
+                    f"Unknown parent kind {spec.parent_kind!r} "
+                    f"configured for {spec.kind!r}."
+                )
+            if (
+                spec.parent_kind
+                and spec.parent_field not in spec.model.properties.properties
+            ):
+                raise ValueError(
+                    f"Unknown parent field {spec.parent_field!r} "
+                    f"configured for {spec.kind!r}."
+                )
         self._tf_storage = tf_storage
         self.set_session(session)
+
+    def _get_parent(
+        self,
+        session: tp.Any,
+        model_spec: ModelSpec,
+        resource: models.Resource,
+        value: dict[str, tp.Any],
+    ) -> ra_storage.AbstractStorableMixin | None:
+        if not model_spec.parent_kind:
+            return None
+
+        parent_spec = self._model_spec_map[model_spec.parent_kind]
+        parent_ref = value.get(model_spec.parent_field)
+        if parent_ref is None:
+            parent_uuid = getattr(resource, "master", None)
+        elif isinstance(parent_ref, dict):
+            parent_uuid = parent_ref.get("uuid")
+        else:
+            parent_uuid = getattr(parent_ref, "uuid", parent_ref)
+
+        if parent_uuid is None:
+            raise ValueError(
+                f"Missing parent for {resource.kind} {resource.uuid}; "
+                f"expected {model_spec.parent_kind!r} in "
+                f"{model_spec.parent_field!r} or the resource master."
+            )
+
+        parent = parent_spec.model.objects.get_one(
+            session=session,
+            filters={"uuid": dm_filters.EQ(str(parent_uuid))},
+        )
+        return parent
 
     def _get_resource_filters(
         self, resource: models.Resource
@@ -158,9 +209,11 @@ class DatabaseBackendClient(base.AbstractBackendClient):
             LOG.warning("The resource already exists: %s", resource.uuid)
             raise client_exc.ResourceAlreadyExists(resource=resource)
 
+        value = resource.value.copy()
+        inject_filter_fields = model_spec.inject_filter_fields and model_spec.filters
+
         # Inject filter fields into the resource value if they are not present
-        if model_spec.inject_filter_fields and model_spec.filters:
-            value = resource.value.copy()
+        if inject_filter_fields:
             for field, _filter in model_spec.filters.items():
                 if field not in value:
                     value[field] = _filter.value
@@ -171,9 +224,19 @@ class DatabaseBackendClient(base.AbstractBackendClient):
                         field,
                         resource.uuid,
                     )
-            obj = model_spec.model.restore_from_simple_view(**value)
+
+        parent = self._get_parent(session, model_spec, resource, value)
+        if inject_filter_fields:
+            if parent is not None:
+                value[model_spec.parent_field] = parent
+            obj = model_spec.model.restore_from_simple_view(
+                skip_unknown_fields=False,
+                **value,
+            )
         else:
             obj = model_spec.model.from_ua_resource(resource)
+            if parent is not None:
+                setattr(obj, model_spec.parent_field, parent)
 
         # Save to db
         obj.insert(session=session)
@@ -196,7 +259,29 @@ class DatabaseBackendClient(base.AbstractBackendClient):
             LOG.warning("The resource does not exist: %s", resource.uuid)
             raise client_exc.ResourceNotFound(resource=resource)
 
+        value = resource.value.copy()
+        parent = self._get_parent(
+            session,
+            model_spec,
+            resource,
+            value,
+        )
         updated_obj = model_spec.model.from_ua_resource(resource)
+        if parent is not None:
+            setattr(updated_obj, model_spec.parent_field, parent)
+
+        old_parent = None
+        parent_changed = False
+        if model_spec.parent_kind:
+            parent_field = model_spec.parent_field
+            current_parent = getattr(obj, parent_field)
+            target_parent = getattr(updated_obj, parent_field)
+            current_parent_uuid = getattr(current_parent, "uuid", current_parent)
+            target_parent_uuid = getattr(target_parent, "uuid", target_parent)
+            if str(current_parent_uuid) != str(target_parent_uuid):
+                setattr(obj, parent_field, target_parent)
+                old_parent = current_parent
+                parent_changed = True
 
         # Update the object
         for field_name in resource.value:
@@ -213,8 +298,10 @@ class DatabaseBackendClient(base.AbstractBackendClient):
         # makes every other reconciler sharing that row see it as "changed"
         # and re-actualize forever — a self-sustaining write loop that never
         # settles. Skipping a clean update keeps reconciliation idempotent.
-        if obj.is_dirty():
-            obj.update(session=session)
+        if obj.is_dirty() or parent_changed:
+            obj.update(session=session, force=parent_changed)
+            if old_parent is not None:
+                old_parent.update(session=session, force=True)
 
         return obj
 

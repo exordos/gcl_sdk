@@ -23,6 +23,14 @@ def _make_resource(
     )
 
 
+def _make_driver() -> MagicMock:
+    driver = MagicMock()
+    driver.resources_equal.side_effect = lambda target, actual: (
+        target.hash == actual.hash
+    )
+    return driver
+
+
 def _make_service(
     *,
     caps_drivers=None,
@@ -51,7 +59,7 @@ def _make_service(
 class TestActualizeCapability:
     def test_creates_new_resources(self):
         target_resource = _make_resource()
-        driver = MagicMock()
+        driver = _make_driver()
         driver.list.return_value = []
 
         service = MagicMock()
@@ -67,7 +75,7 @@ class TestActualizeCapability:
 
     def test_deletes_removed_resources(self):
         actual_resource = _make_resource()
-        driver = MagicMock()
+        driver = _make_driver()
         driver.list.return_value = [actual_resource]
 
         service = MagicMock()
@@ -89,7 +97,7 @@ class TestActualizeCapability:
             value, KIND, target_fields=frozenset(value.keys())
         )
 
-        driver = MagicMock()
+        driver = _make_driver()
         driver.list.return_value = [actual]
 
         service = MagicMock()
@@ -116,7 +124,7 @@ class TestActualizeCapability:
             target_fields=frozenset({"uuid", "name"}),
         )
 
-        driver = MagicMock()
+        driver = _make_driver()
         driver.list.return_value = [target]
 
         service = MagicMock()
@@ -129,9 +137,35 @@ class TestActualizeCapability:
         assert result == [updated]
         service._update_resource.assert_called_once_with(driver, updated)
 
+    def test_reparents_when_hash_is_unchanged_and_preserves_master(self):
+        resource_uuid = sys_uuid.uuid4()
+        old_parent = sys_uuid.uuid4()
+        new_parent = sys_uuid.uuid4()
+        value = {"uuid": str(resource_uuid), "name": "route"}
+        target = _make_resource(value, uuid=resource_uuid)
+        target.master = new_parent
+        actual = _make_resource(value, uuid=resource_uuid)
+        actual.master = old_parent
+        updated = _make_resource(value, uuid=resource_uuid)
+
+        driver = _make_driver()
+        driver.resources_equal.side_effect = lambda expected, observed: (
+            expected.hash == observed.hash
+            and expected.master == observed.master
+        )
+        driver.list.return_value = [actual]
+        driver.update.return_value = updated
+        service = _make_service()
+
+        result = service._actualize_capability(driver, CAPABILITY, [target])
+
+        driver.update.assert_called_once_with(target)
+        assert len(result) == 1
+        assert result[0].master == new_parent
+
     def test_create_exception_does_not_propagate(self):
         target_resource = _make_resource()
-        driver = MagicMock()
+        driver = _make_driver()
         driver.list.return_value = []
 
         service = MagicMock()
@@ -145,7 +179,7 @@ class TestActualizeCapability:
 
     def test_delete_exception_adds_resource_back(self):
         actual_resource = _make_resource()
-        driver = MagicMock()
+        driver = _make_driver()
         driver.list.return_value = [actual_resource]
 
         service = MagicMock()
@@ -170,7 +204,7 @@ class TestActualizeCapability:
             target_fields=frozenset({"uuid", "name"}),
         )
 
-        driver = MagicMock()
+        driver = _make_driver()
         driver.list.return_value = [target]
 
         service = MagicMock()
@@ -183,7 +217,7 @@ class TestActualizeCapability:
         assert result == []
 
     def test_empty_lists_returns_empty_list(self):
-        driver = MagicMock()
+        driver = _make_driver()
         driver.list.return_value = []
 
         service = MagicMock()
@@ -223,7 +257,7 @@ class TestActualizeCapability:
             target_fields=frozenset({"uuid", "name"}),
         )
 
-        driver = MagicMock()
+        driver = _make_driver()
         driver.list.return_value = [
             removed_resource,
             unchanged_actual,
@@ -272,7 +306,7 @@ class TestReadFailureProtection:
 
         collected_payload = models.Payload.empty()
 
-        driver = MagicMock()
+        driver = _make_driver()
         driver.get_capabilities.return_value = [KIND]
         driver.list.side_effect = RuntimeError("simulated DB outage")
 
@@ -294,7 +328,7 @@ class TestReadFailureProtection:
 
         collected_payload = models.Payload.empty()
 
-        driver = MagicMock()
+        driver = _make_driver()
         driver.get_capabilities.return_value = [KIND]
         driver.list.return_value = [resource]
 
@@ -314,7 +348,7 @@ class TestReadFailureProtection:
         payload.add_facts_resources(resources)
         payload.calculate_hash()
 
-        driver = MagicMock()
+        driver = _make_driver()
         driver.get_capabilities.return_value = [KIND]
         driver.list.side_effect = RuntimeError("simulated DB outage")
 
@@ -373,7 +407,7 @@ class TestReadFailureProtection:
         payload.add_facts_resources(resources)
         payload.calculate_hash()
 
-        driver = MagicMock()
+        driver = _make_driver()
         driver.get_capabilities.return_value = [KIND]
         driver.list.side_effect = RuntimeError("simulated DB outage")
 
@@ -399,7 +433,7 @@ class TestReadFailureProtection:
         payload.add_facts_resources(resources)
         payload.calculate_hash()
 
-        driver = MagicMock()
+        driver = _make_driver()
         driver.get_capabilities.return_value = [KIND]
         # Successful read returning the very same resources: no reconciliation
         # work, but the category is processed and the snapshot is saved.
@@ -434,7 +468,7 @@ class TestReadFailureProtection:
         # What ``UniversalAgent.get_payload`` returns on a hash match
         unchanged = models.Payload(hash=last_payload.hash, version=last_payload.version)
 
-        driver = MagicMock()
+        driver = _make_driver()
         driver.get_capabilities.return_value = [KIND]
 
         orch = MagicMock()
@@ -460,7 +494,7 @@ class TestReadFailureProtection:
         payload.add_facts_resources(resources)
         payload.calculate_hash()
 
-        driver = MagicMock()
+        driver = _make_driver()
         driver.get_capabilities.return_value = [KIND, CAPABILITY]
         driver.list.return_value = resources
 
@@ -555,7 +589,7 @@ class TestReadFailureProtection:
         payload.add_facts_resources(fail_resources)
         payload.calculate_hash()
 
-        driver = MagicMock()
+        driver = _make_driver()
         driver.get_capabilities.return_value = [ok_kind, fail_kind]
         driver.dependent_capabilities.return_value = False
 
@@ -585,7 +619,7 @@ class TestReadFailureProtection:
         payload.add_caps_resources(ok_resources)
         payload.capabilities[fail_kind] = {"resources": []}
 
-        driver = MagicMock()
+        driver = _make_driver()
         driver.get_capabilities.return_value = [ok_kind, fail_kind]
         driver.dependent_capabilities.return_value = True
         driver.list.side_effect = [
