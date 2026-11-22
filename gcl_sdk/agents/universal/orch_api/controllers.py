@@ -19,6 +19,7 @@ from restalchemy.api import actions
 from restalchemy.api import constants as ra_c
 from restalchemy.api import field_permissions as field_p
 from restalchemy.api import resources
+from restalchemy.dm import filters as dm_filters
 
 from gcl_sdk.agents.universal import constants as c
 from gcl_sdk.agents.universal.api import controllers as sdk_controllers
@@ -42,6 +43,14 @@ class UniversalAgentsController(sdk_controllers.BaseSdkResourceController):
             },
         ),
     )
+
+    def get_autofilters(self):
+        return {
+            "node": dm_filters.EQ(self._req.context.encryption_information.node_uuid)
+        }
+
+    def get_autovalues(self):
+        return {"node": self._req.context.encryption_information.node_uuid}
 
     def create(self, **kwargs):
         """Create the agent, always starting it ACTIVE.
