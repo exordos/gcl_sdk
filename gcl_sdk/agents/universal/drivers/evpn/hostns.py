@@ -27,6 +27,7 @@ import json
 import logging
 import os
 import re
+import shlex
 import socket
 import struct
 import subprocess
@@ -404,6 +405,137 @@ TRANSFER_FORWARD_TAG = "evpn-transfer-forward"
 # `guard_key` ignores the target, so shared tags would sweep each other.
 PUBLISHED_TAG = "evpn-published"
 
+FLAT_CHAIN = "EVPN-FLAT"
+
+
+def normalize_egress_policy(flat_prefixes, protected_prefixes) -> dict:
+    policy = {}
+    for key, values in (
+        ("flat_prefixes", flat_prefixes),
+        ("protected_prefixes", protected_prefixes),
+    ):
+        prefixes = [ipaddress.IPv4Network(str(value), strict=False) for value in values]
+        policy[key] = sorted({str(prefix) for prefix in prefixes})
+    return policy
+
+
+def egress_policy() -> dict | None:
+    try:
+        with open(base.EGRESS_POLICY_FILE) as stream:
+            value = json.load(stream)
+    except FileNotFoundError:
+        return None
+    return normalize_egress_policy(value["flat_prefixes"], value["protected_prefixes"])
+
+
+def set_egress_policy(flat_prefixes, protected_prefixes) -> None:
+    policy = normalize_egress_policy(flat_prefixes, protected_prefixes)
+    sh.write_if_changed(base.EGRESS_POLICY_FILE, json.dumps(policy, sort_keys=True))
+
+
+def _flat_specs(vni: int) -> list[list[str]] | None:
+    policy = egress_policy()
+    if policy is None:
+        return None
+    addresses = host_addresses()
+    if addresses is None:
+        raise RuntimeError("evpn: cannot read host addresses; flat policy unchanged")
+    specs = [["-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "--ctdir", "REPLY", "-j", "RETURN"]]
+    # Explicit operator publications can expose a service on a protected host.
+    for entry in published_addresses():
+        spec = published_spec(entry, "gw%d" % vni)
+        if spec is not None:
+            specs.append([*spec, "-j", "ACCEPT"])
+    protected = set(policy["protected_prefixes"])
+    protected.update("%s/32" % address for address in addresses)
+    protected.update((transfer_net(), *INTERNAL_SPACE[4:]))
+    protected = {
+        str(prefix)
+        for prefix in ipaddress.collapse_addresses(
+            ipaddress.IPv4Network(prefix) for prefix in protected
+        )
+    }
+    specs.extend(["-d", prefix, "-j", "DROP"] for prefix in sorted(protected))
+    specs.extend(
+        ["-p", proto, "--dport", port, "-j", "DROP"] for proto, port in FABRIC_PORTS
+    )
+    specs.extend(["-d", prefix, "-j", "ACCEPT"] for prefix in policy["flat_prefixes"])
+    specs.extend(["-d", prefix, "-j", "DROP"] for prefix in internal_destinations())
+    specs.append(["-j", "RETURN"])
+    return specs
+
+
+def _flat_rule_key(rule: str) -> tuple:
+    tokens = shlex.split(rule)
+    if tokens[:1] == ["-A"]:
+        tokens = tokens[2:]
+    normalized = []
+    while tokens:
+        token = tokens.pop(0)
+        if token == "-m" and tokens and tokens[0] in ("tcp", "udp"):
+            tokens.pop(0)
+            continue
+        normalized.append(token)
+        if token == "-d":
+            normalized.append(normalized_prefix(tokens.pop(0)))
+        elif token == "--ctstate":
+            normalized.append(",".join(sorted(tokens.pop(0).split(","))))
+    # iptables-save canonicalizes destination before interface, regardless
+    # of their order in the input. Compare these selectors by meaning.
+    selectors = []
+    for option in ("-d", "-i"):
+        if option in normalized:
+            index = normalized.index(option)
+            selectors.extend(normalized[index : index + 2])
+            del normalized[index : index + 2]
+    return tuple(selectors + normalized)
+
+
+def _flat_is_installed(vni: int, specs: list[list[str]], saved: str) -> bool:
+    rules = [
+        line for line in saved.splitlines() if line.startswith("-A %s " % FLAT_CHAIN)
+    ]
+    jump = "-A FORWARD -i gw%d -j %s" % (vni, FLAT_CHAIN)
+    forward = [line for line in saved.splitlines() if line.startswith("-A FORWARD ")]
+    return bool(forward and forward[0] == jump) and (
+        [_flat_rule_key(rule) for rule in rules]
+        == [_flat_rule_key(" ".join(spec)) for spec in specs]
+    )
+
+
+def flat_policy_is_installed(vni: int) -> bool:
+    specs = _flat_specs(vni)
+    return specs is None or _flat_is_installed(
+        vni, specs, saved_rules(vni_ns(vni), "filter")
+    )
+
+
+def ensure_flat_policy(vni: int) -> None:
+    """Atomically replace the policy before the conservative egress guard."""
+    specs = _flat_specs(vni)
+    if specs is None:
+        return
+    ns = vni_ns(vni)
+    saved = saved_rules(ns, "filter")
+    if _flat_is_installed(vni, specs, saved):
+        return
+    lines = ["*filter", ":%s - [0:0]" % FLAT_CHAIN, "-F %s" % FLAT_CHAIN]
+    lines.extend("-A %s %s" % (FLAT_CHAIN, " ".join(spec)) for spec in specs)
+    # Reattach at the head in the same transaction, including after a guard repair.
+    jump = "-A FORWARD -i gw%d -j %s" % (vni, FLAT_CHAIN)
+    lines.extend(
+        line.replace("-A FORWARD ", "-D FORWARD ", 1)
+        for line in saved.splitlines()
+        if line == jump
+    )
+    lines.extend(["-I FORWARD 1 -i gw%d -j %s" % (vni, FLAT_CHAIN), "COMMIT"])
+    path = os.path.join(base.EGRESS_RECORDS_DIR, str(vni), "guard.rules")
+    sh.write_atomic(path, "\n".join(lines) + "\n")
+    try:
+        sh.ns_run(ns, base.IPTABLES_RESTORE_BIN, "-w", "5", "--noflush", path)
+    finally:
+        sh.remove(path)
+
 
 def published_addresses() -> list:
     """What this host was last told the installation publishes."""
@@ -585,8 +717,8 @@ def transfer_net() -> str:
     return "%d.%d.0.0/16" % base.EGRESS_TRANSFER_BASE
 
 
-def underlay_prefixes() -> list[str]:
-    """Every network this host is directly attached to (the underlay).
+def connected_prefixes() -> list[str]:
+    """Every network this host is directly attached to, regardless of role.
 
     Excludes the transfer range (see `transfer_net`). An unreadable snapshot
     aborts reconciliation so existing egress guards remain installed.
@@ -624,14 +756,14 @@ def internal_destinations() -> list[str]:
     this host's own addresses (a /32 on ``lo``, e.g. a router id, has no
     on-link route, yet is the host's every service).
     """
-    underlay = underlay_prefixes()
+    connected = connected_prefixes()
     addresses = host_addresses()
     if addresses is None:
         raise RuntimeError("evpn: cannot read host addresses; egress guard unchanged")
     space = [ipaddress.ip_network(p) for p in INTERNAL_SPACE]
     prefixes = list(INTERNAL_SPACE) + [transfer_net()]
     own = ["%s/32" % address for address in sorted(addresses)]
-    for prefix in underlay + own:
+    for prefix in connected + own:
         network = ipaddress.ip_network(prefix, strict=False)
         if any(
             network.version == known.version and network.subnet_of(known)
@@ -707,6 +839,7 @@ def ensure_fabric_guard(vni: int) -> None:
     ensure_rule("FORWARD", *established, ns=ns, table="filter", head=True)
     # Stale rules go only after the current ones are in place.
     _drop_stale_forward(ns, FABRIC_GUARD_TAG, keys, "egress guard")
+    ensure_flat_policy(vni)
 
 
 def egress_leg(vni: int) -> str:

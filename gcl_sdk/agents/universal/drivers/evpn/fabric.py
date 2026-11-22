@@ -421,13 +421,14 @@ class EvpnHost(evpn_models.EvpnHost, _GobgpConfModel):
         Here rather than per port: the set changes installation-wide, and
         every VNI on the host must learn it, not only the next touched one.
         """
+        hostns.set_egress_policy(self.flat_prefixes, self.protected_prefixes)
         if hostns.set_published_addresses(self.published_addresses):
             LOG.info(
                 "evpn: the installation publishes %d address(es)",
                 len(self.published_addresses or []),
             )
         for vni in hostns.vnis_on_host():
-            hostns.ensure_published_reachable(vni)
+            hostns.ensure_fabric_guard(vni)
 
     def _restore_extra(self) -> None:
         if not os.path.isdir(base.CONNECTOR_RUN_DIR):
@@ -462,9 +463,23 @@ class EvpnHost(evpn_models.EvpnHost, _GobgpConfModel):
         ):
             LOG.warning("evpn: host %s has a stale published-address set", self.uuid)
             raise driver_exc.InvalidDataPlaneObjectError(obj={"uuid": str(self.uuid)})
+        try:
+            policy = hostns.egress_policy() or hostns.normalize_egress_policy([], [])
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            raise driver_exc.InvalidDataPlaneObjectError(
+                obj={"uuid": str(self.uuid)}
+            ) from error
+        if policy != hostns.normalize_egress_policy(
+            self.flat_prefixes, self.protected_prefixes
+        ):
+            raise driver_exc.InvalidDataPlaneObjectError(obj={"uuid": str(self.uuid)})
         for vni in hostns.vnis_on_host():
             if not hostns.published_is_installed(vni):
                 LOG.warning("evpn: vni %d lost its published-address grants", vni)
+                raise driver_exc.InvalidDataPlaneObjectError(
+                    obj={"uuid": str(self.uuid)}
+                )
+            if not hostns.flat_policy_is_installed(vni):
                 raise driver_exc.InvalidDataPlaneObjectError(
                     obj={"uuid": str(self.uuid)}
                 )

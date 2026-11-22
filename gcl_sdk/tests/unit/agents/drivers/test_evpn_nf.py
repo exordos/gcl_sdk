@@ -541,11 +541,7 @@ def test_a_guest_may_not_list_what_every_machine_reports(tmp_path):
 
 
 def test_a_guest_may_ask_the_platform_about_itself_only(tmp_path):
-    """The platform's ports are its whole API and an overlay guest reaches
-    them only through this proxy, so this is the only place that can hold a
-    guest to its own business. Without it a tenant reads any machine's boot
-    script and any agent's payload — the installation's own included —
-    because the boot API answers those to whoever can reach it."""
+    """Machine paths are node-scoped; APIs scope agent UUIDs to that node."""
     from gcl_sdk.agents.universal.drivers import evpn_proxy
 
     me = "11111111-1111-1111-1111-111111111111"
@@ -561,7 +557,7 @@ def test_a_guest_may_ask_the_platform_about_itself_only(tmp_path):
     assert _gate(handler, "/v1/boots/%s" % me, "GET", None)
     assert _gate(handler, "/v1/agents/%s/actions/get_payload" % me, "GET", None)
     assert not _gate(handler, "/v1/boots/%s" % other, "GET", None)
-    assert not _gate(handler, "/v1/agents/%s/actions/get_payload" % other, "GET", None)
+    assert _gate(handler, "/v1/agents/%s/actions/get_payload" % other, "GET", None)
 
     # Registration is the exception that proves the rule: an agent that does
     # not exist yet cannot be named in a path, so the body says who it is.
@@ -929,6 +925,19 @@ def test_the_platform_answers_only_the_calls_a_guest_makes(tmp_path):
         ("/v1/kind/password/resources?node=%s" % ME, "GET", None),
     ):
         assert not _gate(handler, path, method, payload), (method, path)
+
+
+@pytest.mark.parametrize("method,suffix", [("PUT", ""), ("GET", "/actions/get_payload")])
+def test_secondary_agents_use_agent_uuids_not_node_uuids(tmp_path, method, suffix):
+    from gcl_sdk.agents.universal.drivers import evpn_proxy
+
+    handler = _handler_for(_gated_records(tmp_path, ME))
+    handler.headers = {evpn_proxy.NODE_UUID_HEADER: ME}
+    # The API scopes agent records to the authenticated node.
+    path = "/v1/agents/" + OTHER + suffix
+    assert _gate(handler, path, method, b"{}")
+    handler.client_address = ("10.42.0.8", 1234)
+    assert not _gate(handler, path, method, b"{}")
 
 
 def test_a_machine_named_after_the_question_mark_counts(tmp_path):
@@ -1853,3 +1862,22 @@ def test_boot_transport_follows_the_route_even_on_a_custom_backend_port(
     request = seen["request"]
     assert b"sentinel" not in request.data
     assert request.selector == boot_identity.RELAY_PATH
+
+
+@pytest.mark.parametrize("primary", [True, False])
+def test_metadata_netboot_has_an_on_link_route_with_multiple_nics(primary):
+    rec = _rec(default_route=primary)
+    original = list(rec["routers"])
+    reply = nf.build_reply(
+        b"\x00" * 4,
+        0x8000,
+        MAC,
+        nf.ACK,
+        rec,
+        "10.42.0.0/24",
+        "10.42.0.254",
+        dhcp={"filename": "http://169.254.169.254/boot/boot.ipxe"},
+    )
+    metadata_route = bytes([32, 169, 254, 169, 254]) + socket.inet_aton("0.0.0.0")
+    assert metadata_route in _options(reply).get(121, b"")
+    assert rec["routers"] == original

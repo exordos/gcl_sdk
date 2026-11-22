@@ -74,6 +74,8 @@ class EvpnHost(models.ModelWithRequiredUUID):
     # drops non-globally-routable egress; these may be private yet are meant
     # to be reached, so they are let through.
     published_addresses = properties.property(ra_types.List(), default=list)
+    flat_prefixes = properties.property(ra_types.List(), default=list)
+    protected_prefixes = properties.property(ra_types.List(), default=list)
 
 
 class BgpRr(models.ModelWithRequiredUUID):

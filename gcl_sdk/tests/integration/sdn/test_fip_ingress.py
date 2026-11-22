@@ -171,8 +171,9 @@ def test_the_segment_reaches_a_guest_of_the_overlay(guest_with_fip, segment):
     assert segment.asks(FIP), _run(["ip", "neigh", "show", "proxy"], check=False)
 
 
+@pytest.mark.parametrize("flat_policy", [False, True])
 def test_the_guard_refuses_what_the_guest_starts_and_not_the_way_in(
-    guest_with_fip, segment
+    guest_with_fip, segment, flat_policy
 ):
     """Both halves at once, because they live in the same chain.
 
@@ -185,6 +186,9 @@ def test_the_guard_refuses_what_the_guest_starts_and_not_the_way_in(
     and nothing about what is delivered to it.
     """
     guest, _tag = guest_with_fip
+    if flat_policy:
+        hostns.set_egress_policy([SEGMENT], [PEER_IP])
+        hostns.ensure_fabric_guard(VNI)
 
     assert segment.asks(FIP), "the way in is not the guard's to refuse"
     assert not guest.ping(HOST_IP, count=1, wait=1), (
