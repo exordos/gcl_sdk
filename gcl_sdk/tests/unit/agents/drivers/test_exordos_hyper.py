@@ -1140,7 +1140,7 @@ def test_hypervisor_never_creates_accounts_or_objects(tmp_path, monkeypatch):
     assert recovered.project_id == project
 
 
-def test_remote_client_uses_volume_control_credentials(monkeypatch):
+def test_remote_client_uses_shared_control_credentials(monkeypatch):
     from gcl_sdk.agents.universal.drivers import rawstor_tls
 
     factory = MagicMock()
@@ -1148,5 +1148,5 @@ def test_remote_client_uses_volume_control_credentials(monkeypatch):
     volume = sys_uuid.uuid4()
     exordos_hyper._rawstor_module(volume)
     factory.assert_called_once_with(
-        rawstor_tls.TLS_DIR / ("control-volume-" + str(volume))
+        rawstor_tls.TLS_DIR / ("volume-" + str(volume)) / "control"
     )

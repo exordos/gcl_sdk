@@ -82,6 +82,19 @@ def install(name, credentials):
     os.chown(directory, 0, group)
     os.chmod(directory, directory_mode)
     current = directory / "current"
+    if name.startswith("control-agent-") and current.exists():
+        existing = x509.load_pem_x509_certificate((current / "cert.crt").read_bytes())
+        # Volume targets can arrive out of order during shared identity renewal.
+        if (
+            existing.not_valid_before_utc > leaf.not_valid_before_utc
+            and existing.not_valid_after_utc > leaf.not_valid_after_utc
+            and (current / "ca.crt").read_text() == values["ca"]
+            and existing.extensions.get_extension_for_class(
+                x509.SubjectAlternativeName
+            ).value.get_values_for_type(x509.UniformResourceIdentifier)
+            == identities
+        ):
+            return directory, False
     if current.is_symlink() and os.readlink(current) == digest:
         return directory, False
     generation = directory / digest
@@ -113,6 +126,33 @@ def install(name, credentials):
     finally:
         link.unlink(missing_ok=True)
     return directory, True
+
+
+def install_control(volume_uuid, credentials):
+    """Share one root-only admin identity across this agent's volume clients."""
+    if not credentials or credentials.get("pending"):
+        raise RuntimeError("Rawstor TLS credentials are not ready")
+    from cryptography import x509
+
+    leaf = x509.load_pem_x509_certificate(credentials["cert"].encode())
+    identities = leaf.extensions.get_extension_for_class(
+        x509.SubjectAlternativeName
+    ).value.get_values_for_type(x509.UniformResourceIdentifier)
+    prefix = f"spiffe://{credentials['trust_domain']}/admin/"
+    if len(identities) != 1 or not identities[0].startswith(prefix):
+        raise ValueError("Rawstor control certificate requires an admin identity")
+    agent = uuid.UUID(identities[0][len(prefix) :])
+    directory, _ = install("control-agent-" + str(agent), credentials)
+    volume_dir = TLS_DIR / ("volume-" + str(uuid.UUID(str(volume_uuid))))
+    link = volume_dir / (".control-" + uuid.uuid4().hex)
+    try:
+        link.symlink_to(Path("..") / directory.name)
+        link.replace(volume_dir / "control")
+    finally:
+        link.unlink(missing_ok=True)
+    # Remove the previous duplicated layout only after publishing its replacement.
+    remove("control-volume-" + str(volume_uuid))
+    return directory
 
 
 def remove(name):

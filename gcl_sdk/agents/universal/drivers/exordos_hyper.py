@@ -52,7 +52,7 @@ def _rawstor_module(volume_uuid):
             "Rawstor bindings are required for remote disks; run hypervisors init"
         )
     return rawstor_tls.Bindings(
-        rawstor_tls.TLS_DIR / ("control-volume-" + str(volume_uuid))
+        rawstor_tls.TLS_DIR / ("volume-" + str(volume_uuid)) / "control"
     )
 
 
@@ -90,7 +90,7 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
             # Discovery reconstructs disks from libvirt and the location drop-in.
             # Their credential pairs were already installed by the volume target.
             rawstor_tls.environment(
-                rawstor_tls.TLS_DIR / ("control-volume-" + str(volume.uuid))
+                rawstor_tls.TLS_DIR / ("volume-" + str(volume.uuid)) / "control"
             )
             rawstor_tls.environment(
                 rawstor_tls.TLS_DIR / ("volume-" + str(volume.uuid))
@@ -109,12 +109,10 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
             self._write_remote_location_drop_in(
                 volume.uuid, self._rawstor_address(volume)
             )
-        rawstor_tls.install(
-            "control-volume-" + str(volume.uuid), volume.rawstor_tls.get("control")
-        )
         directory, _ = rawstor_tls.install(
             "volume-" + str(volume.uuid), volume.rawstor_tls.get("service")
         )
+        rawstor_tls.install_control(volume.uuid, volume.rawstor_tls.get("control"))
         unit = self._vhost_unit(volume.uuid)
         dropin = Path(self._vhost_drop_in_dir(volume.uuid)) / "tls.conf"
         from gcl_sdk.agents.universal.drivers.rawstor_cluster import _write_if_changed
