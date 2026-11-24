@@ -2,6 +2,7 @@
 #    Licensed under the Apache License, Version 2.0 (the "License").
 
 import datetime
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -86,9 +87,36 @@ def test_publish_pair_once_with_private_permissions(destination, credentials):
     directory, changed = tls.install("mds-test", credentials)
     assert changed
     assert (directory / "current").is_symlink()
-    assert (directory / "current/key.pem").stat().st_mode & 0o777 == 0o640
+    assert (directory / "current/cert.key").stat().st_mode & 0o777 == 0o640
     assert directory.stat().st_mode & 0o777 == 0o750
-    assert (directory / "current/cert.pem").read_text() == credentials["cert"]
+    assert (directory / "current/cert.crt").read_text() == credentials["cert"]
+    assert tls.install("mds-test", credentials) == (directory, False)
+
+
+def test_old_filenames_are_republished_without_certificate_renewal(
+    destination, credentials
+):
+    values = {k: credentials[k] for k in ("cert", "key", "ca", "trust_domain")}
+    digest = hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest()
+    directory = destination / "mds-test"
+    old = directory / digest
+    old.mkdir(parents=True)
+    for field, filename in (("cert", "cert.pem"), ("key", "key.pem"), ("ca", "ca.pem")):
+        (old / filename).write_text(values[field])
+    (directory / "current").symlink_to(digest)
+
+    _, changed = tls.install("mds-test", credentials)
+
+    assert changed
+    env = tls.environment(directory)
+    for variable, filename, field in (
+        ("RAWSTOR_TLS_CERT", "cert.crt", "cert"),
+        ("RAWSTOR_TLS_KEY", "cert.key", "key"),
+        ("RAWSTOR_TLS_CA", "ca.crt", "ca"),
+    ):
+        assert env[variable] == str(directory / "current" / filename)
+        assert Path(env[variable]).read_text() == values[field]
+    assert (old / "key.pem").read_text() == values["key"]
     assert tls.install("mds-test", credentials) == (directory, False)
 
 
@@ -98,7 +126,7 @@ def test_rotation_keeps_previous_pair_until_publish(destination, credentials):
     replacement = dict(credentials, cert=credentials["cert"] + "\n")
     assert tls.install("mds-test", replacement)[1]
     assert (directory / "current").resolve() != previous
-    assert (previous / "key.pem").read_text() == credentials["key"]
+    assert (previous / "cert.key").read_text() == credentials["key"]
 
 
 @pytest.mark.parametrize("value", [{}, {"pending": True}])
@@ -203,7 +231,7 @@ def test_control_plane_key_is_not_readable_by_rawstor_services(
 ):
     directory, _ = tls.install("control-test", credentials)
     assert directory.stat().st_mode & 0o777 == 0o700
-    assert (directory / "current/key.pem").stat().st_mode & 0o777 == 0o600
+    assert (directory / "current/cert.key").stat().st_mode & 0o777 == 0o600
 
 
 def test_inventory_collects_specs_in_one_worker(credentials, monkeypatch):

@@ -69,7 +69,9 @@ def install(name, credentials):
         serialization.Encoding.DER, form
     ) != leaf.public_key().public_bytes(serialization.Encoding.DER, form):
         raise ValueError("Rawstor certificate and key do not match")
-    digest = hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest()
+    digest = hashlib.sha256(
+        b"cert.crt/cert.key/ca.crt\0" + json.dumps(values, sort_keys=True).encode()
+    ).hexdigest()
     directory = TLS_DIR / name
     directory_mode = 0o700 if name.startswith("control-") else 0o750
     file_mode = 0o600 if name.startswith("control-") else 0o640
@@ -89,9 +91,9 @@ def install(name, credentials):
             os.chown(stage, 0, group)
             os.chmod(stage, directory_mode)
             for key, filename in (
-                ("cert", "cert.pem"),
-                ("key", "key.pem"),
-                ("ca", "ca.pem"),
+                ("cert", "cert.crt"),
+                ("key", "cert.key"),
+                ("ca", "ca.crt"),
             ):
                 path = stage / filename
                 # Create private material with restrictive permissions from the start.
@@ -124,9 +126,9 @@ def environment(directory):
     current = Path(directory) / "current"
     return {
         "RAWSTOR_TLS_TRUST_DOMAIN": (current / "domain").read_text(),
-        "RAWSTOR_TLS_CERT": str(current / "cert.pem"),
-        "RAWSTOR_TLS_KEY": str(current / "key.pem"),
-        "RAWSTOR_TLS_CA": str(current / "ca.pem"),
+        "RAWSTOR_TLS_CERT": str(current / "cert.crt"),
+        "RAWSTOR_TLS_KEY": str(current / "cert.key"),
+        "RAWSTOR_TLS_CA": str(current / "ca.crt"),
     }
 
 
@@ -163,9 +165,9 @@ def temporary_bindings(credentials):
         current = Path(staged) / "current"
         current.mkdir(mode=0o700)
         for name, field in (
-            ("cert.pem", "cert"),
-            ("key.pem", "key"),
-            ("ca.pem", "ca"),
+            ("cert.crt", "cert"),
+            ("cert.key", "key"),
+            ("ca.crt", "ca"),
             ("domain", "trust_domain"),
         ):
             with open(
