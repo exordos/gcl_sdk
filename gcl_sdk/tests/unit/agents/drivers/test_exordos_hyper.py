@@ -681,7 +681,7 @@ def test_qcow2_discovery_does_not_require_rawstor_binding(tmp_path, monkeypatch)
         )
     )
     assert driver.list_volumes() == []
-    with pytest.raises(RuntimeError, match="Rawstor"):
+    with pytest.raises(RuntimeError, match="RawStor"):
         module._rawstor_module(sys_uuid.uuid4())
 
 
@@ -994,7 +994,7 @@ def test_missing_backend_configuration_does_not_start_default_target(
     monkeypatch.setattr(driver, "_read_remote_location", lambda uuid: None)
     backend = MagicMock()
     monkeypatch.setattr(driver, "_start_vhost", backend)
-    with pytest.raises(RuntimeError, match="Missing Rawstor backend configuration"):
+    with pytest.raises(RuntimeError, match="Missing RawStor backend configuration"):
         driver.start_machine(SimpleNamespace(uuid=sys_uuid.uuid4()))
     backend.assert_not_called()
     domain.create.assert_not_called()

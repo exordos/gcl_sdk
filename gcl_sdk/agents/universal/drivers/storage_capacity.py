@@ -79,7 +79,7 @@ def validate_bind_address(bind_address):
             raise ValueError()
     except (ValueError, TypeError):
         raise ValueError(
-            "Rawstor bind must be a host and port (IPv6 in brackets)"
+            "RawStor bind must be a host and port (IPv6 in brackets)"
         ) from None
 
 
@@ -141,4 +141,4 @@ def default_policies(cluster_uuid):
 def validate_policy(policy):
     """Validate an admission policy using the same schema as agent payloads."""
     if not rawstor_specs.RawstorPoolPolicy().validate({"name": "", **policy}):
-        raise ValueError("Invalid Rawstor pool policy")
+        raise ValueError("Invalid RawStor pool policy")

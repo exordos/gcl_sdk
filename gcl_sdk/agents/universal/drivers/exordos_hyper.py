@@ -49,7 +49,7 @@ LOG = logging.getLogger(__name__)
 def _rawstor_module(volume_uuid):
     if rawstor is None:
         raise RuntimeError(
-            "Rawstor bindings are required for remote disks; run hypervisors init"
+            "RawStor bindings are required for remote disks; run hypervisors init"
         )
     return rawstor_tls.Bindings(
         rawstor_tls.TLS_DIR / ("volume-" + str(volume_uuid)) / "control"
@@ -104,7 +104,7 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
             )
             if active.returncode == 0:
                 raise RuntimeError(
-                    "Stop the VM and its insecure vhost before enabling Rawstor TLS"
+                    "Stop the VM and its insecure vhost before enabling RawStor TLS"
                 )
             self._write_remote_location_drop_in(
                 volume.uuid, self._rawstor_address(volume)
@@ -140,7 +140,7 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
             return None
         account = sys_uuid.UUID(str(volume.project_id))
         if account.int == 0:
-            raise ValueError("Rawstor requires a non-nil project_id as account")
+            raise ValueError("RawStor requires a non-nil project_id as account")
         uri = urlsplit(volume.storage_location)
         endpoint = uri.netloc.rsplit("@", 1)[-1]
         return urlunsplit(uri._replace(netloc=f"{account}@{endpoint}"))
@@ -185,7 +185,7 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
         get_volume read it back to rediscover such a volume.
         """
         if any(ord(c) < 33 or ord(c) == 127 or c in '"\\%$' for c in storage_location):
-            raise ValueError("Invalid Rawstor storage location")
+            raise ValueError("Invalid RawStor storage location")
         drop_in_dir = self._vhost_drop_in_dir(volume_uuid)
         os.makedirs(drop_in_dir, exist_ok=True)
         with open(self._vhost_drop_in_path(volume_uuid), "w") as f:
@@ -376,7 +376,7 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
         self,
         domains: tp.Collection[tp.Tuple[libvirt.virDomain, ET.Element]],
     ) -> tp.List[pool_base.MachineVolume]:
-        """Rawstor-backed volumes attached to a domain on this hypervisor.
+        """RawStor-backed volumes attached to a domain on this hypervisor.
 
         This hypervisor has no rawstor backing store of its own, so every
         one of these lives on a remote StorageCluster - its vhost-user
@@ -426,7 +426,7 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
             return domain
         if domain.isActive():
             raise RuntimeError(
-                "Rawstor disks require shared memory. Shut down and start this "
+                "RawStor disks require shared memory. Shut down and start this "
                 "VM before attaching the disk; shared memory cannot be added live."
             )
         document = minidom.parseString(domain_xml)
@@ -449,7 +449,7 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
                 continue
             if self._read_remote_location(volume_uuid) is None:
                 raise RuntimeError(
-                    f"Missing Rawstor backend configuration for volume {volume_uuid}"
+                    f"Missing RawStor backend configuration for volume {volume_uuid}"
                 )
             self._start_vhost(volume_uuid)
         super().start_machine(machine)
@@ -559,7 +559,7 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
         domains = self._domains_with_xml()
         attachments = self._rawstor_attachments(domains)
 
-        # Rawstor-backed only ever means scheduled onto a remote
+        # RawStor-backed only ever means scheduled onto a remote
         # StorageCluster (see _list_rawstor_volumes) - this hypervisor has
         # no rawstor backing store of its own.
         remote_address = self._read_remote_location(volume)

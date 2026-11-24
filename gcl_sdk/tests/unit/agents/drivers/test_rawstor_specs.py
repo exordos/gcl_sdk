@@ -28,7 +28,7 @@ def test_agent_policy_rejects_invalid_json_types_before_coercion(field, value):
     policies = storage_capacity.default_policies(uuid.uuid4())
     key = next(iter(policies))
     policies[key][field] = value
-    with pytest.raises(ValueError, match="Invalid Rawstor pool policy"):
+    with pytest.raises(ValueError, match="Invalid RawStor pool policy"):
         pool.RawstorStorageClusterAgentSpec.restore_from_simple_view(
             endpoint="mds://core:7776/",
             pools=policies,

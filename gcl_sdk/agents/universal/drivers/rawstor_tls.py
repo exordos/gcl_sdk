@@ -2,7 +2,7 @@
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License.
 
-"""Runtime credentials and isolated TLS clients for Rawstor.
+"""Runtime credentials and isolated TLS clients for RawStor.
 
 Bindings initialize one process-wide TLS context. Run control operations in a
 fresh child process so multiple identities and renewed credentials never reuse
@@ -33,17 +33,17 @@ def install(name, credentials):
     accepted. Missing credentials fail closed, including while issuance is pending.
     """
     if not credentials or credentials.get("pending"):
-        raise RuntimeError("Rawstor TLS credentials are not ready")
+        raise RuntimeError("RawStor TLS credentials are not ready")
     if not name or any(c not in "abcdefghijklmnopqrstuvwxyz0123456789-" for c in name):
-        raise ValueError("Invalid Rawstor credential name")
+        raise ValueError("Invalid RawStor credential name")
     values = {k: credentials[k] for k in ("cert", "key", "ca", "trust_domain")}
     domain = values["trust_domain"]
     if not domain or any(
         c not in "abcdefghijklmnopqrstuvwxyz0123456789.-_" for c in domain
     ):
-        raise ValueError("Invalid Rawstor trust domain")
+        raise ValueError("Invalid RawStor trust domain")
     if any(not isinstance(v, str) or not v for v in values.values()):
-        raise ValueError("Incomplete Rawstor TLS credentials")
+        raise ValueError("Incomplete RawStor TLS credentials")
     from cryptography import x509
     from cryptography.hazmat.primitives import serialization
 
@@ -54,21 +54,21 @@ def install(name, credentials):
         leaf.extensions.get_extension_for_class(x509.BasicConstraints).value.ca
         or not ca.extensions.get_extension_for_class(x509.BasicConstraints).value.ca
     ):
-        raise ValueError("Rawstor requires a workload leaf and an issuing CA")
+        raise ValueError("RawStor requires a workload leaf and an issuing CA")
     now = datetime.datetime.now(datetime.timezone.utc)
     if not leaf.not_valid_before_utc <= now < leaf.not_valid_after_utc:
-        raise ValueError("Rawstor certificate is not currently valid")
+        raise ValueError("RawStor certificate is not currently valid")
     identities = leaf.extensions.get_extension_for_class(
         x509.SubjectAlternativeName
     ).value.get_values_for_type(x509.UniformResourceIdentifier)
     if len(identities) != 1 or not identities[0].startswith(f"spiffe://{domain}/"):
-        raise ValueError("Rawstor certificate has an unexpected SPIFFE identity")
+        raise ValueError("RawStor certificate has an unexpected SPIFFE identity")
     key = serialization.load_pem_private_key(values["key"].encode(), password=None)
     form = serialization.PublicFormat.SubjectPublicKeyInfo
     if key.public_key().public_bytes(
         serialization.Encoding.DER, form
     ) != leaf.public_key().public_bytes(serialization.Encoding.DER, form):
-        raise ValueError("Rawstor certificate and key do not match")
+        raise ValueError("RawStor certificate and key do not match")
     digest = hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest()
     directory = TLS_DIR / name
     directory_mode = 0o700 if name.startswith("control-") else 0o750
@@ -129,7 +129,7 @@ def install(name, credentials):
 def install_control(volume_uuid, credentials):
     """Share one root-only admin identity across this agent's volume clients."""
     if not credentials or credentials.get("pending"):
-        raise RuntimeError("Rawstor TLS credentials are not ready")
+        raise RuntimeError("RawStor TLS credentials are not ready")
     from cryptography import x509
 
     leaf = x509.load_pem_x509_certificate(credentials["cert"].encode())
@@ -138,7 +138,7 @@ def install_control(volume_uuid, credentials):
     ).value.get_values_for_type(x509.UniformResourceIdentifier)
     prefix = f"spiffe://{credentials['trust_domain']}/admin/"
     if len(identities) != 1 or not identities[0].startswith(prefix):
-        raise ValueError("Rawstor control certificate requires an admin identity")
+        raise ValueError("RawStor control certificate requires an admin identity")
     agent = uuid.UUID(identities[0][len(prefix) :])
     directory, _ = install("control-agent-" + str(agent), credentials)
     volume_dir = TLS_DIR / ("volume-" + str(uuid.UUID(str(volume_uuid))))
@@ -196,7 +196,7 @@ def reload_if_changed(directory, unit):
 def temporary_bindings(credentials):
     """Use control credentials in an unprivileged API process without persisting them."""
     if not credentials or credentials.get("pending"):
-        raise RuntimeError("Rawstor TLS credentials are not ready")
+        raise RuntimeError("RawStor TLS credentials are not ready")
     with tempfile.TemporaryDirectory(prefix="rawstor-client-") as staged:
         current = Path(staged) / "current"
         current.mkdir(mode=0o700)
@@ -237,7 +237,7 @@ class Bindings:
         )
         if result.returncode:
             # Native diagnostics contain endpoints, not credential material.
-            raise RuntimeError("Rawstor TLS worker failed: " + result.stderr[-2000:])
+            raise RuntimeError("RawStor TLS worker failed: " + result.stderr[-2000:])
         response = json.loads(result.stdout)
         if "errno" in response:
             raise OSError(response["errno"], response["error"])
@@ -276,7 +276,7 @@ def _main():
         "location": {"info", "objects", "create_account"},
     }
     if kind not in allowed or method not in allowed[kind]:
-        raise ValueError("Unsupported Rawstor operation")
+        raise ValueError("Unsupported RawStor operation")
     rawstor.initialize()
     obj = rawstor.Target(uri) if kind == "target" else rawstor.Location(uri)
     try:

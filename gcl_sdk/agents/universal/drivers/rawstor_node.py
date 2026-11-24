@@ -84,7 +84,7 @@ class MetaStorageNode(meta.MetaDataPlaneModel):
             dropin = f"[Service]\nReadWritePaths={path}\n"
         else:
             # Native storage backends manage devices and require root.
-            # Rawstor validates the URI; backing stores are provisioned externally.
+            # RawStor validates the URI; backing stores are provisioned externally.
             dropin = "[Service]\nUser=root\nGroup=root\n"
         directory, _ = rawstor_tls.install(
             "ost-" + str(self.uuid), self.driver_spec.tls.get("service")

@@ -45,7 +45,7 @@ from gcl_sdk.agents.universal.drivers import pool  # noqa: E402
     )
     or not shutil.which("qemu-system-x86_64")
     or (not hasattr(rawstor.Target, "resize")),
-    reason="Requires Rawstor resize bindings, native daemons and QEMU",
+    reason="Requires RawStor resize bindings, native daemons and QEMU",
 )
 def test_live_resize_preserves_data_and_notifies_qemu():
     """Exercise the SDK grow, vhost refresh and I/O beyond the old end of disk."""

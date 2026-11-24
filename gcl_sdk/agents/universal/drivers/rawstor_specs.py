@@ -56,7 +56,7 @@ class RawstorPoolPolicy(common_types.SchematicType):
     def from_simple_type(self, value):
         # Validate JSON types before Boolean.from_simple_type can coerce them.
         if not self.validate(value):
-            raise ValueError("Invalid Rawstor pool policy")
+            raise ValueError("Invalid RawStor pool policy")
         return super().from_simple_type(value)
 
 
