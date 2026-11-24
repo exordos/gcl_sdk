@@ -204,3 +204,27 @@ def test_control_plane_key_is_not_readable_by_rawstor_services(
     directory, _ = tls.install("control-test", credentials)
     assert directory.stat().st_mode & 0o777 == 0o700
     assert (directory / "current/key.pem").stat().st_mode & 0o777 == 0o600
+
+
+def test_inventory_collects_specs_in_one_worker(credentials, monkeypatch):
+    run = Mock(
+        return_value=SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "value": [
+                        {
+                            "uri": "mds://host/object",
+                            "spec": {"size": 1 << 30, "chunk_size": 1 << 30},
+                        }
+                    ]
+                }
+            ),
+        )
+    )
+    monkeypatch.setattr(tls.subprocess, "run", run)
+    with tls.temporary_bindings(credentials) as client:
+        objects = client.Location("mds://host/").objects()
+        assert objects[0].uri == "mds://host/object"
+        assert objects[0].spec().size == 1 << 30
+        assert run.call_count == 1

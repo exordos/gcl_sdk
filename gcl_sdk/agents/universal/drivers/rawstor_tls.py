@@ -207,13 +207,21 @@ class Bindings:
         if method in ("info", "spec"):
             return SimpleNamespace(**value)
         if method == "objects":
-            return [self.Target(item) for item in value]
+            return [
+                _Remote(self, "target", item["uri"], item["spec"]) for item in value
+            ]
         return value
 
 
 class _Remote:
-    def __init__(self, bindings, kind, uri):
+    def __init__(self, bindings, kind, uri, spec=None):
         self.bindings, self.kind, self.uri = bindings, kind, uri
+        self._spec = spec
+
+    def spec(self):
+        if self._spec is not None:
+            return SimpleNamespace(**self._spec)
+        return self.bindings.call(self.kind, self.uri, "spec")
 
     def __getattr__(self, method):
         return lambda *args, **kwargs: self.bindings.call(
@@ -240,7 +248,16 @@ def _main():
         elif method == "spec":
             value = {k: getattr(value, k) for k in ("size", "chunk_size")}
         elif method == "objects":
-            value = [target.uri for target in value]
+            objects = []
+            for target in value:
+                spec = target.spec()
+                objects.append(
+                    {
+                        "uri": target.uri,
+                        "spec": {"size": spec.size, "chunk_size": spec.chunk_size},
+                    }
+                )
+            value = objects
         else:
             value = None
         print(json.dumps({"value": value}))
