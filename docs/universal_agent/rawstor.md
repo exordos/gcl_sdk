@@ -125,3 +125,25 @@ layered on the storage integration.
 Agents and the API explicitly call `rawstor.initialize(insecure=True)` before
 loading native `Target` or `Location` types. This matches the service transport
 mode; setting any `RAWSTOR_TLS_*` options in insecure mode is rejected.
+
+## TLS credentials
+
+The TLS integration requires the matching Core branch. Core supplies a private
+TLS bundle with storage-cluster, storage-node and remote-volume targets. The
+public driver specifications remain free of PEM material. Missing or pending
+credentials prevent configuration; there is no insecure fallback.
+
+Runtime service credentials are published under `/etc/rawstor/tls/` as immutable
+generations with an atomic `current` symlink. Rawstor service keys are readable
+only by root and the rawstor group; control credentials are root-only. Renewal
+sends `SIGUSR1` to MDS, OST or the affected vhost without restarting them. A
+failed signal is retried. Existing sessions retain their original TLS context;
+new connections use the renewed pair. SIGHUP remains reserved for topology and
+resize operations.
+
+Bindings perform control operations in isolated child processes, selecting the
+intended admin credentials for each operation. Vhost receives a different
+certificate with access to only its own account and volume. This avoids binding
+all workloads in an agent process to the first certificate it happened to load.
+Stop old insecure workloads before enabling this integration; an active insecure
+vhost cannot be converted without a maintenance stop.

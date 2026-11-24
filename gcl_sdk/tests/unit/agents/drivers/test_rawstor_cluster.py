@@ -15,6 +15,7 @@
 #    under the License.
 
 import os
+import signal
 import socket
 import subprocess
 import time
@@ -49,27 +50,26 @@ def core_node_identity(monkeypatch):
     monkeypatch.setattr(rawstor_cluster.ua_utils, "node_uuid", lambda: CORE_NODE_UUID)
 
 
+@pytest.fixture(autouse=True)
+def isolate_tls_delivery(monkeypatch, tmp_path):
+    from gcl_sdk.agents.universal.drivers import rawstor_tls
+
+    monkeypatch.setattr(rawstor_tls, "install", lambda *args: (tmp_path / "tls", False))
+    monkeypatch.setattr(rawstor_tls, "environment", lambda _: {})
+    monkeypatch.setattr(rawstor_tls, "reload_if_changed", lambda *args: None)
+    monkeypatch.setattr(rawstor_tls, "Bindings", lambda _: rawstor)
+
+
 def _cluster(tmp_path, tier=ic.DiskTier.HOT.value, ephemeral=False):
-    identifier = sys_uuid.uuid4()
+    # rawstor's "file://" location is a real, local, daemon-less backend
+    # (see pyrawstor/tests) - no server needed to exercise it for real.
     spec = rawstor_cluster.RawstorStorageClusterDriverSpec(
-        endpoint="mds://10.20.0.2:7776/",
-        nodes={
-            str(sys_uuid.uuid5(identifier, "ost")): {
-                "endpoint": "ost://10.0.0.5:7777",
-                "failure_domain_path": "server",
-            }
-        },
-        pools={
-            str(sys_uuid.uuid5(identifier, "default")): {
-                "name": "default",
-                "tier": tier,
-                "ephemeral": ephemeral,
-                "mirrors": 1,
-                "failure_domain": "server",
-            }
-        },
+        location=f"file://{tmp_path}",
+        endpoint="ost://10.0.0.5:7777",
+        tier=tier,
+        ephemeral=ephemeral,
     )
-    return rawstor_cluster.MetaStorageCluster(uuid=identifier, driver_spec=spec)
+    return rawstor_cluster.MetaStorageCluster(uuid=sys_uuid.uuid4(), driver_spec=spec)
 
 
 class _FakeLocation:
@@ -85,13 +85,10 @@ class _FakeLocation:
     def objects(self):
         return iter(())
 
-    def locations(self):
-        return iter(("ost://10.0.0.5:7777",))
-
 
 def _fake_location_info(monkeypatch, *, used_gb, total_gb):
     monkeypatch.setattr(
-        rawstor_cluster.rawstor,
+        rawstor,
         "Location",
         lambda uri: _FakeLocation(used_gb, total_gb),
     )
@@ -116,7 +113,7 @@ class TestRawstorStorageClusterDriver:
 
         assert storage_pool.name == "default"
         assert storage_pool.pool_type == "rawstor"
-        assert storage_pool.capacity_usable == 80
+        assert storage_pool.capacity_usable == 100
         assert storage_pool.available_actual == 80
 
     def test_tier_and_ephemeral_come_from_the_driver_spec(self, tmp_path, monkeypatch):
@@ -129,6 +126,20 @@ class TestRawstorStorageClusterDriver:
 
         assert storage_pool.tier == ic.DiskTier.COLD.value
         assert storage_pool.ephemeral is True
+
+    def test_capacity_provisioned_sums_real_objects_at_the_location(self, tmp_path):
+        # No mocking here - real rawstor objects at a real (daemon-less)
+        # file:// location, to exercise the actual enumeration path.
+        cluster = _cluster(tmp_path)
+        location = rawstor.Location(f"file://{tmp_path}")
+        location.create(size=2 << 30, width=1)
+        location.create(size=1 << 30, width=1)
+
+        [storage_pool] = rawstor_cluster.RawstorStorageClusterDriver(
+            cluster
+        ).get_capacity()
+
+        assert storage_pool.capacity_provisioned == 3
 
     def test_uuid_is_deterministic_per_cluster(self, tmp_path, monkeypatch):
         cluster = _cluster(tmp_path)
@@ -209,7 +220,10 @@ class TestStorageClusterAgentDriver:
                 "uuid": str(cluster_uuid),
                 "driver_spec": {
                     "kind": "rawstor",
-                    "endpoint": "mds://10.20.0.2:7776/",
+                    "location": f"file://{tmp_path}",
+                    "endpoint": "ost://10.0.0.5:7777",
+                    "tier": ic.DiskTier.HOT.value,
+                    "ephemeral": False,
                 },
             },
         )
@@ -228,40 +242,60 @@ class TestStorageClusterAgentDriver:
 class TestCoreMDSLifecycle:
     def _driver(self, tmp_path, monkeypatch, port=7776):
         monkeypatch.setattr(rawstor_cluster, "MDS_CONFIG_DIR", tmp_path / "config")
-        monkeypatch.setattr(rawstor_cluster, "MDS_STATE_DIR", tmp_path / "state")
         cluster = _cluster(tmp_path)
         cluster.driver_spec.endpoint = f"mds://10.20.0.2:{port}/"
+        cluster.driver_spec.ost_endpoint = "ost://10.0.0.5:7777"
         return rawstor_cluster.RawstorStorageClusterDriver(cluster)
 
-    def test_configure_sets_database_uri_and_native_witness_registration(
+    def test_configure_creates_isolated_topology_and_instance_config(
         self, tmp_path, monkeypatch
     ):
         driver = self._driver(tmp_path, monkeypatch)
+        with patch.object(rawstor_cluster.subprocess, "run") as run:
+            driver.configure()
+        cluster_uuid = driver._cluster.uuid
+        topology = (tmp_path / "config" / f"{cluster_uuid}.topology").read_text()
+        witness_uuid = sys_uuid.uuid5(cluster_uuid, "mds-witness")
+        assert topology == (
+            f"{cluster_uuid} ost://10.0.0.5:7777 100 data,witness {cluster_uuid}\n"
+            f"{witness_uuid} ost://10.20.0.2:7776 100 witness {CORE_NODE_UUID}\n"
+        )
+        config = (tmp_path / "config" / f"{cluster_uuid}.conf").read_text()
+        assert config == 'BIND_ADDR=10.20.0.2:7776\nEXTRA_ARGS=""\n'
+        assert (
+            call(["systemctl", "enable", "--now", driver.unit_name], check=True)
+            in run.call_args_list
+        )
+
+    def test_topology_uses_internal_constant_weight(self, tmp_path, monkeypatch):
+        driver = self._driver(tmp_path, monkeypatch)
+        node_uuid = str(driver._cluster.uuid)
+        driver._cluster.driver_spec.nodes = {
+            node_uuid: {
+                "endpoint": "ost://10.0.0.5:7777",
+                "failure_domain_path": "dc/server",
+            }
+        }
         with patch.object(rawstor_cluster.subprocess, "run"):
             driver.configure()
-        config = tmp_path / "config" / f"{driver._cluster.uuid}.conf"
-        values = dict(line.split("=", 1) for line in config.read_text().splitlines())
-        assert (
-            values["DB_URI"]
-            == f"sqlite://{tmp_path}/state/{driver._cluster.uuid}/mds.db"
-        )
-        assert values["ADVERTISE"] == "ost://10.20.0.2:7776"
-        assert values["DOMAIN_PATH"] == str(CORE_NODE_UUID)
-        assert values["WEIGHT"] == "100"
-        assert not list((tmp_path / "config").glob("*.topology"))
+        assert (tmp_path / "config" / f"{node_uuid}.topology").read_text().splitlines()[
+            0
+        ] == f"{node_uuid} ost://10.0.0.5:7777 100 data,witness dc/server"
 
-    def test_node_inventory_change_does_not_restart_or_reload_mds(
+    def test_topology_update_requests_reload_without_inspecting_database_or_logs(
         self, tmp_path, monkeypatch
     ):
         driver = self._driver(tmp_path, monkeypatch)
         with patch.object(rawstor_cluster.subprocess, "run") as run:
             driver.configure()
             run.reset_mock()
-            driver._spec.nodes.clear()
+            driver._cluster.driver_spec.ost_endpoint = "ost://10.0.0.6:7778"
             driver.configure()
-        run.assert_called_once_with(
-            ["systemctl", "enable", "--now", driver.unit_name], check=True
+        assert (
+            call(["systemctl", "reload", driver.unit_name], check=True)
+            in run.call_args_list
         )
+        assert not any("restart" in c.args[0] for c in run.call_args_list)
 
     def test_failed_restart_restores_configuration_and_retries(
         self, tmp_path, monkeypatch
@@ -270,234 +304,544 @@ class TestCoreMDSLifecycle:
         with patch.object(rawstor_cluster.subprocess, "run"):
             driver.configure()
         config = tmp_path / "config" / f"{driver._cluster.uuid}.conf"
-        previous = config.read_text()
-        driver._spec.endpoint = "mds://10.20.0.2:7788/"
+        topology = config.with_suffix(".topology")
+        previous = config.read_text(), topology.read_text()
+        driver._cluster.driver_spec.endpoint = "mds://10.20.0.2:7788/"
 
-        def fail(args, **kwargs):
+        def run(args, **kwargs):
             if "restart" in args:
                 raise subprocess.CalledProcessError(1, args)
 
-        with patch.object(rawstor_cluster.subprocess, "run", side_effect=fail):
+        with patch.object(rawstor_cluster.subprocess, "run", side_effect=run):
             with pytest.raises(subprocess.CalledProcessError):
                 driver.configure()
-        assert config.read_text() == previous
+        assert (config.read_text(), topology.read_text()) == previous
         with patch.object(rawstor_cluster.subprocess, "run") as retry:
             driver.configure()
         assert any("restart" in c.args[0] for c in retry.call_args_list)
 
-    def test_restore_reads_settings_and_never_writes_or_reloads(
-        self, tmp_path, monkeypatch
-    ):
+    def test_unchanged_configuration_does_not_restart_mds(self, tmp_path, monkeypatch):
         driver = self._driver(tmp_path, monkeypatch)
-        with patch.object(rawstor_cluster.subprocess, "run"):
-            driver.configure()
-        config = tmp_path / "config" / f"{driver._cluster.uuid}.conf"
-        config.write_text(config.read_text().replace("10.20.0.2", "127.0.0.1"))
-        with (
-            patch.object(
-                rawstor_cluster.subprocess,
-                "run",
-                return_value=subprocess.CompletedProcess([], 0),
-            ) as run,
-            patch.object(rawstor_cluster, "_write_if_changed") as write,
-        ):
-            driver.restore()
-        assert driver._spec.endpoint == "mds://127.0.0.1:7776/"
-        write.assert_not_called()
-        run.assert_called_once_with(
-            ["systemctl", "is-active", "--quiet", driver.unit_name], check=False
-        )
-
-    def test_missing_witness_configuration_is_reconciled(self, tmp_path, monkeypatch):
-        driver = self._driver(tmp_path, monkeypatch)
-        with patch.object(rawstor_cluster.subprocess, "run"):
-            driver.configure()
-        config = tmp_path / "config" / f"{driver._cluster.uuid}.conf"
-        config.write_text(
-            config.read_text().replace("ADVERTISE=ost://10.20.0.2:7776", "ADVERTISE=")
-        )
-        with pytest.raises(rawstor_cluster.driver_exc.ResourceNotFound):
-            driver.restore()
-
-    def test_delete_keeps_database_and_stops_only_its_service(
-        self, tmp_path, monkeypatch
-    ):
-        driver = self._driver(tmp_path, monkeypatch)
-        db = tmp_path / "state" / str(driver._cluster.uuid) / "mds.db"
-        db.parent.mkdir(parents=True)
-        db.write_text("persistent")
         with patch.object(rawstor_cluster.subprocess, "run") as run:
             driver.configure()
+            run.reset_mock()
+            driver.configure()
+        run.assert_called_once_with(
+            ["systemctl", "enable", "--now", driver.unit_name], check=True
+        )
+
+    def test_capacity_is_read_from_mds_not_local_ost_backing_path(
+        self, tmp_path, monkeypatch
+    ):
+        driver = self._driver(tmp_path, monkeypatch)
+        with patch.object(
+            rawstor, "Location", return_value=_FakeLocation(20, 100)
+        ) as location:
+            [pool] = driver.get_capacity()
+        location.assert_called_once_with("mds://10.20.0.2:7776/")
+        assert pool.available_actual == 80
+
+    def test_two_clusters_have_distinct_units_and_ports(self, tmp_path, monkeypatch):
+        first = self._driver(tmp_path, monkeypatch, 7776)
+        second = self._driver(tmp_path, monkeypatch, 7778)
+        with patch.object(rawstor_cluster.subprocess, "run"):
+            first.configure()
+            second.configure()
+        assert first.unit_name != second.unit_name
+        assert (
+            "BIND_ADDR=10.20.0.2:7778"
+            in (tmp_path / "config" / f"{second._cluster.uuid}.conf").read_text()
+        )
+
+    def test_hostname_endpoint_is_preserved_for_bind_and_restore(
+        self, tmp_path, monkeypatch
+    ):
+        driver = self._driver(tmp_path, monkeypatch)
+        driver._cluster.driver_spec.endpoint = "mds://core.example:7776/"
+        with patch.object(rawstor_cluster.subprocess, "run") as run:
+            driver.configure()
+            run.return_value.returncode = 0
+            driver.restore()
+        config = tmp_path / "config" / f"{driver._cluster.uuid}.conf"
+        assert config.read_text() == 'BIND_ADDR=core.example:7776\nEXTRA_ARGS=""\n'
+        topology = tmp_path / "config" / f"{driver._cluster.uuid}.topology"
+        assert (
+            f"ost://core.example:7776 100 witness {CORE_NODE_UUID}"
+            in topology.read_text()
+        )
+        assert driver._cluster.driver_spec.endpoint == "mds://core.example:7776/"
+
+    def test_delete_stops_only_this_clusters_mds(self, tmp_path, monkeypatch):
+        driver = self._driver(tmp_path, monkeypatch)
+        with patch.object(rawstor_cluster.subprocess, "run") as run:
+            driver.configure()
+            run.reset_mock()
             driver.delete()
-        assert db.read_text() == "persistent"
-        assert not (tmp_path / "config" / f"{driver._cluster.uuid}.conf").exists()
         assert (
             call(["systemctl", "disable", "--now", driver.unit_name], check=True)
             in run.call_args_list
         )
-
-
-def test_unregistered_ost_never_contributes_to_admission(tmp_path, monkeypatch):
-    cluster = _cluster(tmp_path)
-    location = _FakeLocation(0, 100)
-    location.locations = lambda: iter(())
-    monkeypatch.setattr(rawstor_cluster.rawstor, "Location", lambda _: location)
-    [pool] = rawstor_cluster.RawstorStorageClusterDriver(cluster).get_capacity()
-    assert pool.available_actual == 0
-
-
-def test_deleted_policies_are_not_recreated(tmp_path, monkeypatch):
-    cluster = _cluster(tmp_path)
-    cluster.driver_spec.pools.clear()
-    _fake_location_info(monkeypatch, used_gb=0, total_gb=100)
-    assert rawstor_cluster.RawstorStorageClusterDriver(cluster).get_capacity() == []
-
-
-def test_cached_driver_reports_capacity_on_current_model(tmp_path, monkeypatch):
-    original = _cluster(tmp_path)
-    driver = original.load_driver()
-    current = rawstor_cluster.MetaStorageCluster(
-        uuid=original.uuid, driver_spec=original.driver_spec
-    )
-    assert current.load_driver() is driver
-    assert driver._cluster is current
+        assert not (tmp_path / "config" / f"{driver._cluster.uuid}.topology").exists()
 
 
 @pytest.mark.skipif(
     not os.environ.get("RAWSTOR_TEST_MDS") or not os.environ.get("RAWSTOR_TEST_OST"),
-    reason="Requires native RawStor 0.3.7 daemons",
+    reason="Set RAWSTOR_TEST_MDS and RAWSTOR_TEST_OST to run real daemon integration",
 )
-def test_native_registration_accounts_and_mds_restart(tmp_path, monkeypatch):
-    processes, streams = [], []
-    monkeypatch.setattr(rawstor_cluster, "MDS_CONFIG_DIR", tmp_path / "config")
-    monkeypatch.setattr(rawstor_cluster, "MDS_STATE_DIR", tmp_path / "state")
+def test_two_core_mds_instances_create_enumerate_and_recover_disks(
+    tmp_path, monkeypatch
+):
+    processes = []
+    streams = []
+    clusters = []
     env = dict(
-        os.environ,
-        RAWSTOR_OPTS_IO_ATTEMPTS="1",
-        RAWSTOR_MDS_OPTS_HEARTBEAT_INTERVAL="100",
-        RAWSTOR_MDS_OPTS_INFO_INTERVAL="100",
-        RAWSTOR_MDS_OPTS_INFO_REFRESH_DELAY="20",
+        os.environ, RAWSTOR_MDS_OPTS_INFO_INTERVAL="50", RAWSTOR_OPTS_IO_ATTEMPTS="1"
     )
+    monkeypatch.setattr(rawstor_cluster, "MDS_CONFIG_DIR", tmp_path / "config")
 
     def port():
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))
             return sock.getsockname()[1]
 
-    def start(binary, args):
-        stream = (tmp_path / (str(len(processes)) + ".log")).open("w")
+    def start(binary, args, name):
+        stream = (tmp_path / name).open("a")
         streams.append(stream)
-        proc = subprocess.Popen(
-            [binary, "--insecure", "--workers", "1", *args],
+        process = subprocess.Popen(
+            [binary, "--insecure", *args],
             env=env,
             stdout=stream,
             stderr=subprocess.STDOUT,
         )
-        processes.append(proc)
-        return proc
+        processes.append(process)
+        return process
 
-    def wait_for(callback):
-        deadline = time.monotonic() + 20
-        while True:
+    def ready(cluster):
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
             try:
-                value = callback()
-                if value:
-                    return value
+                if rawstor.Location(cluster.driver_spec.endpoint).info().total:
+                    return
             except OSError:
                 pass
-            assert time.monotonic() < deadline, "RawStor did not become ready"
-            assert all(p.poll() is None for p in processes)
+            assert all(process.poll() is None for process in processes)
             time.sleep(0.05)
+        pytest.fail("MDS did not report OST capacity within 10 seconds")
 
-    try:
-        clusters = []
-        for index in range(2):
-            cluster = _cluster(tmp_path)
-            cluster.driver_spec.endpoint = f"mds://127.0.0.1:{port()}/"
-            cluster.driver_spec.nodes.clear()
-            driver = rawstor_cluster.RawstorStorageClusterDriver(cluster)
-            with patch.object(rawstor_cluster.subprocess, "run"):
-                driver.configure()
-            db = tmp_path / "state" / str(cluster.uuid) / "mds.db"
-            db.parent.mkdir(parents=True)
-            args = [
+    monkeypatch.setattr(rawstor_cluster, "MDS_STATE_DIR", tmp_path / "state")
+
+    def start_mds(cluster):
+        db = rawstor_cluster.MDS_STATE_DIR / str(cluster.uuid) / "mds.db"
+        db.parent.mkdir(parents=True, exist_ok=True)
+        return start(
+            os.environ["RAWSTOR_TEST_MDS"],
+            [
                 "--bind",
                 urlparse(cluster.driver_spec.endpoint).netloc,
                 "--db",
-                f"sqlite://{db}",
-                "--id",
-                str(sys_uuid.uuid5(cluster.uuid, "mds-witness")),
-                "--advertise",
-                cluster.driver_spec.endpoint.replace("mds://", "ost://").rstrip("/"),
-                "--domain-path",
-                str(CORE_NODE_UUID),
-            ]
-            mds = start(os.environ["RAWSTOR_TEST_MDS"], args)
-            location = rawstor.Location(cluster.driver_spec.endpoint)
-            wait_for(lambda: location.info())
-            node_id = str(sys_uuid.uuid4())
-            ost_endpoint = f"ost://127.0.0.1:{port()}"
-            backing = tmp_path / f"data{index}"
-            backing.mkdir()
-            ost = start(
-                os.environ["RAWSTOR_TEST_OST"],
-                [
-                    "--bind",
-                    urlparse(ost_endpoint).netloc,
-                    "--id",
-                    node_id,
-                    "--mds",
-                    cluster.driver_spec.endpoint,
-                    "--advertise",
-                    ost_endpoint,
-                    "--domain-path",
-                    f"rack/server{index}",
-                    f"file://{backing}",
-                ],
+                str(db),
+                "--topology",
+                str(tmp_path / "config" / f"{cluster.uuid}.topology"),
+                "--workers",
+                "1",
+                "--queue-size",
+                "256",
+            ],
+            f"{cluster.uuid}.log",
+        )
+
+    try:
+        mds_processes = []
+        for index in range(2):
+            host = "localhost" if index == 0 else "127.0.0.1"
+            cluster = _cluster(tmp_path)
+            cluster.driver_spec.endpoint = f"mds://{host}:{port()}/"
+            cluster.driver_spec.pools = (
+                rawstor_cluster.storage_capacity.default_policies(cluster.uuid)
             )
-            cluster.driver_spec.nodes = {
-                node_id: {
-                    "endpoint": ost_endpoint,
-                    "failure_domain_path": f"rack/server{index}",
+            nodes = {}
+            for member in range(2):
+                backing = tmp_path / f"ost{index}-{member}"
+                backing.mkdir()
+                ost_port = port()
+                start(
+                    os.environ["RAWSTOR_TEST_OST"],
+                    [
+                        "--bind",
+                        f"{host}:{ost_port}",
+                        "--workers",
+                        "1",
+                        "--queue-size",
+                        "256",
+                        f"file://{backing}",
+                    ],
+                    f"ost{index}-{member}.log",
+                )
+                nodes[str(sys_uuid.uuid4())] = {
+                    "endpoint": f"ost://{host}:{ost_port}",
+                    "failure_domain_path": f"dc/row/rack{member}/server{member}",
                 }
-            }
-            wait_for(
-                lambda: (
-                    ost_endpoint in set(location.locations())
-                    and location.info().total > 0
+            cluster.driver_spec.nodes = nodes
+            with patch.object(rawstor_cluster.subprocess, "run"):
+                rawstor_cluster.RawstorStorageClusterDriver(cluster).configure()
+            clusters.append(cluster)
+            mds_processes.append(start_mds(cluster))
+            ready(cluster)
+
+        targets = []
+        for cluster in clusters:
+            target = rawstor.Target(f"{cluster.driver_spec.endpoint}{sys_uuid.uuid4()}")
+            target.create(
+                size=8 << 20, width=2, chunk_size=4 << 20, failure_domain="rack"
+            )
+            targets.append(target)
+            assert target.spec().size == 8 << 20
+            assert target.spec().width == 2
+            assert target.spec().failure_domain == rawstor.OBJ_DOMAIN_RACK
+            for chunk in target.chunks():
+                members = chunk.meta()
+                slots = chunk.slots()
+                assert len(slots) == 3
+                assert any(
+                    slot.uri.startswith(
+                        cluster.driver_spec.endpoint.replace("mds://", "ost://")
+                    )
+                    for slot in slots
+                )
+                assert sum(m.member_role == rawstor.MEMBER_DATA for m in members) == 2
+                assert (
+                    sum(m.member_role == rawstor.MEMBER_WITNESS for m in members) == 1
+                )
+            capacities = rawstor_cluster.RawstorStorageClusterDriver(
+                cluster
+            ).get_capacity()
+            assert len(capacities) == 2
+            assert (
+                cluster.capacity_info["objects"][target.uri.rsplit("/", 1)[-1]]
+                == 8 << 20
+            )
+            assert all(
+                list(rawstor.Location(n["endpoint"]).objects())
+                for n in cluster.driver_spec.nodes.values()
+            )
+        assert [
+            target.uri
+            for target in rawstor.Location(clusters[0].driver_spec.endpoint).objects()
+        ] == [targets[0].uri]
+        assert [
+            target.uri
+            for target in rawstor.Location(clusters[1].driver_spec.endpoint).objects()
+        ] == [targets[1].uri]
+
+        # An unscoped admin inventory must include every project, while
+        # account-scoped listings contain only that project's owned objects.
+        admin = rawstor.Location(clusters[0].driver_spec.endpoint)
+        accounts = [str(sys_uuid.uuid4()), str(sys_uuid.uuid4())]
+        scoped = []
+        owned = []
+        for account in accounts:
+            admin.create_account(account)
+            location = rawstor.Location(
+                clusters[0].driver_spec.endpoint.replace("mds://", f"mds://{account}@")
+            )
+            scoped.append(location)
+            owned.append(
+                location.create(
+                    size=4 << 20, width=2, chunk_size=4 << 20, failure_domain="rack"
                 )
             )
-            account = str(sys_uuid.uuid4())
-            location.create_account(account)
-            target = rawstor.Target(
-                f"mds://{account}@127.0.0.1:{urlparse(cluster.driver_spec.endpoint).port}/{sys_uuid.uuid4()}"
-            )
-            target.create(
-                size=1 << 30, width=1, chunk_size=1 << 30, failure_domain="server"
-            )
-            assert target.spec().size == 1 << 30
+        assert set(admin.accounts()) >= set(accounts)
+        assert [target.uri for target in scoped[0].objects()] == [owned[0].uri]
+        assert [target.uri for target in scoped[1].objects()] == [owned[1].uri]
+        for account, target in zip(accounts, owned):
             assert target.account == account
-            assert target.uri.rsplit("/", 1)[1] in [
-                t.uri.rsplit("/", 1)[1] for t in location.objects()
-            ]
-            driver.get_capacity()
-            assert cluster.capacity_info["total"] == location.info().total
-            clusters.append((cluster, mds, args, ost, target))
-        cluster, mds, args, ost, target = clusters[0]
-        mds.terminate()
-        mds.wait(timeout=10)
-        processes.remove(mds)
-        start(os.environ["RAWSTOR_TEST_MDS"], args)
-        location = rawstor.Location(cluster.driver_spec.endpoint)
-        wait_for(lambda: location.info())
-        assert target.spec().size == 1 << 30
-        assert clusters[1][-1].spec().size == 1 << 30
-        target.remove()
-        assert clusters[1][-1].spec().size == 1 << 30
-        clusters[1][-1].remove()
+            for chunk in target.chunks():
+                assert all(member.account == account for member in chunk.meta())
+        rawstor_cluster.RawstorStorageClusterDriver(clusters[0]).get_capacity()
+        assert all(
+            target.uri.rsplit("/", 1)[-1] in clusters[0].capacity_info["objects"]
+            for target in owned
+        )
+        owned[0].resize(8 << 20)
+        assert owned[0].spec().size == 8 << 20
+        for chunk in owned[0].chunks():
+            assert all(member.account == accounts[0] for member in chunk.meta())
+        owned[0].remove()
+        assert list(scoped[0].objects()) == []
+        assert owned[1].spec().size == 4 << 20
+        assert accounts[0] in set(admin.accounts())
+        owned[1].remove()
+        for account in accounts:
+            admin.remove_account(account)
+
+        # Apply a topology edit through the real daemon's HUP handler.
+        first = clusters[0]
+        first.driver_spec.nodes[next(iter(first.driver_spec.nodes))][
+            "failure_domain_path"
+        ] = "dc/row/newrack/server"
+
+        def reload_service(args, **kwargs):
+            if args[1] == "reload":
+                mds_processes[0].send_signal(signal.SIGHUP)
+
+        with patch.object(
+            rawstor_cluster.subprocess, "run", side_effect=reload_service
+        ) as run:
+            rawstor_cluster.RawstorStorageClusterDriver(first).configure()
+            assert (
+                call(
+                    ["systemctl", "reload", f"rawstor-mds@{first.uuid}.service"],
+                    check=True,
+                )
+                in run.call_args_list
+            )
+
+        # Stop and restart one MDS with its original SQLite database.
+        previous = mds_processes[0]
+        previous.terminate()
+        previous.wait(timeout=10)
+        processes.remove(previous)
+        start_mds(clusters[0])
+        ready(clusters[0])
+        assert targets[0].spec().size == 8 << 20
+        targets[0].remove()
+        assert list(rawstor.Location(clusters[0].driver_spec.endpoint).objects()) == []
+        assert targets[1].spec().size == 8 << 20
+        targets[1].remove()
     finally:
-        for p in reversed(processes):
-            p.terminate()
-            p.wait(timeout=10)
+        for process in reversed(processes):
+            if process.poll() is None:
+                process.terminate()
+            process.wait(timeout=10)
         for stream in streams:
             stream.close()
+
+
+def test_managed_cluster_does_not_recreate_deleted_pools(tmp_path, monkeypatch):
+    cluster = _cluster(tmp_path)
+    cluster.driver_spec.managed = True
+    with patch.object(rawstor, "Location") as location:
+        assert rawstor_cluster.RawstorStorageClusterDriver(cluster).get_capacity() == []
+    location.assert_not_called()
+    assert cluster.capacity_info["available"] == 0
+
+
+def test_cached_driver_reports_capacity_on_current_model(tmp_path, monkeypatch):
+    original = _cluster(tmp_path)
+    _fake_location_info(monkeypatch, used_gb=0, total_gb=100)
+    driver = original.load_driver()
+    current = rawstor_cluster.MetaStorageCluster(
+        uuid=original.uuid,
+        driver_spec=original.driver_spec,
+    )
+    assert current.load_driver() is driver
+    assert driver._cluster is current
+
+
+def test_cluster_update_applies_configuration(tmp_path, monkeypatch):
+    cluster = _cluster(tmp_path)
+    driver = rawstor_cluster.RawstorStorageClusterDriver(cluster)
+    monkeypatch.setattr(cluster, "load_driver", lambda: driver)
+    with (
+        patch.object(driver, "configure") as configure,
+        patch.object(driver, "get_capacity", return_value=[]),
+    ):
+        cluster.update_on_dp()
+    configure.assert_called_once()
+
+
+@pytest.mark.parametrize("role", ["data,witness", "witness,data"])
+def test_cluster_restore_only_reads_actual_topology(tmp_path, monkeypatch, role):
+    import subprocess
+
+    cluster = _cluster(tmp_path)
+    cluster.driver_spec.endpoint = "mds://127.0.0.1:7776/"
+    monkeypatch.setattr(rawstor_cluster, "MDS_CONFIG_DIR", tmp_path)
+    (tmp_path / f"{cluster.uuid}.conf").write_text("BIND_ADDR=127.0.0.1:7776\n")
+    node_uuid = str(sys_uuid.uuid4())
+    witness_uuid = sys_uuid.uuid5(cluster.uuid, "mds-witness")
+    content = (
+        f"{node_uuid} ost://127.0.0.1:7777 100 {role} dc/server\n"
+        f"{witness_uuid} ost://127.0.0.1:7776 100 witness {CORE_NODE_UUID}\n"
+    )
+    topology = tmp_path / f"{cluster.uuid}.topology"
+    topology.write_text(content)
+    driver = rawstor_cluster.RawstorStorageClusterDriver(cluster)
+    monkeypatch.setattr(cluster, "load_driver", lambda: driver)
+    with (
+        patch.object(driver, "configure") as configure,
+        patch.object(driver, "get_capacity", return_value=[]),
+        patch.object(
+            rawstor_cluster.subprocess,
+            "run",
+            return_value=subprocess.CompletedProcess([], 0),
+        ) as run,
+        patch.object(rawstor_cluster, "_write_if_changed") as write,
+    ):
+        cluster.restore_from_dp()
+    configure.assert_not_called()
+    write.assert_not_called()
+    assert cluster.driver_spec.nodes[node_uuid]["failure_domain_path"] == "dc/server"
+    assert topology.read_text() == content
+    assert [call.args[0] for call in run.call_args_list] == [
+        ["systemctl", "is-active", "--quiet", driver.unit_name]
+    ]
+
+
+def test_coordinator_observes_drift_and_applies_target_on_update(tmp_path, monkeypatch):
+    cluster = _cluster(tmp_path)
+    cluster.driver_spec.endpoint = "mds://127.0.0.1:7776/"
+    cluster.driver_spec.ost_endpoint = ""
+    cluster.driver_spec.managed = True
+    node_uuid = str(sys_uuid.uuid4())
+    cluster.driver_spec.nodes = {
+        node_uuid: {
+            "endpoint": "ost://127.0.0.1:7777",
+            "failure_domain_path": "dc/server",
+        }
+    }
+    resource = cluster.to_ua_resource("storage_cluster")
+    monkeypatch.setattr(rawstor_cluster, "MDS_CONFIG_DIR", tmp_path / "config")
+    monkeypatch.setattr(
+        rawstor_cluster.RawstorStorageClusterDriver, "get_capacity", lambda self: []
+    )
+    driver = rawstor_cluster.StorageClusterAgentDriver(
+        meta_file=str(tmp_path / "meta.json")
+    )
+    driver.start()
+    with patch.object(
+        rawstor_cluster.subprocess,
+        "run",
+        return_value=subprocess.CompletedProcess([], 0),
+    ) as run:
+        created = driver.create(resource)
+        topology = rawstor_cluster.MDS_CONFIG_DIR / f"{cluster.uuid}.topology"
+        original = topology.read_text()
+        topology.write_text(original.replace("dc/server", "dc/other-server", 1))
+        run.reset_mock()
+        [actual] = driver.list("storage_cluster")
+        assert (
+            actual.value["driver_spec"]["nodes"][node_uuid]["failure_domain_path"]
+            == "dc/other-server"
+        )
+        assert actual.hash != created.hash
+        assert all(call.args[0][1] == "is-active" for call in run.call_args_list)
+        updated = driver.update(resource)
+        assert (
+            updated.value["driver_spec"]["nodes"][node_uuid]["failure_domain_path"]
+            == "dc/server"
+        )
+        assert topology.read_text() == original
+        assert ["systemctl", "reload", f"rawstor-mds@{cluster.uuid}.service"] in [
+            call.args[0] for call in run.call_args_list
+        ]
+        run.reset_mock()
+        with patch.object(
+            rawstor_cluster.RawstorStorageClusterDriver,
+            "get_capacity",
+            side_effect=OSError("MDS unavailable"),
+        ):
+            [unavailable] = driver.list("storage_cluster")
+            assert unavailable.value["status"] == "DISABLED"
+            assert unavailable.value["capacity_info"] == {}
+            driver.delete(updated)
+        assert not topology.exists()
+        assert not any("enable" in call.args[0] for call in run.call_args_list)
+
+
+@pytest.mark.parametrize("role", ["", " data", " witness", " bogus"])
+def test_restore_rejects_topology_without_managed_roles(tmp_path, monkeypatch, role):
+    cluster = _cluster(tmp_path)
+    cluster.driver_spec.endpoint = "mds://127.0.0.1:7776/"
+    monkeypatch.setattr(rawstor_cluster, "MDS_CONFIG_DIR", tmp_path)
+    (tmp_path / f"{cluster.uuid}.conf").write_text("BIND_ADDR=127.0.0.1:7776\n")
+    topology = tmp_path / f"{cluster.uuid}.topology"
+    content = f"{sys_uuid.uuid4()} ost://127.0.0.1:7777 100{role} dc/server\n"
+    topology.write_text(content)
+    driver = rawstor_cluster.RawstorStorageClusterDriver(cluster)
+    with pytest.raises(rawstor_cluster.driver_exc.ResourceNotFound):
+        driver.restore()
+    assert topology.read_text() == content
+
+
+def test_coordinator_recreates_missing_mds_witness_without_exposing_it_as_a_node(
+    tmp_path, monkeypatch
+):
+    cluster = _cluster(tmp_path)
+    cluster.driver_spec.endpoint = "mds://127.0.0.1:7776/"
+    cluster.driver_spec.ost_endpoint = ""
+    node_uuid = str(sys_uuid.uuid4())
+    cluster.driver_spec.nodes = {
+        node_uuid: {
+            "endpoint": "ost://127.0.0.1:7777",
+            "failure_domain_path": "server",
+        }
+    }
+    resource = cluster.to_ua_resource("storage_cluster")
+    monkeypatch.setattr(rawstor_cluster, "MDS_CONFIG_DIR", tmp_path / "config")
+    monkeypatch.setattr(
+        rawstor_cluster.RawstorStorageClusterDriver, "get_capacity", lambda self: []
+    )
+    driver = rawstor_cluster.StorageClusterAgentDriver(
+        meta_file=str(tmp_path / "meta.json")
+    )
+    driver.start()
+    with patch.object(
+        rawstor_cluster.subprocess,
+        "run",
+        return_value=subprocess.CompletedProcess([], 0),
+    ):
+        driver.create(resource)
+        topology = rawstor_cluster.MDS_CONFIG_DIR / f"{cluster.uuid}.topology"
+        expected = topology.read_text()
+        topology.write_text(
+            "\n".join(line for line in expected.splitlines() if " witness " not in line)
+            + "\n"
+        )
+        assert driver.list("storage_cluster") == []
+        driver.create(resource)
+        assert topology.read_text() == expected
+        [actual] = driver.list("storage_cluster")
+        assert (
+            actual.value["driver_spec"]["nodes"]
+            == resource.value["driver_spec"]["nodes"]
+        )
+
+
+def test_witness_dns_address_is_separate_from_mds_bind(tmp_path, monkeypatch):
+    cluster = _cluster(tmp_path)
+    cluster.driver_spec.endpoint = "mds://127.0.0.1:7776/"
+    cluster.driver_spec.witness_endpoint = "ost://core.local.genesis-core.tech:7776"
+    monkeypatch.setattr(rawstor_cluster, "MDS_CONFIG_DIR", tmp_path / "config")
+    driver = rawstor_cluster.RawstorStorageClusterDriver(cluster)
+    with patch.object(rawstor_cluster.subprocess, "run") as run:
+        driver.configure()
+        run.return_value.returncode = 0
+        driver.restore()
+    assert (
+        tmp_path / "config" / f"{cluster.uuid}.conf"
+    ).read_text() == 'BIND_ADDR=127.0.0.1:7776\nEXTRA_ARGS=""\n'
+    topology = (tmp_path / "config" / f"{cluster.uuid}.topology").read_text()
+    assert (
+        f"ost://core.local.genesis-core.tech:7776 100 witness {CORE_NODE_UUID}\n"
+        in topology
+    )
+    assert cluster.driver_spec.endpoint == "mds://127.0.0.1:7776/"
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "ost://core:7776?x=1",
+        "ost://core:7776#x",
+        "ost://core:7776\nextra",
+        "mds://core:7776",
+    ],
+)
+def test_witness_endpoint_rejects_invalid_topology_uri(tmp_path, endpoint):
+    cluster = _cluster(tmp_path)
+    cluster.driver_spec.witness_endpoint = endpoint
+    with pytest.raises(ValueError):
+        rawstor_cluster.RawstorStorageClusterDriver(cluster)._witness_topology_line(
+            "127.0.0.1:7776"
+        )

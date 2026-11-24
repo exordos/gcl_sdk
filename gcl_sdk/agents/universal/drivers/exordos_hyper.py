@@ -41,17 +41,19 @@ except ModuleNotFoundError as error:
 
 from gcl_sdk.agents.universal.drivers import libvirt as libvirt_driver
 from gcl_sdk.agents.universal.drivers import pool as pool_base
+from gcl_sdk.agents.universal.drivers import rawstor_tls
 
 LOG = logging.getLogger(__name__)
 
 
-def _rawstor_module():
+def _rawstor_module(volume_uuid):
     if rawstor is None:
         raise RuntimeError(
             "Rawstor bindings are required for remote disks; run hypervisors init"
         )
-    rawstor.initialize(insecure=True)
-    return rawstor
+    return rawstor_tls.Bindings(
+        rawstor_tls.TLS_DIR / ("control-volume-" + str(volume_uuid))
+    )
 
 
 # Matches `RuntimeDirectory=rawstor` and `--socket-path=/run/rawstor/%i.sock`
@@ -81,6 +83,53 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
         if not isinstance(self._spec, pool_base.ExordosLocalHyperDriverSpec):
             raise ValueError(f"Unsupported driver spec kind: {self._spec.KIND!r}")
 
+    def configure_rawstor_tls(self, volume):
+        if not volume.storage_location:
+            return
+        if not volume.rawstor_tls:
+            # Discovery reconstructs disks from libvirt and the location drop-in.
+            # Their credential pairs were already installed by the volume target.
+            rawstor_tls.environment(
+                rawstor_tls.TLS_DIR / ("control-volume-" + str(volume.uuid))
+            )
+            rawstor_tls.environment(
+                rawstor_tls.TLS_DIR / ("volume-" + str(volume.uuid))
+            )
+            return
+        location_config = Path(self._vhost_drop_in_path(volume.uuid))
+        if location_config.exists() and "--insecure" in location_config.read_text():
+            active = subprocess.run(
+                ["systemctl", "is-active", "--quiet", self._vhost_unit(volume.uuid)],
+                check=False,
+            )
+            if active.returncode == 0:
+                raise RuntimeError(
+                    "Stop the VM and its insecure vhost before enabling Rawstor TLS"
+                )
+            self._write_remote_location_drop_in(
+                volume.uuid, self._rawstor_address(volume)
+            )
+        rawstor_tls.install(
+            "control-volume-" + str(volume.uuid), volume.rawstor_tls.get("control")
+        )
+        directory, _ = rawstor_tls.install(
+            "volume-" + str(volume.uuid), volume.rawstor_tls.get("service")
+        )
+        unit = self._vhost_unit(volume.uuid)
+        dropin = Path(self._vhost_drop_in_dir(volume.uuid)) / "tls.conf"
+        from gcl_sdk.agents.universal.drivers.rawstor_cluster import _write_if_changed
+
+        config_changed = _write_if_changed(
+            dropin, "[Service]\n" + rawstor_tls.service_environment(directory)
+        )
+        if config_changed:
+            subprocess.check_call(["systemctl", "daemon-reload"])
+        active = subprocess.run(
+            ["systemctl", "is-active", "--quiet", unit], check=False
+        )
+        if active.returncode == 0:
+            rawstor_tls.reload_if_changed(directory, unit)
+
     def _rawstor_address(self, volume: pool_base.MachineVolume) -> tp.Optional[str]:
         """The rawstor Location `volume` lives at, or None if it's qcow2.
 
@@ -99,7 +148,7 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
         return urlunsplit(uri._replace(netloc=f"{account}@{endpoint}"))
 
     def _project_from_location(self, address: str) -> sys_uuid.UUID:
-        account = urlsplit(address).username or _rawstor_module().DEFAULT_ACCOUNT
+        account = urlsplit(address).username or rawstor.DEFAULT_ACCOUNT
         return sys_uuid.UUID(account)
 
     def _target_uri(self, volume_uuid: sys_uuid.UUID, address: str) -> str:
@@ -144,7 +193,7 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
         with open(self._vhost_drop_in_path(volume_uuid), "w") as f:
             # The package's ExecStart appends /%i to LOCATION.
             f.write(
-                f'[Service]\nEnvironment=LOCATION={storage_location.removesuffix("/")}\nEnvironment="EXTRA_ARGS=--insecure"\n'
+                f'[Service]\nEnvironment=LOCATION={storage_location.removesuffix("/")}\nEnvironment="EXTRA_ARGS="\n'
             )
         subprocess.check_call(["systemctl", "daemon-reload"])
 
@@ -284,7 +333,7 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
             size = int(pending.read_text())
         except FileNotFoundError:
             return
-        target = _rawstor_module().Target(self._target_uri(volume_uuid, address))
+        target = _rawstor_module(volume_uuid).Target(self._target_uri(volume_uuid, address))
         if target.spec().size < size:
             raise RuntimeError(
                 "Waiting for the Core agent to resize the RawStor object"
@@ -347,7 +396,7 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
             try:
                 self._finish_pending_resize(volume_uuid, address)
                 spec = (
-                    _rawstor_module()
+                    _rawstor_module(volume_uuid)
                     .Target(self._target_uri(volume_uuid, address))
                     .spec()
                 )
@@ -426,6 +475,7 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
             device = "vd" + chr(ord("a") + i)
 
             if rawstor_addresses[volume.uuid] is not None:
+                self.configure_rawstor_tls(volume)
                 self._start_vhost(
                     volume.uuid, storage_location=rawstor_addresses[volume.uuid]
                 )
@@ -517,7 +567,9 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
         remote_address = self._read_remote_location(volume)
         if remote_address is not None:
             self._finish_pending_resize(volume, remote_address)
-            target = _rawstor_module().Target(self._target_uri(volume, remote_address))
+            target = _rawstor_module(volume).Target(
+                self._target_uri(volume, remote_address)
+            )
             try:
                 spec = target.spec()
             except FileNotFoundError:
@@ -551,10 +603,12 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
     @libvirt_driver.dry_run_decorator()
     def create_volume(self, volume: pool_base.MachineVolume) -> pool_base.MachineVolume:
         address = self._rawstor_address(volume)
+        if address is not None:
+            self.configure_rawstor_tls(volume)
         if address is None:
             return super().create_volume(volume)
 
-        target = _rawstor_module().Target(self._target_uri(volume.uuid, address))
+        target = _rawstor_module(volume.uuid).Target(self._target_uri(volume.uuid, address))
         try:
             spec = target.spec()
         except FileNotFoundError as error:
@@ -581,6 +635,8 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
     @libvirt_driver.dry_run_decorator()
     def delete_volume(self, volume: pool_base.MachineVolume) -> None:
         address = self._rawstor_address(volume)
+        if address is not None:
+            self.configure_rawstor_tls(volume)
         if address is None:
             return super().delete_volume(volume)
 
@@ -601,6 +657,8 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
             raise ValueError("Cannot attach volume without machine")
 
         address = self._rawstor_address(volume)
+        if address is not None:
+            self.configure_rawstor_tls(volume)
         if address is None:
             return super().attach_volume(volume)
 
@@ -680,11 +738,15 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
     def resize_volume(self, volume: pool_base.MachineVolume) -> None:
         """Resize the volume."""
         address = self._rawstor_address(volume)
+        if address is not None:
+            self.configure_rawstor_tls(volume)
         if address is None:
             return super().resize_volume(volume)
         if not address.startswith("mds://"):
             raise pool_base.VolumeResizeNotSupportedError(volume=volume.uuid)
-        target = _rawstor_module().Target(self._target_uri(volume.uuid, address))
+        target = _rawstor_module(volume.uuid).Target(
+            self._target_uri(volume.uuid, address)
+        )
         spec = target.spec()
         size = volume.size << 30
         if size < spec.size or size % spec.chunk_size:

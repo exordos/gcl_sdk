@@ -26,7 +26,6 @@ import typing as tp
 from urllib.parse import urlparse
 import uuid as sys_uuid
 
-import rawstor
 from restalchemy.dm import properties
 from restalchemy.dm import types
 from restalchemy.dm import types_dynamic
@@ -36,12 +35,12 @@ from gcl_sdk.agents.universal import utils as ua_utils
 from gcl_sdk.agents.universal.drivers import exceptions as driver_exc
 from gcl_sdk.agents.universal.drivers import meta
 from gcl_sdk.agents.universal.drivers import pool as pool_base
+from gcl_sdk.agents.universal.drivers import rawstor_tls
 from gcl_sdk.agents.universal.drivers import storage_capacity
 from gcl_sdk.common import utils
 
 LOG = logging.getLogger(__name__)
 
-rawstor.initialize(insecure=True)
 
 # Re-exported for convenience/backward-compat of existing imports of this
 # module - the driver_spec classes themselves live in pool.py (alongside
@@ -108,69 +107,140 @@ class RawstorStorageClusterDriver(AbstractStorageClusterDriver):
 
     @property
     def bindings(self):
-        return rawstor
+        directory, _ = rawstor_tls.install(
+            "control-" + str(self._cluster.uuid), self._spec.tls.get("control")
+        )
+        return rawstor_tls.Bindings(directory)
 
     @property
     def unit_name(self) -> str:
         return f"rawstor-mds@{self._cluster.uuid}.service"
 
-    def _service_settings(self):
-        witness = sys_uuid.uuid5(self._cluster.uuid, "mds-witness")
-        return f'EXTRA_ARGS="--insecure --id={witness}"\n'
-
-    def _reload_credentials(self):
-        """Reload workload credentials after an existing service is configured."""
-
-    def _mds_settings(self, bind):
-        storage_capacity.validate_bind_address(bind)
-        return {
-            "BIND_ADDR": bind,
-            "DB_URI": f"sqlite://{MDS_STATE_DIR / str(self._cluster.uuid) / 'mds.db'}",
-            "ADVERTISE": f"ost://{bind}",
-            "DOMAIN_PATH": str(ua_utils.node_uuid()),
-            "WEIGHT": str(_TOPOLOGY_WEIGHT),
-        }
+    def _witness_topology_line(self, bind: str) -> str:
+        witness_uuid = sys_uuid.uuid5(self._cluster.uuid, "mds-witness")
+        endpoint = self._spec.witness_endpoint or f"ost://{bind}"
+        parsed = urlparse(endpoint)
+        if (
+            parsed.scheme != "ost"
+            or parsed.path not in ("", "/")
+            or parsed.query
+            or parsed.fragment
+            or any(c.isspace() for c in endpoint)
+        ):
+            raise ValueError("Witness endpoint must be ost://host:port")
+        storage_capacity.validate_bind_address(parsed.netloc)
+        return f"{witness_uuid} {endpoint.rstrip('/')} {_TOPOLOGY_WEIGHT} witness {ua_utils.node_uuid()}\n"
 
     def configure(self) -> None:
+        if not self._spec.endpoint.startswith("mds://"):
+            return
         mds = urlparse(self._spec.endpoint)
-        if (
-            mds.scheme != "mds"
-            or mds.path not in ("", "/")
-            or mds.username
-            or mds.query
-            or mds.fragment
-        ):
+        if mds.scheme != "mds" or not mds.hostname or not mds.port:
             raise ValueError("MDS endpoint must be mds://host:port/")
+        entries = self._spec.nodes
+        if not entries and self._spec.ost_endpoint:
+            entries = {
+                str(self._cluster.uuid): {
+                    "endpoint": self._spec.ost_endpoint,
+                    "failure_domain_path": str(self._cluster.uuid),
+                }
+            }
+        lines = []
+        for node_uuid, node in sorted(entries.items()):
+            sys_uuid.UUID(node_uuid)
+            ost = urlparse(node["endpoint"])
+            path = node["failure_domain_path"]
+            if (
+                ost.scheme != "ost"
+                or not ost.hostname
+                or not ost.port
+                or ost.path not in ("", "/")
+                or ost.query
+                or ost.fragment
+                or ost.username
+                or any(c.isspace() for c in node["endpoint"] + path)
+                or not 1 <= len(path.split("/")) <= 4
+                or any(not part or part in (".", "..") for part in path.split("/"))
+            ):
+                raise ValueError("Invalid rawstor OST topology entry")
+            lines.append(
+                f"{node_uuid} {node['endpoint'].rstrip('/')} {_TOPOLOGY_WEIGHT} data,witness {path}\n"
+            )
         config = MDS_CONFIG_DIR / f"{self._cluster.uuid}.conf"
-        previous = config.read_text() if config.exists() else None
-        content = "".join(
-            f"{key}={value}\n" for key, value in self._mds_settings(mds.netloc).items()
+        previous_config = config.read_text() if config.exists() else None
+        bind = mds.netloc
+        storage_capacity.validate_bind_address(bind)
+        lines.append(self._witness_topology_line(bind))
+        directory, _ = rawstor_tls.install(
+            "mds-" + str(self._cluster.uuid), self._spec.tls.get("service")
         )
-        content += self._service_settings()
-        changed = _write_if_changed(config, content)
+        content = f'BIND_ADDR={bind}\nEXTRA_ARGS=""\n'
+        content += "".join(
+            f"{key}={value}\n"
+            for key, value in rawstor_tls.environment(directory).items()
+        )
+        config_changed = _write_if_changed(config, content)
+        topology = MDS_CONFIG_DIR / f"{self._cluster.uuid}.topology"
+        previous_topology = topology.read_text() if topology.exists() else None
+        topology_changed = _write_if_changed(
+            topology,
+            "".join(lines),
+        )
         subprocess.run(["systemctl", "enable", "--now", self.unit_name], check=True)
-        if changed and previous is not None:
+        if config_changed and previous_config is not None:
             try:
                 subprocess.run(["systemctl", "restart", self.unit_name], check=True)
             except subprocess.CalledProcessError:
-                _write_if_changed(config, previous)
+                _write_if_changed(config, previous_config)
+                if previous_topology is not None:
+                    _write_if_changed(topology, previous_topology)
                 raise
-        if previous is not None:
-            self._reload_credentials()
+        elif topology_changed and previous_topology is not None:
+            try:
+                subprocess.run(["systemctl", "reload", self.unit_name], check=True)
+            except subprocess.CalledProcessError:
+                _write_if_changed(topology, previous_topology)
+                raise
+
+        if previous_config is not None:
+            rawstor_tls.reload_if_changed(directory, self.unit_name)
 
     def restore(self) -> None:
+        if not self._spec.endpoint.startswith("mds://"):
+            return
         config = MDS_CONFIG_DIR / f"{self._cluster.uuid}.conf"
-        if not config.exists():
+        topology = MDS_CONFIG_DIR / f"{self._cluster.uuid}.topology"
+        if not config.exists() or not topology.exists():
             raise driver_exc.ResourceNotFound(resource=self._cluster)
         values = dict(line.split("=", 1) for line in config.read_text().splitlines())
-        try:
-            actual_bind = values["BIND_ADDR"]
-            expected = self._mds_settings(actual_bind)
-        except (KeyError, ValueError) as error:
-            raise driver_exc.ResourceNotFound(resource=self._cluster) from error
-        if any(values.get(key) != value for key, value in expected.items()):
+        actual_bind = values["BIND_ADDR"]
+        endpoint = urlparse(self._spec.endpoint)
+        if actual_bind != endpoint.netloc:
+            self._spec.endpoint = f"mds://{actual_bind}/"
+        nodes = {}
+        witness = self._witness_topology_line(actual_bind).split()
+        witness_found = False
+        for line in topology.read_text().splitlines():
+            if not line.strip():
+                continue
+            fields = line.split()
+            if fields == witness:
+                witness_found = True
+                continue
+            if (
+                len(fields) != 5
+                or fields[2] != str(_TOPOLOGY_WEIGHT)
+                or fields[3] not in ("data,witness", "witness,data")
+            ):
+                raise driver_exc.ResourceNotFound(resource=self._cluster)
+            node_uuid, endpoint, _weight, _role, path = fields
+            nodes[node_uuid] = {
+                "endpoint": endpoint,
+                "failure_domain_path": path,
+            }
+        if not witness_found:
             raise driver_exc.ResourceNotFound(resource=self._cluster)
-        self._spec.endpoint = f"mds://{actual_bind}/"
+        self._spec.nodes = nodes
         active = subprocess.run(
             ["systemctl", "is-active", "--quiet", self.unit_name], check=False
         )
@@ -178,39 +248,54 @@ class RawstorStorageClusterDriver(AbstractStorageClusterDriver):
             raise driver_exc.ResourceNotFound(resource=self._cluster)
 
     def delete(self) -> None:
+        if not self._spec.endpoint.startswith("mds://"):
+            return
         subprocess.run(["systemctl", "disable", "--now", self.unit_name], check=True)
+        (MDS_CONFIG_DIR / f"{self._cluster.uuid}.topology").unlink(missing_ok=True)
         (MDS_CONFIG_DIR / f"{self._cluster.uuid}.conf").unlink(missing_ok=True)
-        # The database and OST data outlive the service configuration.
+        rawstor_tls.remove("mds-" + str(self._cluster.uuid))
+        rawstor_tls.remove("control-" + str(self._cluster.uuid))
+        # Keep the SQLite index and OST data when unregistering a cluster.
 
     def get_capacity(self) -> tp.List[pool_base.ThinStoragePool]:
-        bindings = self.bindings
-        mds = bindings.Location(self._spec.endpoint)
-        info = mds.info()
-        registered = set(mds.locations())
-        # Enumerate completed objects before sampling budgets so a concurrent
-        # creation remains reserved in at least one of the two ledgers.
-        objects = {
-            target.uri.rstrip("/").rsplit("/", 1)[-1]: target.spec().size
-            for target in mds.objects()
-        }
+        if not (self._spec.managed or self._spec.pools or self._spec.nodes):
+            # Compatibility for previously registered single-OST clusters.
+            location = self.bindings.Location(
+                self._spec.endpoint if self._spec.ost_endpoint else self._spec.location
+            )
+            info = location.info()
+            storage_pool = pool_base.ThinStoragePool(
+                uuid=sys_uuid.uuid5(self._cluster.uuid, "default"),
+                name="default",
+                pool_type="rawstor",
+                driver_spec=pool_base.rawstor_specs.RawstorPoolDriverSpec(mirrors=1),
+                capacity_usable=info.total >> 30,
+                available_actual=(info.total - info.used) >> 30,
+                tier=self._spec.tier,
+                ephemeral=self._spec.ephemeral,
+            )
+            for target in location.objects():
+                storage_pool.allocate_capacity(target.spec().size >> 30)
+            return [storage_pool]
+        # Read completed MDS objects before sampling OST budgets. A creation
+        # between the samples remains pending, rather than escaping both ledgers.
+        objects = {}
+        if self._spec.nodes:
+            for target in self.bindings.Location(self._spec.endpoint).objects():
+                objects[target.uri.rstrip("/").rsplit("/", 1)[-1]] = target.spec().size
         nodes = []
         for node_uuid, node in self._spec.nodes.items():
-            location = bindings.Location(node["endpoint"])
-            if node["endpoint"] not in registered:
-                nodes.append(
-                    {**node, "uuid": node_uuid, "total": 0, "used": 0, "available": 0}
-                )
-                continue
+            location = self.bindings.Location(node["endpoint"])
             try:
-                sample = location.info()
+                info = location.info()
                 committed = sum(target.spec().size for target in location.objects())
                 nodes.append(
                     {
                         **node,
                         "uuid": node_uuid,
-                        "total": sample.total,
-                        "used": sample.used,
-                        "available": max(0, sample.total - max(sample.used, committed)),
+                        "total": info.total,
+                        "used": info.used,
+                        "available": max(0, info.total - max(info.used, committed)),
                     }
                 )
             except OSError:
@@ -223,11 +308,9 @@ class RawstorStorageClusterDriver(AbstractStorageClusterDriver):
             "nodes": nodes,
             "objects": objects,
             "reported_at": time.time(),
-            "total": info.total,
-            "used": info.used,
-            "available": min(
-                max(0, info.total - info.used), sum(n["available"] for n in nodes)
-            ),
+            "total": sum(n["total"] for n in nodes),
+            "used": sum(n["used"] for n in nodes),
+            "available": sum(n["available"] for n in nodes),
         }
         result = []
         for pool_uuid, policy in self._spec.pools.items():
