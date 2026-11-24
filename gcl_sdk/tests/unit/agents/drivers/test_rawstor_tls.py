@@ -2,7 +2,6 @@
 #    Licensed under the Apache License, Version 2.0 (the "License").
 
 import datetime
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -98,33 +97,6 @@ def test_publish_pair_once_with_private_permissions(destination, credentials):
     assert (directory / "current/cert.key").stat().st_mode & 0o777 == 0o640
     assert directory.stat().st_mode & 0o777 == 0o750
     assert (directory / "current/cert.crt").read_text() == credentials["cert"]
-    assert tls.install("mds-test", credentials) == (directory, False)
-
-
-def test_old_filenames_are_republished_without_certificate_renewal(
-    destination, credentials
-):
-    values = {k: credentials[k] for k in ("cert", "key", "ca", "trust_domain")}
-    digest = hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest()
-    directory = destination / "mds-test"
-    old = directory / digest
-    old.mkdir(parents=True)
-    for field, filename in (("cert", "cert.pem"), ("key", "key.pem"), ("ca", "ca.pem")):
-        (old / filename).write_text(values[field])
-    (directory / "current").symlink_to(digest)
-
-    _, changed = tls.install("mds-test", credentials)
-
-    assert changed
-    env = tls.environment(directory)
-    for variable, filename, field in (
-        ("RAWSTOR_TLS_CERT", "cert.crt", "cert"),
-        ("RAWSTOR_TLS_KEY", "cert.key", "key"),
-        ("RAWSTOR_TLS_CA", "ca.crt", "ca"),
-    ):
-        assert env[variable] == str(directory / "current" / filename)
-        assert Path(env[variable]).read_text() == values[field]
-    assert (old / "key.pem").read_text() == values["key"]
     assert tls.install("mds-test", credentials) == (directory, False)
 
 
@@ -274,11 +246,9 @@ def test_volume_clients_share_control_identity_and_survive_volume_removal(
     first, second = uuid.uuid4(), uuid.uuid4()
     for volume in (first, second):
         tls.install("volume-" + str(volume), credentials)
-        tls.install("control-volume-" + str(volume), credentials)
         tls.install_control(volume, credentials)
     shared = destination / "control-agent-11111111-1111-1111-1111-111111111111"
     assert list(destination.glob("control-agent-*")) == [shared]
-    assert not list(destination.glob("control-volume-*"))
     for volume in (first, second):
         assert (destination / f"volume-{volume}/control").resolve() == shared
     renewed = dict(credentials, cert=credentials["cert"] + "\n")

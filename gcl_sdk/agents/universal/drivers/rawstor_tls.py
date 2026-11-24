@@ -69,9 +69,7 @@ def install(name, credentials):
         serialization.Encoding.DER, form
     ) != leaf.public_key().public_bytes(serialization.Encoding.DER, form):
         raise ValueError("Rawstor certificate and key do not match")
-    digest = hashlib.sha256(
-        b"cert.crt/cert.key/ca.crt\0" + json.dumps(values, sort_keys=True).encode()
-    ).hexdigest()
+    digest = hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest()
     directory = TLS_DIR / name
     directory_mode = 0o700 if name.startswith("control-") else 0o750
     file_mode = 0o600 if name.startswith("control-") else 0o640
@@ -150,8 +148,6 @@ def install_control(volume_uuid, credentials):
         link.replace(volume_dir / "control")
     finally:
         link.unlink(missing_ok=True)
-    # Remove the previous duplicated layout only after publishing its replacement.
-    remove("control-volume-" + str(volume_uuid))
     return directory
 
 
