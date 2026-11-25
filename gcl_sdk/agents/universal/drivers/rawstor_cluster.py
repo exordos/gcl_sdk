@@ -75,10 +75,8 @@ def _write_if_changed(path: Path, content: str) -> bool:
 class AbstractStorageClusterDriver(abc.ABC):
     """Base class for storage cluster drivers.
 
-    Unlike AbstractPoolDriver, this only ever reports capacity - actual
-    disk CRUD for a volume scheduled onto this cluster is done by
-    whichever hypervisor's pool driver owns the VM (see
-    ExordosLocalHyperDriver._rawstor_address), not by this driver.
+    Owns the MDS configuration and provider access used by storage-volume
+    resources. Hypervisors only attach already provisioned objects.
     """
 
     def __init__(self, cluster: "MetaStorageCluster") -> None:
@@ -107,6 +105,10 @@ class RawstorStorageClusterDriver(AbstractStorageClusterDriver):
         super().__init__(cluster)
         if not isinstance(self._spec, RawstorStorageClusterDriverSpec):
             raise ValueError(f"Unsupported driver spec kind: {self._spec.KIND!r}")
+
+    @property
+    def bindings(self):
+        return rawstor
 
     @property
     def unit_name(self) -> str:
@@ -404,5 +406,85 @@ class MetaStorageCluster(meta.MetaDataPlaneModel):
         driver.delete()
 
 
-class StorageClusterAgentDriver(meta.MetaFileStorageAgentDriver):
-    __model_map__ = {"storage_cluster": MetaStorageCluster}
+class MetaStorageVolume(meta.MetaDataPlaneModel):
+    """An object managed by the Core agent, independently of VM attachment."""
+
+    cluster = properties.property(types.UUID(), required=True)
+    project_id = properties.property(types.UUID(), required=True)
+    storage_pool = properties.property(types.String(), required=True)
+    storage_location = properties.property(types.String(), required=True)
+    storage_policy = properties.property(types.Dict(), required=True)
+    size = properties.property(types.Integer(min_value=1), required=True)
+    status = properties.property(types.String(), default="NEW")
+
+    def _target(self, cluster):
+        if cluster is None:
+            raise RuntimeError("Storage cluster is not ready")
+        from urllib.parse import urlsplit, urlunsplit
+
+        parsed = urlsplit(self.storage_location)
+        address = urlunsplit(
+            (
+                parsed.scheme,
+                f"{self.project_id}@{parsed.netloc}",
+                f"/{self.uuid}",
+                "",
+                "",
+            )
+        )
+        return cluster.load_driver().bindings.Target(address)
+
+    def dump_to_dp(self, cluster):
+        target = self._target(cluster)
+        bindings = cluster.load_driver().bindings
+        try:
+            bindings.Location(self.storage_location).create_account(
+                str(self.project_id)
+            )
+        except FileExistsError:
+            pass
+        try:
+            spec = target.spec()
+        except FileNotFoundError:
+            target.create(
+                size=self.size << 30,
+                width=self.storage_policy["mirrors"],
+                chunk_size=pool_base.rawstor_specs.RAWSTOR_CHUNK_SIZE,
+                failure_domain=self.storage_policy["failure_domain"],
+            )
+            spec = target.spec()
+        if spec.size > self.size << 30:
+            raise ValueError("RawStor objects cannot shrink")
+        if spec.size < self.size << 30:
+            target.resize(self.size << 30)
+        self.restore_from_dp(cluster)
+
+    def restore_from_dp(self, cluster):
+        try:
+            spec = self._target(cluster).spec()
+        except FileNotFoundError as error:
+            raise driver_exc.ResourceNotFound(resource=self) from error
+        self.size = spec.size >> 30
+        self.status = "ACTIVE"
+
+    def update_on_dp(self, cluster):
+        self.dump_to_dp(cluster)
+
+    def delete_from_dp(self, cluster):
+        try:
+            self._target(cluster).remove()
+        except FileNotFoundError:
+            pass
+
+
+class StorageClusterAgentDriver(meta.MetaCoordinatorAgentDriver):
+    __model_map__ = {
+        "storage_cluster": MetaStorageCluster,
+        "storage_volume": MetaStorageVolume,
+    }
+    __coordinator_map__ = {
+        "storage_cluster": {},
+        "storage_volume": {
+            "cluster": {"kind": "storage_cluster", "relation": "storage_volume:cluster"}
+        },
+    }

@@ -303,6 +303,8 @@ def test_live_resize_preserves_data_and_notifies_qemu():
                     exordos_hyper.subprocess, "check_call", side_effect=notify
                 ),
             ):
+                # Core grows the object; the hypervisor only refreshes vhost.
+                rawstor.Target(target).resize(3 << 30)
                 driver.resize_volume(volume)
             assert rawstor.Target(target).spec().size == 3 << 30
             deadline = time.monotonic() + 10

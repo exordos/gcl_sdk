@@ -21,6 +21,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import tempfile
 import time
 import typing as tp
 from urllib.parse import urlsplit
@@ -283,10 +284,11 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
             size = int(pending.read_text())
         except FileNotFoundError:
             return
-        # Replay the grow as well: MDS may have reserved new chunks before
-        # an interrupted attempt finished materializing them on the OSTs.
         target = _rawstor_module().Target(self._target_uri(volume_uuid, address))
-        target.resize(size)
+        if target.spec().size < size:
+            raise RuntimeError(
+                "Waiting for the Core agent to resize the RawStor object"
+            )
         unit = self._vhost_unit(volume_uuid)
         active = subprocess.run(
             ["systemctl", "is-active", "--quiet", unit], check=False
@@ -299,7 +301,29 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
             raise subprocess.CalledProcessError(active.returncode, active.args)
         # An inactive backend picks up the size when it starts. Keep the
         # marker on failure so discovery retries before reporting completion.
+        self._write_observed_size(volume_uuid, size >> 30)
         pending.unlink(missing_ok=True)
+
+    def _write_observed_size(self, volume_uuid, size):
+        path = Path(self._vhost_drop_in_dir(volume_uuid)) / "observed-size"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            mode="w", dir=path.parent, delete=False
+        ) as stream:
+            temporary = Path(stream.name)
+            try:
+                stream.write(str(size))
+                stream.flush()
+                os.fsync(stream.fileno())
+                temporary.replace(path)
+            finally:
+                temporary.unlink(missing_ok=True)
+
+    def _observed_size(self, volume_uuid, physical_size):
+        path = Path(self._vhost_drop_in_dir(volume_uuid)) / "observed-size"
+        if not path.exists():
+            self._write_observed_size(volume_uuid, physical_size)
+        return int(path.read_text())
 
     def _list_rawstor_volumes(
         self,
@@ -339,7 +363,7 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
                     machine=machine_uuid,
                     name=str(volume_uuid),
                     project_id=self._project_from_location(address),
-                    size=spec.size >> 30,  # in GB
+                    size=self._observed_size(volume_uuid, spec.size >> 30),  # in GB
                     index=idx if idx is not None else libvirt_driver.MAX_VOLUME_INDEX,
                     status=pool_base.VolumeStatus.ACTIVE.value,
                     storage_location=address,
@@ -508,7 +532,7 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
                     machine=machine_uuid,
                     name=str(volume),
                     project_id=self._project_from_location(remote_address),
-                    size=spec.size >> 30,  # in GB
+                    size=self._observed_size(volume, spec.size >> 30),  # in GB
                     index=idx if idx is not None else libvirt_driver.MAX_VOLUME_INDEX,
                     status=pool_base.VolumeStatus.ACTIVE.value,
                     storage_location=remote_address,
@@ -530,29 +554,17 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
         if address is None:
             return super().create_volume(volume)
 
-        if urlsplit(address).scheme == "mds":
-            try:
-                _rawstor_module().Location(address).create_account(
-                    str(volume.project_id)
-                )
-            except FileExistsError:
-                pass
         target = _rawstor_module().Target(self._target_uri(volume.uuid, address))
         try:
-            policy = volume.storage_policy
-            placement = {}
-            if address.startswith("mds://"):
-                placement["failure_domain"] = policy.get("failure_domain", "server")
-            target.create(
-                size=volume.size << 30,
-                width=policy.get("mirrors", 1),
-                chunk_size=pool_base.rawstor_specs.RAWSTOR_CHUNK_SIZE
-                if address.startswith("mds://")
-                else 0,
-                **placement,
+            spec = target.spec()
+        except FileNotFoundError as error:
+            raise RuntimeError(
+                "Waiting for the Core agent to create the RawStor object"
+            ) from error
+        if spec.size != volume.size << 30:
+            raise RuntimeError(
+                "Waiting for the Core agent to apply the RawStor object size"
             )
-        except FileExistsError:
-            raise pool_base.VolumeAlreadyExistsError(volume=volume.uuid)
 
         # Record the address now, not only when the volume gets attached
         # (_start_vhost): this drop-in is the only durable local record
@@ -560,6 +572,7 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
         # uuid), so a volume created but not yet attached to a machine
         # must still be discoverable by get_volume/list_pool_resources.
         self._write_remote_location_drop_in(volume.uuid, address)
+        self._write_observed_size(volume.uuid, volume.size)
 
         volume.status = pool_base.VolumeStatus.ACTIVE.value
         LOG.debug("The rawstor volume %s has been created", volume.uuid)
@@ -578,13 +591,6 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
         # all) is a no-op - but a real failure to stop it must abort the
         # delete rather than orphan an enabled unit.
         self._stop_vhost(volume.uuid)
-
-        target = _rawstor_module().Target(self._target_uri(volume.uuid, address))
-        try:
-            target.remove()
-        except FileNotFoundError:
-            LOG.warning("The rawstor volume %s has not been found", volume.uuid)
-            return
 
         LOG.debug("The rawstor volume %s has been deleted", volume.uuid)
 
@@ -682,17 +688,10 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
         spec = target.spec()
         size = volume.size << 30
         if size < spec.size or size % spec.chunk_size:
-            raise ValueError("Rawstor disks can only grow by whole chunks")
+            raise ValueError("RawStor disks can only grow by whole chunks")
         pending = Path(self._vhost_drop_in_dir(volume.uuid)) / "resize-pending"
         pending.parent.mkdir(parents=True, exist_ok=True)
         staged = pending.with_suffix(".tmp")
         staged.write_text(str(size))
         staged.replace(pending)
-        try:
-            self._finish_pending_resize(volume.uuid, address)
-        except OSError:
-            # A rejected grow must not poison discovery of the pool.
-            # If MDS already grew, retain the marker to finish that operation.
-            if target.spec().size == spec.size and size > spec.size:
-                pending.unlink(missing_ok=True)
-            raise
+        self._finish_pending_resize(volume.uuid, address)
