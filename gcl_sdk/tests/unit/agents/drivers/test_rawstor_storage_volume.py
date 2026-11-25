@@ -82,3 +82,10 @@ def test_missing_cluster_never_provisions_object(object_job):
         job.dump_to_dp(None)
     target.create.assert_not_called()
     bindings.Location.assert_not_called()
+
+
+def test_core_replays_interrupted_grow_even_if_spec_already_has_new_size(object_job):
+    job, cluster, _, target, state = object_job
+    state["size"] = job.size << 30
+    job.update_on_dp(cluster)
+    target.resize.assert_called_once_with(job.size << 30)

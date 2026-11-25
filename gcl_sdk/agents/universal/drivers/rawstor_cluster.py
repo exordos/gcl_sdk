@@ -453,9 +453,11 @@ class MetaStorageVolume(meta.MetaDataPlaneModel):
                 failure_domain=self.storage_policy["failure_domain"],
             )
             spec = target.spec()
-        if spec.size > self.size << 30:
-            raise ValueError("RawStor objects cannot shrink")
-        if spec.size < self.size << 30:
+        else:
+            if spec.size > self.size << 30:
+                raise ValueError("RawStor objects cannot shrink")
+            # A previous grow may have reserved chunks before materializing
+            # them. Replaying the same size completes that interrupted grow.
             target.resize(self.size << 30)
         self.restore_from_dp(cluster)
 
