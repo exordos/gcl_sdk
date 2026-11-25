@@ -330,7 +330,12 @@ def test_native_backing_is_not_prepared_by_agent(node, location):
 
 def test_restore_reads_changed_config_without_applying_it(node):
     model, module = node
-    with patch.object(module.subprocess, "run"), patch("rawstor.Location"):
+    with (
+        patch.object(
+            module.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)
+        ),
+        patch("rawstor.Location"),
+    ):
         model.dump_to_dp()
     config = module.OST_CONFIG_DIR / f"{model.uuid}.conf"
     content = "BIND_ADDR=127.0.0.1:8888\nLOCATION=file:///other/ost\n"
