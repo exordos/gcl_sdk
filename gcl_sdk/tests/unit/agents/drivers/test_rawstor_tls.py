@@ -194,7 +194,7 @@ def test_vhost_rotates_tls_without_restarting_or_resizing(
     volume = SimpleNamespace(
         uuid=uuid.uuid4(),
         storage_location="mds://host:7776/",
-        rawstor_tls={"control": credentials, "service": credentials},
+        rawstor_tls={"service": credentials},
     )
     driver.configure_rawstor_tls(volume)
     driver.configure_rawstor_tls(volume)
@@ -209,6 +209,7 @@ def test_vhost_rotates_tls_without_restarting_or_resizing(
     assert all("restart" not in call.args[0] for call in run.call_args_list)
     env = (tmp_path / "vhost-dropin/tls.conf").read_text()
     assert "RAWSTOR_TLS_CERT=" in env and "--insecure" not in env
+    assert list(destination.glob("control-*")) == []
     volume.rawstor_tls = {}
     driver.configure_rawstor_tls(volume)
 
@@ -243,63 +244,6 @@ def test_inventory_collects_specs_in_one_worker(credentials, monkeypatch):
         assert objects[0].uri == "mds://host/object"
         assert objects[0].spec().size == 1 << 30
         assert run.call_count == 1
-
-
-def test_volume_clients_share_control_identity_and_survive_volume_removal(
-    destination, credentials
-):
-    import uuid
-
-    first, second = uuid.uuid4(), uuid.uuid4()
-    for volume in (first, second):
-        tls.install("volume-" + str(volume), credentials)
-        tls.install_control(volume, credentials)
-    shared = destination / "control-agent-11111111-1111-1111-1111-111111111111"
-    assert list(destination.glob("control-agent-*")) == [shared]
-    for volume in (first, second):
-        assert (destination / f"volume-{volume}/control").resolve() == shared
-    renewed = dict(credentials, cert=credentials["cert"] + "\n")
-    tls.install_control(first, renewed)
-    assert (
-        destination / f"volume-{second}/control/current/cert.crt"
-    ).read_text() == renewed["cert"]
-    tls.remove("volume-" + str(first))
-    assert (
-        destination / f"volume-{second}/control/current/cert.key"
-    ).read_text() == credentials["key"]
-    assert shared.stat().st_mode & 0o777 == 0o700
-
-
-def test_older_volume_target_cannot_roll_back_shared_control_identity(
-    destination, credentials
-):
-    from cryptography.hazmat.primitives import serialization
-
-    name = "control-agent-11111111-1111-1111-1111-111111111111"
-    tls.install(name, credentials)
-    old = x509.load_pem_x509_certificate(credentials["cert"].encode())
-    key = serialization.load_pem_private_key(credentials["key"].encode(), password=None)
-    renewed = (
-        x509.CertificateBuilder()
-        .subject_name(old.subject)
-        .issuer_name(old.issuer)
-        .public_key(key.public_key())
-        .serial_number(x509.random_serial_number())
-        .not_valid_before(old.not_valid_before_utc + datetime.timedelta(seconds=1))
-        .not_valid_after(old.not_valid_after_utc + datetime.timedelta(days=1))
-    )
-    for extension in old.extensions:
-        renewed = renewed.add_extension(extension.value, extension.critical)
-    renewed = dict(
-        credentials,
-        cert=renewed.sign(key, hashes.SHA256())
-        .public_bytes(serialization.Encoding.PEM)
-        .decode(),
-    )
-    directory, changed = tls.install(name, renewed)
-    assert changed
-    assert tls.install(name, credentials) == (directory, False)
-    assert (directory / "current/cert.crt").read_text() == renewed["cert"]
 
 
 @pytest.mark.parametrize(

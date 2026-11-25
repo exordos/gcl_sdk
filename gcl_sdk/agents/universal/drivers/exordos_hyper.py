@@ -51,9 +51,7 @@ def _rawstor_module(volume_uuid):
         raise RuntimeError(
             "RawStor bindings are required for remote disks; run hypervisors init"
         )
-    return rawstor_tls.Bindings(
-        rawstor_tls.TLS_DIR / ("volume-" + str(volume_uuid)) / "control"
-    )
+    return rawstor_tls.Bindings(rawstor_tls.TLS_DIR / ("volume-" + str(volume_uuid)))
 
 
 # Matches `RuntimeDirectory=rawstor` and `--socket-path=/run/rawstor/%i.sock`
@@ -90,9 +88,6 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
             # Discovery reconstructs disks from libvirt and the location drop-in.
             # Their credential pairs were already installed by the volume target.
             rawstor_tls.environment(
-                rawstor_tls.TLS_DIR / ("volume-" + str(volume.uuid)) / "control"
-            )
-            rawstor_tls.environment(
                 rawstor_tls.TLS_DIR / ("volume-" + str(volume.uuid))
             )
             return
@@ -112,7 +107,6 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
         directory, _ = rawstor_tls.install(
             "volume-" + str(volume.uuid), volume.rawstor_tls.get("service")
         )
-        rawstor_tls.install_control(volume.uuid, volume.rawstor_tls.get("control"))
         unit = self._vhost_unit(volume.uuid)
         dropin = Path(self._vhost_drop_in_dir(volume.uuid)) / "tls.conf"
         from gcl_sdk.agents.universal.drivers.rawstor_cluster import _write_if_changed
@@ -331,7 +325,9 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
             size = int(pending.read_text())
         except FileNotFoundError:
             return
-        target = _rawstor_module(volume_uuid).Target(self._target_uri(volume_uuid, address))
+        target = _rawstor_module(volume_uuid).Target(
+            self._target_uri(volume_uuid, address)
+        )
         if target.spec().size < size:
             raise RuntimeError(
                 "Waiting for the Core agent to resize the RawStor object"
@@ -606,7 +602,9 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
         if address is None:
             return super().create_volume(volume)
 
-        target = _rawstor_module(volume.uuid).Target(self._target_uri(volume.uuid, address))
+        target = _rawstor_module(volume.uuid).Target(
+            self._target_uri(volume.uuid, address)
+        )
         try:
             spec = target.spec()
         except FileNotFoundError as error:
@@ -645,6 +643,7 @@ class ExordosLocalHyperDriver(libvirt_driver.LibvirtPoolDriver):
         # all) is a no-op - but a real failure to stop it must abort the
         # delete rather than orphan an enabled unit.
         self._stop_vhost(volume.uuid)
+        rawstor_tls.remove("volume-" + str(volume.uuid))
 
         LOG.debug("The rawstor volume %s has been deleted", volume.uuid)
 
