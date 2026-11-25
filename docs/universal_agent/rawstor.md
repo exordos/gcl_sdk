@@ -48,8 +48,9 @@ accounting for mirrors, failure domains and pending disks. Unreachable OSTs
 contribute zero available space. MDS remains the final allocation authority.
 
 `MachineVolume.storage_policy` carries the assigned pool UUID, mirror count,
-chunk size and failure domain through reconciliation. The hypervisor passes
-these settings to `rawstor.Target.create()`. Remote disks do not consume the
+failure domain through reconciliation. The Core agent creates accounts and
+objects through `storage_volume` resources, using a fixed 1 GiB chunk size.
+The hypervisor waits for the object and only manages its vhost attachment. Remote disks do not consume the
 hypervisor's local qcow2 budget. Implicit local pools and new disk requests
 default to WARM ephemeral storage; explicitly configured attributes override
 these defaults.
@@ -72,8 +73,9 @@ in its disk configuration and waits for their sockets. Backend startup failure
 prevents starting QEMU. Missing backend configuration is an error rather than
 a fallback to a different storage location.
 
-Grow-only resize updates the remote object and sends `SIGHUP` to an active
-vhost backend. Failed resize notifications are retried during discovery; an
+For grow-only resize, Core updates the remote object first. The hypervisor
+then sends `SIGHUP` to an active vhost backend and acknowledges the new size.
+Object deletion waits for the hypervisor to acknowledge detachment. Failed resize notifications are retried during discovery; an
 inactive backend reads the new size when it starts. Guest partition and
 filesystem growth remain separate operations.
 

@@ -199,7 +199,7 @@ class TestStorageClusterAgentDriver:
 
         meta_file = str(tmp_path / "meta.json")
         driver = rawstor_cluster.StorageClusterAgentDriver(meta_file=meta_file)
-        assert driver.get_capabilities() == ["storage_cluster"]
+        assert driver.get_capabilities() == ["storage_cluster", "storage_volume"]
 
         driver.start()
         cluster_uuid = sys_uuid.uuid4()
