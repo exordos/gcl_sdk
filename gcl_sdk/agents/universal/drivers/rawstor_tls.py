@@ -26,6 +26,26 @@ import uuid
 TLS_DIR = Path("/etc/rawstor/tls")
 
 
+def _trust_domain(ca_pem):
+    from cryptography import x509
+
+    ca = x509.load_pem_x509_certificate(ca_pem.encode())
+    try:
+        identities = ca.extensions.get_extension_for_class(
+            x509.SubjectAlternativeName
+        ).value.get_values_for_type(x509.UniformResourceIdentifier)
+    except x509.ExtensionNotFound as error:
+        raise ValueError("RawStor CA requires a SPIFFE trust domain") from error
+    if len(identities) != 1 or not identities[0].startswith("spiffe://"):
+        raise ValueError("RawStor CA requires one SPIFFE trust domain")
+    domain = identities[0][len("spiffe://") :]
+    if not domain or any(
+        c not in "abcdefghijklmnopqrstuvwxyz0123456789.-_" for c in domain
+    ):
+        raise ValueError("Invalid RawStor CA trust domain")
+    return domain
+
+
 def install(name, credentials):
     """Publish a complete immutable PEM generation through one atomic symlink.
 
@@ -36,17 +56,13 @@ def install(name, credentials):
         raise RuntimeError("RawStor TLS credentials are not ready")
     if not name or any(c not in "abcdefghijklmnopqrstuvwxyz0123456789-" for c in name):
         raise ValueError("Invalid RawStor credential name")
-    values = {k: credentials[k] for k in ("cert", "key", "ca", "trust_domain")}
-    domain = values["trust_domain"]
-    if not domain or any(
-        c not in "abcdefghijklmnopqrstuvwxyz0123456789.-_" for c in domain
-    ):
-        raise ValueError("Invalid RawStor trust domain")
+    values = {k: credentials[k] for k in ("cert", "key", "ca")}
     if any(not isinstance(v, str) or not v for v in values.values()):
         raise ValueError("Incomplete RawStor TLS credentials")
     from cryptography import x509
     from cryptography.hazmat.primitives import serialization
 
+    domain = _trust_domain(values["ca"])
     leaf = x509.load_pem_x509_certificate(values["cert"].encode())
     ca = x509.load_pem_x509_certificate(values["ca"].encode())
     leaf.verify_directly_issued_by(ca)
@@ -115,7 +131,6 @@ def install(name, credentials):
                     f.flush()
                     os.fsync(f.fileno())
                     os.fchown(f.fileno(), 0, group)
-            (stage / "domain").write_text(domain)
             stage.rename(generation)
     link = directory / (".current-" + uuid.uuid4().hex)
     try:
@@ -136,7 +151,7 @@ def install_control(volume_uuid, credentials):
     identities = leaf.extensions.get_extension_for_class(
         x509.SubjectAlternativeName
     ).value.get_values_for_type(x509.UniformResourceIdentifier)
-    prefix = f"spiffe://{credentials['trust_domain']}/admin/"
+    prefix = f"spiffe://{_trust_domain(credentials['ca'])}/admin/"
     if len(identities) != 1 or not identities[0].startswith(prefix):
         raise ValueError("RawStor control certificate requires an admin identity")
     agent = uuid.UUID(identities[0][len(prefix) :])
@@ -161,7 +176,7 @@ def remove(name):
 def environment(directory):
     current = Path(directory) / "current"
     return {
-        "RAWSTOR_TLS_TRUST_DOMAIN": (current / "domain").read_text(),
+        "RAWSTOR_TLS_TRUST_DOMAIN": _trust_domain((current / "ca.crt").read_text()),
         "RAWSTOR_TLS_CERT": str(current / "cert.crt"),
         "RAWSTOR_TLS_KEY": str(current / "cert.key"),
         "RAWSTOR_TLS_CA": str(current / "ca.crt"),
@@ -204,7 +219,6 @@ def temporary_bindings(credentials):
             ("cert.crt", "cert"),
             ("cert.key", "key"),
             ("ca.crt", "ca"),
-            ("domain", "trust_domain"),
         ):
             with open(
                 os.open(current / name, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600),

@@ -34,11 +34,7 @@ def credentials():
         .add_extension(x509.BasicConstraints(ca=True, path_length=0), True)
         .add_extension(
             x509.SubjectAlternativeName(
-                [
-                    x509.UniformResourceIdentifier(
-                        "spiffe://rawstor.local/admin/11111111-1111-1111-1111-111111111111"
-                    )
-                ]
+                [x509.UniformResourceIdentifier("spiffe://rawstor.local")]
             ),
             False,
         )
@@ -75,7 +71,6 @@ def credentials():
             serialization.PrivateFormat.PKCS8,
             serialization.NoEncryption(),
         ).decode(),
-        trust_domain="rawstor.local",
     )
 
 
@@ -94,6 +89,12 @@ def test_publish_pair_once_with_private_permissions(destination, credentials):
     directory, changed = tls.install("mds-test", credentials)
     assert changed
     assert (directory / "current").is_symlink()
+    assert {p.name for p in (directory / "current").iterdir()} == {
+        "cert.crt",
+        "cert.key",
+        "ca.crt",
+    }
+    assert tls.environment(directory)["RAWSTOR_TLS_TRUST_DOMAIN"] == "rawstor.local"
     assert (directory / "current/cert.key").stat().st_mode & 0o777 == 0o640
     assert directory.stat().st_mode & 0o777 == 0o750
     assert (directory / "current/cert.crt").read_text() == credentials["cert"]
@@ -164,6 +165,12 @@ def test_worker_uses_current_credentials_and_returns_errno(credentials, monkeypa
             client.Target("mds://127.0.0.1:7776/test").spec()
         env = run.call_args.kwargs["env"]
         assert "RAWSTOR_TLS_MDS_ID" not in env
+        assert env["RAWSTOR_TLS_TRUST_DOMAIN"] == "rawstor.local"
+        assert {p.name for p in (Path(client.directory) / "current").iterdir()} == {
+            "cert.crt",
+            "cert.key",
+            "ca.crt",
+        }
         key = Path(env["RAWSTOR_TLS_KEY"])
         assert key.stat().st_mode & 0o777 == 0o600
     assert not key.exists()
@@ -293,3 +300,46 @@ def test_older_volume_target_cannot_roll_back_shared_control_identity(
     assert changed
     assert tls.install(name, credentials) == (directory, False)
     assert (directory / "current/cert.crt").read_text() == renewed["cert"]
+
+
+@pytest.mark.parametrize(
+    "identities",
+    [
+        None,
+        [],
+        ["https://rawstor.local"],
+        ["spiffe://"],
+        ["spiffe://rawstor.local/admin/test"],
+        ["spiffe://rawstor.local", "spiffe://other.local"],
+    ],
+)
+def test_invalid_ca_trust_domain_is_rejected_before_publish(
+    destination, credentials, identities
+):
+    original = x509.load_pem_x509_certificate(credentials["ca"].encode())
+    key = serialization.load_pem_private_key(credentials["key"].encode(), password=None)
+    builder = (
+        x509.CertificateBuilder()
+        .subject_name(original.subject)
+        .issuer_name(original.issuer)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(original.not_valid_before_utc)
+        .not_valid_after(original.not_valid_after_utc)
+        .add_extension(x509.BasicConstraints(ca=True, path_length=0), True)
+    )
+    if identities is not None:
+        builder = builder.add_extension(
+            x509.SubjectAlternativeName(
+                [x509.UniformResourceIdentifier(uri) for uri in identities]
+            ),
+            False,
+        )
+    invalid_ca = (
+        builder.sign(key, hashes.SHA256())
+        .public_bytes(serialization.Encoding.PEM)
+        .decode()
+    )
+    with pytest.raises(ValueError, match="trust domain"):
+        tls.install("mds-test", dict(credentials, ca=invalid_ca))
+    assert not destination.exists()
