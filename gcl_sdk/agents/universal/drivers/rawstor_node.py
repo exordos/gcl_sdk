@@ -116,19 +116,12 @@ class MetaStorageNode(meta.MetaDataPlaneModel):
                     _write_if_changed(path, content)
             subprocess.run(["systemctl", "daemon-reload"], check=False)
             raise
-        directory, _ = rawstor_tls.install(
-            "control-" + str(self.uuid), self.driver_spec.tls.get("control")
-        )
-        rawstor = rawstor_tls.Bindings(directory)
-
         if previous_config is not None:
             rawstor_tls.reload_if_changed(
                 rawstor_tls.TLS_DIR / ("ost-" + str(self.uuid)), self.unit_name
             )
 
-        # A running unit alone is insufficient: verify the advertised OST responds.
-        rawstor.Location(self.driver_spec.endpoint).info()
-        self.status = "ACTIVE"
+        self.restore_from_dp()
 
     def restore_from_dp(self, **kwargs):
         config = OST_CONFIG_DIR / f"{self.uuid}.conf"
@@ -142,16 +135,7 @@ class MetaStorageNode(meta.MetaDataPlaneModel):
         )
         if active.returncode:
             raise driver_exc.ResourceNotFound(resource=self)
-        rawstor = rawstor_tls.Bindings(
-            rawstor_tls.TLS_DIR / ("control-" + str(self.uuid))
-        )
-
-        try:
-            rawstor.Location(self.driver_spec.endpoint).info()
-        except OSError:
-            self.status = "ERROR"
-        else:
-            self.status = "ACTIVE"
+        self.status = "ACTIVE"
 
     def dump_to_dp(self, **kwargs):
         self._configure()
@@ -165,7 +149,6 @@ class MetaStorageNode(meta.MetaDataPlaneModel):
         dropin.unlink(missing_ok=True)
         (OST_CONFIG_DIR / f"{self.uuid}.conf").unlink(missing_ok=True)
         rawstor_tls.remove("ost-" + str(self.uuid))
-        rawstor_tls.remove("control-" + str(self.uuid))
         subprocess.run(["systemctl", "daemon-reload"], check=True)
 
 

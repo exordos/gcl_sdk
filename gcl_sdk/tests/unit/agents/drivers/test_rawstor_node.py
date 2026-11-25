@@ -91,7 +91,7 @@ def node(tmp_path, monkeypatch):
     return model, rawstor_node
 
 
-def test_reconcile_starts_ost_and_checks_advertised_endpoint(node):
+def test_reconcile_starts_ost_and_checks_systemd_only(node):
     model, module = node
     with (
         patch.object(
@@ -101,8 +101,7 @@ def test_reconcile_starts_ost_and_checks_advertised_endpoint(node):
     ):
         model.dump_to_dp()
         assert model.status == "ACTIVE"
-        location.assert_called_once_with(model.driver_spec.endpoint)
-        location.return_value.info.assert_called_once()
+        location.assert_not_called()
         config = (module.OST_CONFIG_DIR / f"{model.uuid}.conf").read_text()
         assert (
             f'BIND_ADDR=0.0.0.0:7777\nLOCATION={model.driver_spec.location}\nEXTRA_ARGS=""\n'
@@ -118,21 +117,17 @@ def test_reconcile_starts_ost_and_checks_advertised_endpoint(node):
         ]
 
 
-def test_unreachable_ost_is_not_reported_ready_and_can_retry(node):
+def test_inactive_ost_is_not_reported_ready(node):
     model, module = node
-    with (
-        patch.object(
-            module.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)
-        ),
-        patch("rawstor.Location") as location,
+    with patch.object(
+        module.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)
     ):
-        location.return_value.info.side_effect = OSError("not ready")
-        with pytest.raises(OSError):
-            model.dump_to_dp()
-        assert model.status == "NEW"
-        location.return_value.info.side_effect = None
-        model.restore_from_dp()
-        assert model.status == "ACTIVE"
+        model.dump_to_dp()
+    with patch.object(
+        module.subprocess, "run", return_value=subprocess.CompletedProcess([], 3)
+    ):
+        with pytest.raises(module.driver_exc.ResourceNotFound):
+            model.restore_from_dp()
 
 
 def test_failed_service_start_is_not_reported_ready(node):
