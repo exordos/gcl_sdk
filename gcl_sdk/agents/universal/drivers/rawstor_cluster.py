@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import abc
 import logging
-import math
 import os
 from pathlib import Path
 import subprocess
@@ -54,6 +53,7 @@ RawstorStorageClusterDriverSpec = pool_base.RawstorStorageClusterAgentSpec
 
 MDS_CONFIG_DIR = Path("/etc/rawstor/mds")
 MDS_STATE_DIR = Path("/var/lib/rawstor/mds")
+_TOPOLOGY_WEIGHT = 100
 
 
 def _write_if_changed(path: Path, content: str) -> bool:
@@ -127,7 +127,7 @@ class RawstorStorageClusterDriver(AbstractStorageClusterDriver):
         ):
             raise ValueError("Witness endpoint must be ost://host:port")
         storage_capacity.validate_bind_address(parsed.netloc)
-        return f"{witness_uuid} {endpoint.rstrip('/')} 100 witness {ua_utils.node_uuid()}\n"
+        return f"{witness_uuid} {endpoint.rstrip('/')} {_TOPOLOGY_WEIGHT} witness {ua_utils.node_uuid()}\n"
 
     def configure(self) -> None:
         if not self._spec.endpoint.startswith("mds://"):
@@ -140,7 +140,6 @@ class RawstorStorageClusterDriver(AbstractStorageClusterDriver):
             entries = {
                 str(self._cluster.uuid): {
                     "endpoint": self._spec.ost_endpoint,
-                    "weight": 1,
                     "failure_domain_path": str(self._cluster.uuid),
                 }
             }
@@ -160,13 +159,10 @@ class RawstorStorageClusterDriver(AbstractStorageClusterDriver):
                 or any(c.isspace() for c in node["endpoint"] + path)
                 or not 1 <= len(path.split("/")) <= 4
                 or any(not part or part in (".", "..") for part in path.split("/"))
-                or not math.isfinite(node["weight"])
-                or not 1 <= node["weight"] <= (1 << 64) - 1
-                or node["weight"] != int(node["weight"])
             ):
                 raise ValueError("Invalid rawstor OST topology entry")
             lines.append(
-                f"{node_uuid} {node['endpoint'].rstrip('/')} {int(node['weight'])} data,witness {path}\n"
+                f"{node_uuid} {node['endpoint'].rstrip('/')} {_TOPOLOGY_WEIGHT} data,witness {path}\n"
             )
         config = MDS_CONFIG_DIR / f"{self._cluster.uuid}.conf"
         previous_config = config.read_text() if config.exists() else None
@@ -219,12 +215,15 @@ class RawstorStorageClusterDriver(AbstractStorageClusterDriver):
             if fields == witness:
                 witness_found = True
                 continue
-            if len(fields) != 5 or fields[3] not in ("data,witness", "witness,data"):
+            if (
+                len(fields) != 5
+                or fields[2] != str(_TOPOLOGY_WEIGHT)
+                or fields[3] not in ("data,witness", "witness,data")
+            ):
                 raise driver_exc.ResourceNotFound(resource=self._cluster)
-            node_uuid, endpoint, weight, _role, path = fields
+            node_uuid, endpoint, _weight, _role, path = fields
             nodes[node_uuid] = {
                 "endpoint": endpoint,
-                "weight": int(weight),
                 "failure_domain_path": path,
             }
         if not witness_found:

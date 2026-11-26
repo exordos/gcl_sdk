@@ -247,7 +247,7 @@ class TestCoreMDSLifecycle:
         topology = (tmp_path / "config" / f"{cluster_uuid}.topology").read_text()
         witness_uuid = sys_uuid.uuid5(cluster_uuid, "mds-witness")
         assert topology == (
-            f"{cluster_uuid} ost://10.0.0.5:7777 1 data,witness {cluster_uuid}\n"
+            f"{cluster_uuid} ost://10.0.0.5:7777 100 data,witness {cluster_uuid}\n"
             f"{witness_uuid} ost://10.20.0.2:7776 100 witness {CORE_NODE_UUID}\n"
         )
         config = (tmp_path / "config" / f"{cluster_uuid}.conf").read_text()
@@ -257,16 +257,12 @@ class TestCoreMDSLifecycle:
             in run.call_args_list
         )
 
-    @pytest.mark.parametrize("weight", [1.0, 2.0])
-    def test_topology_serializes_integral_legacy_weights_without_decimal_point(
-        self, tmp_path, monkeypatch, weight
-    ):
+    def test_topology_uses_internal_constant_weight(self, tmp_path, monkeypatch):
         driver = self._driver(tmp_path, monkeypatch)
         node_uuid = str(driver._cluster.uuid)
         driver._cluster.driver_spec.nodes = {
             node_uuid: {
                 "endpoint": "ost://10.0.0.5:7777",
-                "weight": weight,
                 "failure_domain_path": "dc/server",
             }
         }
@@ -274,20 +270,7 @@ class TestCoreMDSLifecycle:
             driver.configure()
         assert (tmp_path / "config" / f"{node_uuid}.topology").read_text().splitlines()[
             0
-        ] == (f"{node_uuid} ost://10.0.0.5:7777 {int(weight)} data,witness dc/server")
-
-    @pytest.mark.parametrize("weight", [0, 1.5, float("inf"), 1 << 64])
-    def test_topology_rejects_invalid_weights(self, tmp_path, monkeypatch, weight):
-        driver = self._driver(tmp_path, monkeypatch)
-        driver._cluster.driver_spec.nodes = {
-            str(driver._cluster.uuid): {
-                "endpoint": "ost://10.0.0.5:7777",
-                "weight": weight,
-                "failure_domain_path": "server",
-            }
-        }
-        with pytest.raises(ValueError):
-            driver.configure()
+        ] == f"{node_uuid} ost://10.0.0.5:7777 100 data,witness dc/server"
 
     def test_topology_update_requests_reload_without_inspecting_database_or_logs(
         self, tmp_path, monkeypatch
@@ -489,7 +472,6 @@ def test_two_core_mds_instances_create_enumerate_and_recover_disks(
                 )
                 nodes[str(sys_uuid.uuid4())] = {
                     "endpoint": f"ost://{host}:{ost_port}",
-                    "weight": 1.0,
                     "failure_domain_path": f"dc/row/rack{member}/server{member}",
                 }
             cluster.driver_spec.nodes = nodes
@@ -587,7 +569,9 @@ def test_two_core_mds_instances_create_enumerate_and_recover_disks(
 
         # Apply a topology edit through the real daemon's HUP handler.
         first = clusters[0]
-        first.driver_spec.nodes[next(iter(first.driver_spec.nodes))]["weight"] = 2
+        first.driver_spec.nodes[next(iter(first.driver_spec.nodes))][
+            "failure_domain_path"
+        ] = "dc/row/newrack/server"
 
         def reload_service(args, **kwargs):
             if args[1] == "reload":
@@ -706,7 +690,6 @@ def test_coordinator_observes_drift_and_applies_target_on_update(tmp_path, monke
     cluster.driver_spec.nodes = {
         node_uuid: {
             "endpoint": "ost://127.0.0.1:7777",
-            "weight": 100,
             "failure_domain_path": "dc/server",
         }
     }
@@ -727,14 +710,20 @@ def test_coordinator_observes_drift_and_applies_target_on_update(tmp_path, monke
         created = driver.create(resource)
         topology = rawstor_cluster.MDS_CONFIG_DIR / f"{cluster.uuid}.topology"
         original = topology.read_text()
-        topology.write_text(original.replace(" 100 ", " 200 ", 1))
+        topology.write_text(original.replace("dc/server", "dc/other-server", 1))
         run.reset_mock()
         [actual] = driver.list("storage_cluster")
-        assert actual.value["driver_spec"]["nodes"][node_uuid]["weight"] == 200
+        assert (
+            actual.value["driver_spec"]["nodes"][node_uuid]["failure_domain_path"]
+            == "dc/other-server"
+        )
         assert actual.hash != created.hash
         assert all(call.args[0][1] == "is-active" for call in run.call_args_list)
         updated = driver.update(resource)
-        assert updated.value["driver_spec"]["nodes"][node_uuid]["weight"] == 100
+        assert (
+            updated.value["driver_spec"]["nodes"][node_uuid]["failure_domain_path"]
+            == "dc/server"
+        )
         assert topology.read_text() == original
         assert ["systemctl", "reload", f"rawstor-mds@{cluster.uuid}.service"] in [
             call.args[0] for call in run.call_args_list
@@ -778,7 +767,6 @@ def test_coordinator_recreates_missing_mds_witness_without_exposing_it_as_a_node
     cluster.driver_spec.nodes = {
         node_uuid: {
             "endpoint": "ost://127.0.0.1:7777",
-            "weight": 100,
             "failure_domain_path": "server",
         }
     }

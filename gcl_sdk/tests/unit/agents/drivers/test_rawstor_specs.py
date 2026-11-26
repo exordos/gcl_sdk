@@ -71,3 +71,11 @@ def test_agent_policy_roundtrip_and_schema_expose_nested_fields():
 def test_policy_schema_lists_required_fields():
     spec = rawstor_specs.RawstorPoolPolicy().to_openapi_spec({})
     assert set(spec["required"]) == set(rawstor_specs.RawstorPoolPolicy.__scheme__)
+
+
+def test_node_weight_is_not_a_public_property():
+    node = rawstor_specs.RawstorNodeDriverSpec(
+        endpoint="ost://host:7777", failure_domain_path="host"
+    )
+    assert "weight" not in node.dump_to_simple_view()
+    assert "weight" not in node.properties
