@@ -19,10 +19,12 @@ parsing, before configuring services or querying capacity.
 
 Drivers use the packaged `rawstor-mds@.service` and `rawstor-ost@.service`
 templates, configured under `/etc/rawstor/mds` and `/etc/rawstor/ost`.
-Topology changes request an asynchronous MDS reload. Unregistering a cluster
-retains its database; deleting an OST removes service configuration and retains
-the backing data. Core waits for a successful MDS topology report before
-stopping a removed OST.
+OSTs register themselves and send heartbeats to MDS. Their configuration uses
+`MDS`, `ADVERTISE` and `DOMAIN_PATH`; the internal weight is fixed at 100.
+The MDS database owns topology. There is no topology file or SIGHUP topology
+reload. MDS uses `DB_URI=sqlite:///.../mds.db` and advertises its own witness.
+Unregistering a cluster retains its database; stopping an OST sends a leaving
+registration and retains backing data. Local agents check systemd liveness.
 
 The OST driver prepares dedicated file-backed directories. Other native
 backends, including `lvm://`, must be provisioned externally and use a root
@@ -35,8 +37,7 @@ OST failure-domain paths run from outermost to innermost
 (`dc/row/rack/server`). Managed OST topology entries have roles `data,witness`.
 The MDS is also advertised as `ost://` with role `witness`. Its topology UUID
 is derived from the cluster UUID, while its server failure domain is the Core
-node UUID. An explicit `witness_endpoint` can use DNS independently of the bind
-address; Core supplies `core.local.genesis-core.tech`.
+node UUID. The witness advertises the same IP and port as the MDS listener.
 
 The MDS witness contributes no data capacity. Two OSTs can host two data copies
 with MDS supplying the witness vote for a writable majority.
@@ -44,7 +45,7 @@ with MDS supplying the witness vote for a writable majority.
 Pool policies share physical OST capacity; their availability figures must not
 be added together. The driver reports OST inventory and completed MDS objects.
 `storage_capacity.available_by_policy` derives a conservative placement budget
-accounting for mirrors, failure domains and pending disks. Unreachable OSTs
+accounting for mirrors, failure domains and pending disks. Unreachable OSTs and OSTs not yet registered with MDS
 contribute zero available space. MDS remains the final allocation authority.
 
 `MachineVolume.storage_policy` carries the assigned pool UUID, mirror count,
@@ -81,13 +82,13 @@ filesystem growth remain separate operations.
 
 ## Integration tests
 
-The pinned integration uses bindings `0.3.0` from
-[Rawstor v0.3.0](https://github.com/rawstor/librawstor/releases/tag/v0.3.0).
+The integration uses bindings `0.3.7` from
+[RawStor v0.3.7](https://github.com/rawstor/librawstor/releases/tag/v0.3.7).
 Use native packages and bindings from the same build.
 
 Set `RAWSTOR_TEST_MDS`, `RAWSTOR_TEST_OST` and `RAWSTOR_TEST_VHOST` to daemon paths
 to run native integration tests. They cover multiple MDS instances, OSTs,
-replication, topology reload, resize and recovery. Set
+registration, resize and recovery. Set
 `RAWSTOR_TEST_ZFS_LOCATION` to an isolated pre-provisioned dataset and run the
 native node test as root to exercise a ZFS backend.
 

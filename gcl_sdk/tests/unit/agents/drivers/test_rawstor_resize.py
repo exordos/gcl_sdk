@@ -96,15 +96,19 @@ def test_live_resize_preserves_data_and_notifies_qemu():
                     "--insecure",
                     "--bind",
                     f"127.0.0.1:{op}",
+                    "--id",
+                    str(uuid.uuid4()),
+                    "--mds",
+                    f"mds://127.0.0.1:{mp}/",
+                    "--advertise",
+                    f"ost://127.0.0.1:{op}",
+                    "--domain-path",
+                    "server",
                     "--workers",
                     "1",
                     f"file://{back}",
                 ],
                 work,
-            )
-            topology = work / "topology"
-            topology.write_text(
-                f"{uuid.uuid4()} ost://127.0.0.1:{op} 100 data,witness server\n"
             )
             start(
                 "mds",
@@ -114,18 +118,21 @@ def test_live_resize_preserves_data_and_notifies_qemu():
                     "--bind",
                     f"127.0.0.1:{mp}",
                     "--db",
-                    str(work / "mds.db"),
-                    "--topology",
-                    str(topology),
+                    f"sqlite://{work / 'mds.db'}",
                     "--workers",
                     "1",
                 ],
                 work,
             )
             endpoint = f"mds://127.0.0.1:{mp}/"
-            target = endpoint + str(uuid.uuid4())
+            account = uuid.uuid4()
+            target = f"mds://{account}@127.0.0.1:{mp}/{uuid.uuid4()}"
             for _ in range(100):
                 try:
+                    try:
+                        rawstor.Location(endpoint).create_account(str(account))
+                    except FileExistsError:
+                        pass
                     rawstor.Target(target).create(
                         size=2 << 30, width=1, chunk_size=1 << 30, failure_domain="ost"
                     )
@@ -279,7 +286,7 @@ def test_live_resize_preserves_data_and_notifies_qemu():
             )
             volume = pool.MachineVolume(
                 uuid=uuid.UUID(target.rsplit("/", 1)[-1]),
-                project_id=uuid.uuid4(),
+                project_id=account,
                 size=3,
                 storage_location=endpoint,
             )

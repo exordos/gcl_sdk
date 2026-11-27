@@ -71,17 +71,18 @@ def node(tmp_path, monkeypatch):
     model = rawstor_node.MetaStorageNode(
         uuid=uuid4(),
         cluster=uuid4(),
-        driver_spec=rawstor_specs.RawstorNodeDriverSpec(
+        driver_spec=rawstor_specs.RawstorNodeAgentSpec(
             endpoint="ost://host:7777",
             location=f"file://{tmp_path}/data",
             bind_address="0.0.0.0:7777",
-            failure_domain_path="",
+            failure_domain_path="server",
+            mds="mds://core:7776/",
         ),
     )
     return model, rawstor_node
 
 
-def test_reconcile_starts_ost_and_checks_advertised_endpoint(node):
+def test_reconcile_starts_ost_with_registration_and_checks_systemd(node):
     model, module = node
     with (
         patch.object(
@@ -91,11 +92,10 @@ def test_reconcile_starts_ost_and_checks_advertised_endpoint(node):
     ):
         model.dump_to_dp()
         assert model.status == "ACTIVE"
-        location.assert_called_once_with(model.driver_spec.endpoint)
-        location.return_value.info.assert_called_once()
+        location.assert_not_called()
         config = (module.OST_CONFIG_DIR / f"{model.uuid}.conf").read_text()
         assert (
-            f'BIND_ADDR=0.0.0.0:7777\nLOCATION={model.driver_spec.location}\nEXTRA_ARGS="--insecure"\n'
+            f'BIND_ADDR=0.0.0.0:7777\nLOCATION={model.driver_spec.location}\nMDS=mds://core:7776/\nADVERTISE=ost://host:7777\nDOMAIN_PATH=server\nWEIGHT=100\nEXTRA_ARGS="--insecure"\n'
             == config
         )
         assert not (module.OST_UNIT_DIR / model.unit_name).exists()
@@ -108,21 +108,17 @@ def test_reconcile_starts_ost_and_checks_advertised_endpoint(node):
         ]
 
 
-def test_unreachable_ost_is_not_reported_ready_and_can_retry(node):
+def test_inactive_ost_is_not_reported_ready(node):
     model, module = node
-    with (
-        patch.object(
-            module.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)
-        ),
-        patch("rawstor.Location") as location,
+    with patch.object(
+        module.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)
     ):
-        location.return_value.info.side_effect = OSError("not ready")
-        with pytest.raises(OSError):
-            model.dump_to_dp()
-        assert model.status == "NEW"
-        location.return_value.info.side_effect = None
-        model.restore_from_dp()
-        assert model.status == "ACTIVE"
+        model.dump_to_dp()
+    with patch.object(
+        module.subprocess, "run", return_value=subprocess.CompletedProcess([], 3)
+    ):
+        with pytest.raises(module.driver_exc.ResourceNotFound):
+            model.restore_from_dp()
 
 
 def test_failed_service_start_is_not_reported_ready(node):
@@ -209,6 +205,14 @@ def test_native_ost_launch_from_reconciled_config(node, monkeypatch, tmp_path, b
                 "--insecure",
                 "--bind",
                 config["BIND_ADDR"],
+                "--id",
+                str(model.uuid),
+                "--mds",
+                config["MDS"],
+                "--advertise",
+                config["ADVERTISE"],
+                "--domain-path",
+                config["DOMAIN_PATH"],
                 "--workers",
                 "1",
                 "--queue-size",
@@ -222,6 +226,8 @@ def test_native_ost_launch_from_reconciled_config(node, monkeypatch, tmp_path, b
             for process in processes:
                 process.terminate()
                 process.wait(timeout=5)
+
+        return subprocess.CompletedProcess(args, 0)
 
     monkeypatch.setattr(module.subprocess, "run", system_command)
     try:
@@ -325,10 +331,15 @@ def test_native_backing_is_not_prepared_by_agent(node, location):
 
 def test_restore_reads_changed_config_without_applying_it(node):
     model, module = node
-    with patch.object(module.subprocess, "run"), patch("rawstor.Location"):
+    with (
+        patch.object(
+            module.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)
+        ),
+        patch("rawstor.Location"),
+    ):
         model.dump_to_dp()
     config = module.OST_CONFIG_DIR / f"{model.uuid}.conf"
-    content = "BIND_ADDR=127.0.0.1:8888\nLOCATION=file:///other/ost\n"
+    content = "BIND_ADDR=127.0.0.1:8888\nLOCATION=file:///other/ost\nMDS=mds://core:7776/\nADVERTISE=ost://127.0.0.1:8888\nDOMAIN_PATH=server\n"
     config.write_text(content)
     with (
         patch.object(
