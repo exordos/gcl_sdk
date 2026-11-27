@@ -134,12 +134,12 @@ public driver specifications remain free of PEM material. Missing or pending
 credentials prevent configuration; there is no insecure fallback.
 
 Runtime service credentials are published under `/etc/rawstor/tls/` as immutable
-generations with an atomic `current` symlink. Rawstor service keys are readable
+generations with an atomic `current` symlink. RawStor service keys are readable
 only by root and the rawstor group; control credentials are root-only. Renewal
 sends `SIGUSR1` to MDS, OST or the affected vhost without restarting them. A
 failed signal is retried. Existing sessions retain their original TLS context;
-new connections use the renewed pair. SIGHUP remains reserved for topology and
-resize operations.
+new connections use the renewed pair. SIGHUP also reloads TLS on MDS/OST and
+refreshes disk size on vhost.
 
 Bindings perform control operations in isolated child processes, selecting the
 intended admin credentials for each operation. Vhost receives a different
