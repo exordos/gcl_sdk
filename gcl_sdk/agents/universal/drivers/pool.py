@@ -547,27 +547,12 @@ class RawstorStorageClusterDriverSpec(AbstractStorageClusterDriverSpec):
 
 
 class RawstorStorageClusterAgentSpec(RawstorStorageClusterDriverSpec):
-    """Agent snapshot, including legacy fields accepted from older payloads."""
+    """Private inventory and policy snapshot; OSTs register themselves with MDS."""
 
-    # Local backing store configured on the OST host by the CLI.
-    location = properties.property(types.String(max_length=2048), default="")
-    # Public MDS location used by hypervisors, e.g. mds://core:7776/.
-    endpoint = properties.property(types.String(max_length=2048), required=True)
-    # OST advertised to the core MDS. Empty for legacy direct-OST clusters.
-    ost_endpoint = properties.property(types.String(max_length=2048), default="")
-    # Witness address may use internal DNS independently of the MDS bind address.
-    witness_endpoint = properties.property(types.String(max_length=2048), default="")
-    # Keyed by stable OST/pool UUIDs; supplied by the control plane.
     nodes = properties.property(types.Dict(), default=dict)
     pools = properties.property(
         types.TypedDict(rawstor_specs.RawstorPoolPolicy()), default=dict
     )
-    managed = properties.property(types.Boolean(), default=False)
-    tier = properties.property(
-        types.Enum([s.value for s in ic.DiskTier]),
-        default=ic.DiskTier.WARM.value,
-    )
-    ephemeral = properties.property(types.Boolean(), default=True)
 
 
 class MachinePool(

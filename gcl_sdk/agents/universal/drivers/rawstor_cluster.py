@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import abc
 import logging
-import math
 import os
 from pathlib import Path
 import subprocess
@@ -54,6 +53,7 @@ RawstorStorageClusterDriverSpec = pool_base.RawstorStorageClusterAgentSpec
 
 MDS_CONFIG_DIR = Path("/etc/rawstor/mds")
 MDS_STATE_DIR = Path("/var/lib/rawstor/mds")
+_TOPOLOGY_WEIGHT = 100
 
 
 def _write_if_changed(path: Path, content: str) -> bool:
@@ -75,10 +75,8 @@ def _write_if_changed(path: Path, content: str) -> bool:
 class AbstractStorageClusterDriver(abc.ABC):
     """Base class for storage cluster drivers.
 
-    Unlike AbstractPoolDriver, this only ever reports capacity - actual
-    disk CRUD for a volume scheduled onto this cluster is done by
-    whichever hypervisor's pool driver owns the VM (see
-    ExordosLocalHyperDriver._rawstor_address), not by this driver.
+    Owns the MDS configuration and provider access used by storage-volume
+    resources. Hypervisors only attach already provisioned objects.
     """
 
     def __init__(self, cluster: "MetaStorageCluster") -> None:
@@ -109,125 +107,70 @@ class RawstorStorageClusterDriver(AbstractStorageClusterDriver):
             raise ValueError(f"Unsupported driver spec kind: {self._spec.KIND!r}")
 
     @property
+    def bindings(self):
+        return rawstor
+
+    @property
     def unit_name(self) -> str:
         return f"rawstor-mds@{self._cluster.uuid}.service"
 
-    def _witness_topology_line(self, bind: str) -> str:
-        witness_uuid = sys_uuid.uuid5(self._cluster.uuid, "mds-witness")
-        endpoint = self._spec.witness_endpoint or f"ost://{bind}"
-        parsed = urlparse(endpoint)
-        if (
-            parsed.scheme != "ost"
-            or parsed.path not in ("", "/")
-            or parsed.query
-            or parsed.fragment
-            or any(c.isspace() for c in endpoint)
-        ):
-            raise ValueError("Witness endpoint must be ost://host:port")
-        storage_capacity.validate_bind_address(parsed.netloc)
-        return f"{witness_uuid} {endpoint.rstrip('/')} 100 witness {ua_utils.node_uuid()}\n"
+    def _service_settings(self):
+        witness = sys_uuid.uuid5(self._cluster.uuid, "mds-witness")
+        return f'EXTRA_ARGS="--insecure --id={witness}"\n'
+
+    def _reload_credentials(self):
+        """Reload workload credentials after an existing service is configured."""
+
+    def _mds_settings(self, bind):
+        storage_capacity.validate_bind_address(bind)
+        return {
+            "BIND_ADDR": bind,
+            "DB_URI": f"sqlite://{MDS_STATE_DIR / str(self._cluster.uuid) / 'mds.db'}",
+            "ADVERTISE": f"ost://{bind}",
+            "DOMAIN_PATH": str(ua_utils.node_uuid()),
+            "WEIGHT": str(_TOPOLOGY_WEIGHT),
+        }
 
     def configure(self) -> None:
-        if not self._spec.endpoint.startswith("mds://"):
-            return
         mds = urlparse(self._spec.endpoint)
-        if mds.scheme != "mds" or not mds.hostname or not mds.port:
+        if (
+            mds.scheme != "mds"
+            or mds.path not in ("", "/")
+            or mds.username
+            or mds.query
+            or mds.fragment
+        ):
             raise ValueError("MDS endpoint must be mds://host:port/")
-        entries = self._spec.nodes
-        if not entries and self._spec.ost_endpoint:
-            entries = {
-                str(self._cluster.uuid): {
-                    "endpoint": self._spec.ost_endpoint,
-                    "weight": 1,
-                    "failure_domain_path": str(self._cluster.uuid),
-                }
-            }
-        lines = []
-        for node_uuid, node in sorted(entries.items()):
-            sys_uuid.UUID(node_uuid)
-            ost = urlparse(node["endpoint"])
-            path = node["failure_domain_path"]
-            if (
-                ost.scheme != "ost"
-                or not ost.hostname
-                or not ost.port
-                or ost.path not in ("", "/")
-                or ost.query
-                or ost.fragment
-                or ost.username
-                or any(c.isspace() for c in node["endpoint"] + path)
-                or not 1 <= len(path.split("/")) <= 4
-                or any(not part or part in (".", "..") for part in path.split("/"))
-                or not math.isfinite(node["weight"])
-                or not 1 <= node["weight"] <= (1 << 64) - 1
-                or node["weight"] != int(node["weight"])
-            ):
-                raise ValueError("Invalid rawstor OST topology entry")
-            lines.append(
-                f"{node_uuid} {node['endpoint'].rstrip('/')} {int(node['weight'])} data,witness {path}\n"
-            )
         config = MDS_CONFIG_DIR / f"{self._cluster.uuid}.conf"
-        previous_config = config.read_text() if config.exists() else None
-        bind = mds.netloc
-        storage_capacity.validate_bind_address(bind)
-        lines.append(self._witness_topology_line(bind))
-        content = f'BIND_ADDR={bind}\nEXTRA_ARGS="--insecure"\n'
-        config_changed = _write_if_changed(config, content)
-        topology = MDS_CONFIG_DIR / f"{self._cluster.uuid}.topology"
-        previous_topology = topology.read_text() if topology.exists() else None
-        topology_changed = _write_if_changed(
-            topology,
-            "".join(lines),
+        previous = config.read_text() if config.exists() else None
+        content = "".join(
+            f"{key}={value}\n" for key, value in self._mds_settings(mds.netloc).items()
         )
+        content += self._service_settings()
+        changed = _write_if_changed(config, content)
         subprocess.run(["systemctl", "enable", "--now", self.unit_name], check=True)
-        if config_changed and previous_config is not None:
+        if changed and previous is not None:
             try:
                 subprocess.run(["systemctl", "restart", self.unit_name], check=True)
             except subprocess.CalledProcessError:
-                _write_if_changed(config, previous_config)
-                if previous_topology is not None:
-                    _write_if_changed(topology, previous_topology)
+                _write_if_changed(config, previous)
                 raise
-        elif topology_changed and previous_topology is not None:
-            try:
-                subprocess.run(["systemctl", "reload", self.unit_name], check=True)
-            except subprocess.CalledProcessError:
-                _write_if_changed(topology, previous_topology)
-                raise
+        if previous is not None:
+            self._reload_credentials()
 
     def restore(self) -> None:
-        if not self._spec.endpoint.startswith("mds://"):
-            return
         config = MDS_CONFIG_DIR / f"{self._cluster.uuid}.conf"
-        topology = MDS_CONFIG_DIR / f"{self._cluster.uuid}.topology"
-        if not config.exists() or not topology.exists():
+        if not config.exists():
             raise driver_exc.ResourceNotFound(resource=self._cluster)
         values = dict(line.split("=", 1) for line in config.read_text().splitlines())
-        actual_bind = values["BIND_ADDR"]
-        endpoint = urlparse(self._spec.endpoint)
-        if actual_bind != endpoint.netloc:
-            self._spec.endpoint = f"mds://{actual_bind}/"
-        nodes = {}
-        witness = self._witness_topology_line(actual_bind).split()
-        witness_found = False
-        for line in topology.read_text().splitlines():
-            if not line.strip():
-                continue
-            fields = line.split()
-            if fields == witness:
-                witness_found = True
-                continue
-            if len(fields) != 5 or fields[3] not in ("data,witness", "witness,data"):
-                raise driver_exc.ResourceNotFound(resource=self._cluster)
-            node_uuid, endpoint, weight, _role, path = fields
-            nodes[node_uuid] = {
-                "endpoint": endpoint,
-                "weight": int(weight),
-                "failure_domain_path": path,
-            }
-        if not witness_found:
+        try:
+            actual_bind = values["BIND_ADDR"]
+            expected = self._mds_settings(actual_bind)
+        except (KeyError, ValueError) as error:
+            raise driver_exc.ResourceNotFound(resource=self._cluster) from error
+        if any(values.get(key) != value for key, value in expected.items()):
             raise driver_exc.ResourceNotFound(resource=self._cluster)
-        self._spec.nodes = nodes
+        self._spec.endpoint = f"mds://{actual_bind}/"
         active = subprocess.run(
             ["systemctl", "is-active", "--quiet", self.unit_name], check=False
         )
@@ -235,52 +178,39 @@ class RawstorStorageClusterDriver(AbstractStorageClusterDriver):
             raise driver_exc.ResourceNotFound(resource=self._cluster)
 
     def delete(self) -> None:
-        if not self._spec.endpoint.startswith("mds://"):
-            return
         subprocess.run(["systemctl", "disable", "--now", self.unit_name], check=True)
-        (MDS_CONFIG_DIR / f"{self._cluster.uuid}.topology").unlink(missing_ok=True)
         (MDS_CONFIG_DIR / f"{self._cluster.uuid}.conf").unlink(missing_ok=True)
-        # Keep the SQLite index and OST data when unregistering a cluster.
+        # The database and OST data outlive the service configuration.
 
     def get_capacity(self) -> tp.List[pool_base.ThinStoragePool]:
-        if not (self._spec.managed or self._spec.pools or self._spec.nodes):
-            # Compatibility for previously registered single-OST clusters.
-            location = rawstor.Location(
-                self._spec.endpoint if self._spec.ost_endpoint else self._spec.location
-            )
-            info = location.info()
-            storage_pool = pool_base.ThinStoragePool(
-                uuid=sys_uuid.uuid5(self._cluster.uuid, "default"),
-                name="default",
-                pool_type="rawstor",
-                driver_spec=pool_base.rawstor_specs.RawstorPoolDriverSpec(mirrors=1),
-                capacity_usable=info.total >> 30,
-                available_actual=(info.total - info.used) >> 30,
-                tier=self._spec.tier,
-                ephemeral=self._spec.ephemeral,
-            )
-            for target in location.objects():
-                storage_pool.allocate_capacity(target.spec().size >> 30)
-            return [storage_pool]
-        # Read completed MDS objects before sampling OST budgets. A creation
-        # between the samples remains pending, rather than escaping both ledgers.
-        objects = {}
-        if self._spec.nodes:
-            for target in rawstor.Location(self._spec.endpoint).objects():
-                objects[target.uri.rstrip("/").rsplit("/", 1)[-1]] = target.spec().size
+        bindings = self.bindings
+        mds = bindings.Location(self._spec.endpoint)
+        info = mds.info()
+        registered = set(mds.locations())
+        # Enumerate completed objects before sampling budgets so a concurrent
+        # creation remains reserved in at least one of the two ledgers.
+        objects = {
+            target.uri.rstrip("/").rsplit("/", 1)[-1]: target.spec().size
+            for target in mds.objects()
+        }
         nodes = []
         for node_uuid, node in self._spec.nodes.items():
-            location = rawstor.Location(node["endpoint"])
+            location = bindings.Location(node["endpoint"])
+            if node["endpoint"] not in registered:
+                nodes.append(
+                    {**node, "uuid": node_uuid, "total": 0, "used": 0, "available": 0}
+                )
+                continue
             try:
-                info = location.info()
+                sample = location.info()
                 committed = sum(target.spec().size for target in location.objects())
                 nodes.append(
                     {
                         **node,
                         "uuid": node_uuid,
-                        "total": info.total,
-                        "used": info.used,
-                        "available": max(0, info.total - max(info.used, committed)),
+                        "total": sample.total,
+                        "used": sample.used,
+                        "available": max(0, sample.total - max(sample.used, committed)),
                     }
                 )
             except OSError:
@@ -293,9 +223,11 @@ class RawstorStorageClusterDriver(AbstractStorageClusterDriver):
             "nodes": nodes,
             "objects": objects,
             "reported_at": time.time(),
-            "total": sum(n["total"] for n in nodes),
-            "used": sum(n["used"] for n in nodes),
-            "available": sum(n["available"] for n in nodes),
+            "total": info.total,
+            "used": info.used,
+            "available": min(
+                max(0, info.total - info.used), sum(n["available"] for n in nodes)
+            ),
         }
         result = []
         for pool_uuid, policy in self._spec.pools.items():
@@ -404,5 +336,87 @@ class MetaStorageCluster(meta.MetaDataPlaneModel):
         driver.delete()
 
 
-class StorageClusterAgentDriver(meta.MetaFileStorageAgentDriver):
-    __model_map__ = {"storage_cluster": MetaStorageCluster}
+class MetaStorageVolume(meta.MetaDataPlaneModel):
+    """An object managed by the Core agent, independently of VM attachment."""
+
+    cluster = properties.property(types.UUID(), required=True)
+    project_id = properties.property(types.UUID(), required=True)
+    storage_pool = properties.property(types.String(), required=True)
+    storage_location = properties.property(types.String(), required=True)
+    storage_policy = properties.property(types.Dict(), required=True)
+    size = properties.property(types.Integer(min_value=1), required=True)
+    status = properties.property(types.String(), default="NEW")
+
+    def _target(self, cluster):
+        if cluster is None:
+            raise RuntimeError("Storage cluster is not ready")
+        from urllib.parse import urlsplit, urlunsplit
+
+        parsed = urlsplit(self.storage_location)
+        address = urlunsplit(
+            (
+                parsed.scheme,
+                f"{self.project_id}@{parsed.netloc}",
+                f"/{self.uuid}",
+                "",
+                "",
+            )
+        )
+        return cluster.load_driver().bindings.Target(address)
+
+    def dump_to_dp(self, cluster):
+        target = self._target(cluster)
+        bindings = cluster.load_driver().bindings
+        try:
+            bindings.Location(self.storage_location).create_account(
+                str(self.project_id)
+            )
+        except FileExistsError:
+            pass
+        try:
+            spec = target.spec()
+        except FileNotFoundError:
+            target.create(
+                size=self.size << 30,
+                width=self.storage_policy["mirrors"],
+                chunk_size=pool_base.rawstor_specs.RAWSTOR_CHUNK_SIZE,
+                failure_domain=self.storage_policy["failure_domain"],
+            )
+            spec = target.spec()
+        else:
+            if spec.size > self.size << 30:
+                raise ValueError("RawStor objects cannot shrink")
+            # A previous grow may have reserved chunks before materializing
+            # them. Replaying the same size completes that interrupted grow.
+            target.resize(self.size << 30)
+        self.restore_from_dp(cluster)
+
+    def restore_from_dp(self, cluster):
+        try:
+            spec = self._target(cluster).spec()
+        except FileNotFoundError as error:
+            raise driver_exc.ResourceNotFound(resource=self) from error
+        self.size = spec.size >> 30
+        self.status = "ACTIVE"
+
+    def update_on_dp(self, cluster):
+        self.dump_to_dp(cluster)
+
+    def delete_from_dp(self, cluster):
+        try:
+            self._target(cluster).remove()
+        except FileNotFoundError:
+            pass
+
+
+class StorageClusterAgentDriver(meta.MetaCoordinatorAgentDriver):
+    __model_map__ = {
+        "storage_cluster": MetaStorageCluster,
+        "storage_volume": MetaStorageVolume,
+    }
+    __coordinator_map__ = {
+        "storage_cluster": {},
+        "storage_volume": {
+            "cluster": {"kind": "storage_cluster", "relation": "storage_volume:cluster"}
+        },
+    }

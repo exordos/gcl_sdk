@@ -76,6 +76,9 @@ class RawstorNodeDriverSpec(types_dynamic.AbstractKindModel, models.SimpleViewMi
     failure_domain_path = properties.property(
         types.String(max_length=255), required=True
     )
-    weight = properties.property(
-        types.Integer(min_value=1, max_value=(1 << 63) - 1), default=100
-    )
+
+
+class RawstorNodeAgentSpec(RawstorNodeDriverSpec):
+    """Private registration settings supplied by the owning cluster."""
+
+    mds = properties.property(types.String(max_length=2048), required=True)

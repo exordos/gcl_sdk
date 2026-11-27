@@ -14,7 +14,6 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import errno
 import subprocess
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -52,7 +51,35 @@ def _driver(
     pool = pool_base.MachinePool(
         uuid=sys_uuid.uuid4(), name="rawstor-pool", driver_spec=spec
     )
-    return exordos_hyper.ExordosLocalHyperDriver(pool)
+    driver = exordos_hyper.ExordosLocalHyperDriver(pool)
+    driver._vhost_drop_in_dir = lambda identifier: str(
+        tmp_path / "drop-ins" / f"rawstor-vhost@{identifier}.service.d"
+    )
+    return driver
+
+
+@pytest.fixture
+def file_objects(monkeypatch):
+    """Represent objects already provisioned by the Core agent."""
+    targets = {}
+    original = exordos_hyper.rawstor.Target
+    monkeypatch.setattr(
+        exordos_hyper.rawstor,
+        "Target",
+        lambda uri: targets[uri] if uri in targets else original(uri),
+    )
+
+    def provision(driver, volume):
+        uri = driver._target_uri(volume.uuid, driver._rawstor_address(volume))
+        target = MagicMock(uri=uri, account=str(volume.project_id))
+        target.spec.return_value = SimpleNamespace(
+            size=volume.size << 30, chunk_size=1 << 30
+        )
+        target.meta.return_value = [SimpleNamespace(account=str(volume.project_id))]
+        targets[uri] = target
+        return target
+
+    return provision
 
 
 def _rawstor_location(tmp_path) -> str:
@@ -145,9 +172,7 @@ class TestRawstorAttachments:
 
 
 class TestVolumeLifecycle:
-    def test_mds_volume_uses_one_gib_chunks_and_a_single_ost(
-        self, tmp_path, monkeypatch
-    ):
+    def test_mds_volume_attaches_existing_object(self, tmp_path, monkeypatch):
         _no_op_systemctl(monkeypatch)
         driver = _driver(tmp_path)
         _redirect_vhost_drop_in(monkeypatch, driver, tmp_path)
@@ -158,18 +183,17 @@ class TestVolumeLifecycle:
             storage_location="mds://10.20.0.2:7776/",
         )
         target = MagicMock()
+        target.spec.return_value = SimpleNamespace(size=2 << 30)
         factory = MagicMock(return_value=target)
         monkeypatch.setattr(exordos_hyper.rawstor, "Target", factory)
         registry = MagicMock()
         monkeypatch.setattr(exordos_hyper.rawstor, "Location", lambda uri: registry)
         created = driver.create_volume(volume)
-        registry.create_account.assert_called_once_with(str(volume.project_id))
+        registry.create_account.assert_not_called()
         factory.assert_called_once_with(
             f"mds://{volume.project_id}@10.20.0.2:7776/{volume.uuid}"
         )
-        target.create.assert_called_once_with(
-            size=2 << 30, width=1, chunk_size=1 << 30, failure_domain="server"
-        )
+        target.create.assert_not_called()
         assert created.storage_location == "mds://10.20.0.2:7776/"
         assert (
             driver._read_remote_location(volume.uuid)
@@ -181,7 +205,7 @@ class TestVolumeLifecycle:
                 in f.read()
             )
 
-    def test_mds_volume_uses_assigned_pool_policy(self, tmp_path, monkeypatch):
+    def test_hypervisor_does_not_apply_storage_policy(self, tmp_path, monkeypatch):
         _no_op_systemctl(monkeypatch)
         driver = _driver(tmp_path)
         _redirect_vhost_drop_in(monkeypatch, driver, tmp_path)
@@ -196,18 +220,17 @@ class TestVolumeLifecycle:
             },
         )
         target = MagicMock()
+        target.spec.return_value = SimpleNamespace(size=2 << 30)
         factory = MagicMock(return_value=target)
         monkeypatch.setattr(exordos_hyper.rawstor, "Target", factory)
         registry = MagicMock()
         monkeypatch.setattr(exordos_hyper.rawstor, "Location", lambda uri: registry)
         created = driver.create_volume(volume)
-        registry.create_account.assert_called_once_with(str(volume.project_id))
+        registry.create_account.assert_not_called()
         factory.assert_called_once_with(
             f"mds://{volume.project_id}@10.20.0.2:7776/{volume.uuid}"
         )
-        target.create.assert_called_once_with(
-            size=2 << 30, width=2, chunk_size=1 << 30, failure_domain="rack"
-        )
+        target.create.assert_not_called()
         assert created.storage_location == "mds://10.20.0.2:7776/"
         assert (
             driver._read_remote_location(volume.uuid)
@@ -219,7 +242,7 @@ class TestVolumeLifecycle:
                 in f.read()
             )
 
-    def test_create_get_list_delete(self, tmp_path, monkeypatch):
+    def test_create_get_list_delete(self, tmp_path, monkeypatch, file_objects):
         _no_op_systemctl(monkeypatch)
         driver = _driver(tmp_path)
         _redirect_vhost_drop_in(monkeypatch, driver, tmp_path)
@@ -231,6 +254,7 @@ class TestVolumeLifecycle:
             storage_location=_rawstor_location(tmp_path),
         )
 
+        target = file_objects(driver, volume)
         created = driver.create_volume(volume)
         assert created.status == pool_base.VolumeStatus.ACTIVE.value
 
@@ -255,7 +279,9 @@ class TestVolumeLifecycle:
         with pytest.raises(pool_base.VolumeNotFoundError):
             driver.get_volume(volume.uuid)
 
-    def test_create_twice_raises_already_exists(self, tmp_path, monkeypatch):
+    def test_repeated_attachment_registration_is_idempotent(
+        self, tmp_path, monkeypatch, file_objects
+    ):
         _no_op_systemctl(monkeypatch)
         driver = _driver(tmp_path)
         _redirect_vhost_drop_in(monkeypatch, driver, tmp_path)
@@ -266,10 +292,11 @@ class TestVolumeLifecycle:
             size=1,
             storage_location=_rawstor_location(tmp_path),
         )
+        target = file_objects(driver, volume)
         driver.create_volume(volume)
 
-        with pytest.raises(pool_base.VolumeAlreadyExistsError):
-            driver.create_volume(volume)
+        driver.create_volume(volume)
+        target.create.assert_not_called()
 
     def test_get_missing_volume_raises_not_found(self, tmp_path):
         driver = _driver(tmp_path)
@@ -292,7 +319,9 @@ class TestVolumeLifecycle:
         # Must not raise, even though it was never created.
         driver.delete_volume(volume)
 
-    def test_delete_stops_vhost_before_removing_the_object(self, tmp_path, monkeypatch):
+    def test_delete_stops_vhost_and_leaves_object_for_core(
+        self, tmp_path, monkeypatch, file_objects
+    ):
         # rawstor-vhost is an attachment of the volume: deleting the
         # object without stopping it first would leave a dangling
         # backend process.
@@ -306,10 +335,12 @@ class TestVolumeLifecycle:
             size=1,
             storage_location=_rawstor_location(tmp_path),
         )
+        target = file_objects(driver, volume)
         driver.create_volume(volume)
         calls.clear()
 
         driver.delete_volume(volume)
+        target.remove.assert_not_called()
 
         # create_volume already recorded a drop-in for this volume, so
         # its removal also triggers a daemon-reload.
@@ -318,7 +349,9 @@ class TestVolumeLifecycle:
             ["systemctl", "daemon-reload"],
         ]
 
-    def test_delete_aborts_if_the_vhost_unit_fails_to_stop(self, tmp_path, monkeypatch):
+    def test_delete_aborts_if_the_vhost_unit_fails_to_stop(
+        self, tmp_path, monkeypatch, file_objects
+    ):
         # Regression: a swallowed disable failure used to let delete_volume
         # remove the object anyway, orphaning a still-enabled unit behind
         # it - a real failure to stop must abort the delete instead.
@@ -331,6 +364,7 @@ class TestVolumeLifecycle:
             size=1,
             storage_location=_rawstor_location(tmp_path),
         )
+        target = file_objects(driver, volume)
         driver.create_volume(volume)
 
         def fake_check_call(cmd, *a, **kw):
@@ -344,6 +378,7 @@ class TestVolumeLifecycle:
         # The object must still exist - the delete never got past the
         # failed vhost stop.
         assert driver.get_volume(volume.uuid).uuid == volume.uuid
+        target.remove.assert_not_called()
 
     def test_start_vhost_raises_a_clear_error_when_unit_is_missing(
         self, tmp_path, monkeypatch
@@ -459,7 +494,9 @@ class TestForeignVolumes:
 
 
 class TestCreateMachine:
-    def test_domain_is_defined_with_shared_memory(self, tmp_path, monkeypatch):
+    def test_domain_is_defined_with_shared_memory(
+        self, tmp_path, monkeypatch, file_objects
+    ):
         # Regression: libvirt refuses to attach a vhostuser disk to a
         # domain that wasn't defined with shared memory backing, and it
         # can't be added after the fact - so every machine of this pool
@@ -484,6 +521,7 @@ class TestCreateMachine:
             machine=machine.uuid,
             storage_location=_rawstor_location(tmp_path),
         )
+        file_objects(driver, root_vol)
         driver.create_volume(root_vol)
 
         driver.create_machine(machine, [root_vol], [])
@@ -496,7 +534,7 @@ class TestCreateMachine:
 
 class TestDeleteMachine:
     def test_removes_all_volumes_and_stops_their_vhost_units(
-        self, tmp_path, monkeypatch
+        self, tmp_path, monkeypatch, file_objects
     ):
         # Regression: volume-to-machine attribution is read from the
         # domain's own XML, so deleting all the machine's volumes must
@@ -532,6 +570,7 @@ class TestDeleteMachine:
             storage_location=_rawstor_location(tmp_path),
         )
         for v in (root_vol, data_vol):
+            file_objects(driver, v)
             driver.create_volume(v)
 
         port = pool_base.Port(
@@ -717,7 +756,8 @@ def resize_environment(tmp_path, monkeypatch):
         storage_location="mds://core:7776/",
     )
     driver._write_remote_location_drop_in(volume.uuid, driver._rawstor_address(volume))
-    size = {"bytes": 2 << 30}
+    driver._write_observed_size(volume.uuid, 2)
+    size = {"bytes": 3 << 30}
     target = MagicMock()
     target.spec.side_effect = lambda: SimpleNamespace(
         size=size["bytes"], chunk_size=1 << 30
@@ -745,7 +785,7 @@ def resize_environment(tmp_path, monkeypatch):
 def test_resize_mds_disk_notifies_live_vhost_without_restart(resize_environment):
     env = resize_environment
     env.driver.resize_volume(env.volume)
-    env.target.resize.assert_called_once_with(3 << 30)
+    env.target.resize.assert_not_called()
     env.notify.assert_called_once_with(
         [
             "systemctl",
@@ -806,18 +846,20 @@ def test_discovery_finishes_resize_after_failed_vhost_notification(
         )
         [actual] = restarted._list_rawstor_volumes(())
     assert actual.size == 3
-    assert env.target.resize.call_count == 2
+    env.target.resize.assert_not_called()
     assert not env.pending.exists()
 
 
-def test_failed_grow_does_not_poison_discovery(resize_environment):
+def test_hypervisor_waits_for_core_grow_before_notifying_vhost(resize_environment):
     env = resize_environment
-    env.target.resize.side_effect = OSError(errno.ENOSPC, "no space")
-    with pytest.raises(OSError) as error:
+    env.size["bytes"] = 2 << 30
+    with pytest.raises(RuntimeError, match="Core agent"):
         env.driver.resize_volume(env.volume)
-    assert error.value.errno == errno.ENOSPC
-    assert not env.pending.exists()
-    assert env.driver.get_volume(env.volume.uuid).size == 2
+    env.target.resize.assert_not_called()
+    env.notify.assert_not_called()
+    env.size["bytes"] = 3 << 30
+    assert env.driver.get_volume(env.volume.uuid).size == 3
+    env.notify.assert_called_once()
 
 
 def test_resize_retries_when_systemd_state_is_unavailable(resize_environment):
@@ -840,11 +882,13 @@ def test_concurrent_discovery_keeps_resized_volume(resize_environment, monkeypat
     env.pending.write_text(str(3 << 30))
     barrier = Barrier(2)
 
-    def resize(size):
-        barrier.wait(timeout=5)
-        env.size["bytes"] = size
+    original_spec = env.target.spec.side_effect
 
-    env.target.resize.side_effect = resize
+    def spec():
+        barrier.wait(timeout=5)
+        return original_spec()
+
+    env.target.spec.side_effect = spec
     domain = SimpleNamespace(UUIDString=lambda: str(sys_uuid.uuid4()))
     monkeypatch.setattr(
         env.driver,
@@ -1059,10 +1103,7 @@ def test_nil_project_cannot_silently_become_default_account(tmp_path, monkeypatc
     registry.assert_not_called()
 
 
-@pytest.mark.parametrize("registered", [False, True])
-def test_mds_registers_project_account_before_object_create(
-    tmp_path, monkeypatch, registered
-):
+def test_hypervisor_never_creates_accounts_or_objects(tmp_path, monkeypatch):
     driver = _driver(tmp_path)
     _no_op_systemctl(monkeypatch)
     _redirect_vhost_drop_in(monkeypatch, driver, tmp_path)
@@ -1070,23 +1111,16 @@ def test_mds_registers_project_account_before_object_create(
     volume = pool_base.MachineVolume(
         project_id=project, storage_location="mds://core:7776/", size=1
     )
-    order = []
     registry = MagicMock()
 
-    def register(account):
-        order.append(("account", account))
-        if registered:
-            raise FileExistsError()
-
-    registry.create_account.side_effect = register
     target = MagicMock()
-    target.create.side_effect = lambda **kwargs: order.append(("object", str(project)))
     target.spec.return_value = SimpleNamespace(size=1 << 30)
     monkeypatch.setattr(exordos_hyper.rawstor, "Location", lambda uri: registry)
     factory = MagicMock(return_value=target)
     monkeypatch.setattr(exordos_hyper.rawstor, "Target", factory)
     driver.create_volume(volume)
-    assert order == [("account", str(project)), ("object", str(project))]
+    registry.create_account.assert_not_called()
+    target.create.assert_not_called()
     factory.assert_called_once_with(f"mds://{project}@core:7776/{volume.uuid}")
     restored = _driver(tmp_path)
     _redirect_vhost_drop_in(monkeypatch, restored, tmp_path)
