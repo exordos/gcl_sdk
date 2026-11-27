@@ -55,6 +55,12 @@ def test_ost_configuration_rejects_invalid_service_arguments(location, bind):
 def node(tmp_path, monkeypatch):
     pytest.importorskip("rawstor")
     from gcl_sdk.agents.universal.drivers import rawstor_node
+    from gcl_sdk.agents.universal.drivers import rawstor_tls
+
+    monkeypatch.setattr(rawstor_tls, "install", lambda *args: (tmp_path / "tls", False))
+    monkeypatch.setattr(rawstor_tls, "service_environment", lambda _: "")
+    monkeypatch.setattr(rawstor_tls, "reload_if_changed", lambda *args: None)
+    monkeypatch.setattr(rawstor_tls, "remove", lambda *args: None)
 
     monkeypatch.setattr(
         storage_capacity,
@@ -95,7 +101,7 @@ def test_reconcile_starts_ost_with_registration_and_checks_systemd(node):
         location.assert_not_called()
         config = (module.OST_CONFIG_DIR / f"{model.uuid}.conf").read_text()
         assert (
-            f'BIND_ADDR=0.0.0.0:7777\nLOCATION={model.driver_spec.location}\nMDS=mds://core:7776/\nADVERTISE=ost://host:7777\nDOMAIN_PATH=server\nWEIGHT=100\nEXTRA_ARGS="--insecure"\n'
+            f'BIND_ADDR=0.0.0.0:7777\nLOCATION={model.driver_spec.location}\nMDS=mds://core:7776/\nADVERTISE=ost://host:7777\nDOMAIN_PATH=server\nWEIGHT=100\nEXTRA_ARGS=""\n'
             == config
         )
         assert not (module.OST_UNIT_DIR / model.unit_name).exists()

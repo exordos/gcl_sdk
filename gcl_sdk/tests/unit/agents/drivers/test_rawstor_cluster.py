@@ -45,7 +45,15 @@ CORE_NODE_UUID = sys_uuid.UUID("e56b440c-b5fd-4537-b0ab-c9a311bfa851")
 
 
 @pytest.fixture(autouse=True)
-def core_node_identity(monkeypatch):
+def core_node_identity(monkeypatch, tmp_path):
+    from gcl_sdk.agents.universal.drivers import rawstor_tls
+
+    monkeypatch.setattr(rawstor_tls, "install", lambda *args: (tmp_path / "tls", False))
+    monkeypatch.setattr(
+        rawstor_tls, "environment", lambda _: {"RAWSTOR_TLS_CA": "/tls/ca.crt"}
+    )
+    monkeypatch.setattr(rawstor_tls, "reload_if_changed", lambda *args: None)
+    monkeypatch.setattr(rawstor_tls, "Bindings", lambda _: rawstor)
     monkeypatch.setattr(rawstor_cluster.ua_utils, "node_uuid", lambda: CORE_NODE_UUID)
 
 
@@ -91,7 +99,7 @@ class _FakeLocation:
 
 def _fake_location_info(monkeypatch, *, used_gb, total_gb):
     monkeypatch.setattr(
-        rawstor_cluster.rawstor,
+        rawstor,
         "Location",
         lambda uri: _FakeLocation(used_gb, total_gb),
     )
@@ -341,7 +349,7 @@ def test_unregistered_ost_never_contributes_to_admission(tmp_path, monkeypatch):
     cluster = _cluster(tmp_path)
     location = _FakeLocation(0, 100)
     location.locations = lambda: iter(())
-    monkeypatch.setattr(rawstor_cluster.rawstor, "Location", lambda _: location)
+    monkeypatch.setattr(rawstor, "Location", lambda _: location)
     [pool] = rawstor_cluster.RawstorStorageClusterDriver(cluster).get_capacity()
     assert pool.available_actual == 0
 

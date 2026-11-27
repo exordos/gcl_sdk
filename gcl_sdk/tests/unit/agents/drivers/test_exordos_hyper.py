@@ -33,6 +33,18 @@ from gcl_sdk.agents.universal.drivers import libvirt as libvirt_driver  # noqa: 
 from gcl_sdk.agents.universal.drivers import pool as pool_base  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def isolate_tls_delivery(monkeypatch):
+    from gcl_sdk.agents.universal.drivers import rawstor_tls
+
+    monkeypatch.setattr(rawstor_tls, "Bindings", lambda _: exordos_hyper.rawstor)
+    monkeypatch.setattr(
+        exordos_hyper.ExordosLocalHyperDriver,
+        "configure_rawstor_tls",
+        lambda *args: None,
+    )
+
+
 def _driver(
     tmp_path, node=None, storage_pool=None
 ) -> exordos_hyper.ExordosLocalHyperDriver:
@@ -201,7 +213,7 @@ class TestVolumeLifecycle:
         )
         with open(driver._vhost_drop_in_path(volume.uuid)) as f:
             assert (
-                f'Environment=LOCATION=mds://{volume.project_id}@10.20.0.2:7776\nEnvironment="EXTRA_ARGS=--insecure"\n'
+                f'Environment=LOCATION=mds://{volume.project_id}@10.20.0.2:7776\nEnvironment="EXTRA_ARGS="\n'
                 in f.read()
             )
 
@@ -238,7 +250,7 @@ class TestVolumeLifecycle:
         )
         with open(driver._vhost_drop_in_path(volume.uuid)) as f:
             assert (
-                f'Environment=LOCATION=mds://{volume.project_id}@10.20.0.2:7776\nEnvironment="EXTRA_ARGS=--insecure"\n'
+                f'Environment=LOCATION=mds://{volume.project_id}@10.20.0.2:7776\nEnvironment="EXTRA_ARGS="\n'
                 in f.read()
             )
 
@@ -669,8 +681,8 @@ def test_qcow2_discovery_does_not_require_rawstor_binding(tmp_path, monkeypatch)
         )
     )
     assert driver.list_volumes() == []
-    with pytest.raises(RuntimeError, match="Rawstor"):
-        module._rawstor_module()
+    with pytest.raises(RuntimeError, match="RawStor"):
+        module._rawstor_module(sys_uuid.uuid4())
 
 
 @pytest.mark.parametrize(
@@ -982,7 +994,7 @@ def test_missing_backend_configuration_does_not_start_default_target(
     monkeypatch.setattr(driver, "_read_remote_location", lambda uuid: None)
     backend = MagicMock()
     monkeypatch.setattr(driver, "_start_vhost", backend)
-    with pytest.raises(RuntimeError, match="Missing Rawstor backend configuration"):
+    with pytest.raises(RuntimeError, match="Missing RawStor backend configuration"):
         driver.start_machine(SimpleNamespace(uuid=sys_uuid.uuid4()))
     backend.assert_not_called()
     domain.create.assert_not_called()
@@ -1128,8 +1140,11 @@ def test_hypervisor_never_creates_accounts_or_objects(tmp_path, monkeypatch):
     assert recovered.project_id == project
 
 
-def test_remote_client_selects_insecure_before_using_bindings(monkeypatch):
-    module = SimpleNamespace(initialize=MagicMock())
-    monkeypatch.setattr(exordos_hyper, "rawstor", module)
-    assert exordos_hyper._rawstor_module() is module
-    module.initialize.assert_called_once_with(insecure=True)
+def test_remote_client_uses_only_volume_service_credentials(monkeypatch):
+    from gcl_sdk.agents.universal.drivers import rawstor_tls
+
+    factory = MagicMock()
+    monkeypatch.setattr(rawstor_tls, "Bindings", factory)
+    volume = sys_uuid.uuid4()
+    exordos_hyper._rawstor_module(volume)
+    factory.assert_called_once_with(rawstor_tls.TLS_DIR / ("volume-" + str(volume)))

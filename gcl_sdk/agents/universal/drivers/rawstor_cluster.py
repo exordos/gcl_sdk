@@ -26,7 +26,6 @@ import typing as tp
 from urllib.parse import urlparse
 import uuid as sys_uuid
 
-import rawstor
 from restalchemy.dm import properties
 from restalchemy.dm import types
 from restalchemy.dm import types_dynamic
@@ -35,13 +34,13 @@ from gcl_sdk.agents.universal import constants as c
 from gcl_sdk.agents.universal import utils as ua_utils
 from gcl_sdk.agents.universal.drivers import exceptions as driver_exc
 from gcl_sdk.agents.universal.drivers import meta
+from gcl_sdk.agents.universal.drivers import rawstor_tls
 from gcl_sdk.agents.universal.drivers import pool as pool_base
 from gcl_sdk.agents.universal.drivers import storage_capacity
 from gcl_sdk.common import utils
 
 LOG = logging.getLogger(__name__)
 
-rawstor.initialize(insecure=True)
 
 # Re-exported for convenience/backward-compat of existing imports of this
 # module - the driver_spec classes themselves live in pool.py (alongside
@@ -108,18 +107,28 @@ class RawstorStorageClusterDriver(AbstractStorageClusterDriver):
 
     @property
     def bindings(self):
-        return rawstor
+        directory, _ = rawstor_tls.install(
+            "control-" + str(self._cluster.uuid), self._spec.tls.get("control")
+        )
+        return rawstor_tls.Bindings(directory)
 
     @property
     def unit_name(self) -> str:
         return f"rawstor-mds@{self._cluster.uuid}.service"
 
     def _service_settings(self):
-        witness = sys_uuid.uuid5(self._cluster.uuid, "mds-witness")
-        return f'EXTRA_ARGS="--insecure --id={witness}"\n'
+        directory, _ = rawstor_tls.install(
+            "mds-" + str(self._cluster.uuid), self._spec.tls.get("service")
+        )
+        return 'EXTRA_ARGS=""\n' + "".join(
+            f"{key}={value}\n"
+            for key, value in rawstor_tls.environment(directory).items()
+        )
 
     def _reload_credentials(self):
-        """Reload workload credentials after an existing service is configured."""
+        rawstor_tls.reload_if_changed(
+            rawstor_tls.TLS_DIR / ("mds-" + str(self._cluster.uuid)), self.unit_name
+        )
 
     def _mds_settings(self, bind):
         storage_capacity.validate_bind_address(bind)

@@ -27,6 +27,7 @@ from restalchemy.dm import types_dynamic
 
 from gcl_sdk.agents.universal.drivers import exceptions as driver_exc
 from gcl_sdk.agents.universal.drivers import meta
+from gcl_sdk.agents.universal.drivers import rawstor_tls
 from gcl_sdk.agents.universal.drivers import rawstor_specs
 from gcl_sdk.agents.universal.drivers import storage_capacity
 from gcl_sdk.agents.universal.drivers.rawstor_cluster import _TOPOLOGY_WEIGHT
@@ -87,6 +88,10 @@ class MetaStorageNode(meta.MetaDataPlaneModel):
             # Native storage backends manage devices and require root.
             # RawStor validates the URI; backing stores are provisioned externally.
             dropin = "[Service]\nUser=root\nGroup=root\n"
+        directory, _ = rawstor_tls.install(
+            "ost-" + str(self.uuid), self.driver_spec.tls.get("service")
+        )
+        dropin += rawstor_tls.service_environment(directory)
         mds = urlparse(self.driver_spec.mds)
         advertised = urlparse(self.driver_spec.endpoint)
         for parsed, scheme in ((mds, "mds"), (advertised, "ost")):
@@ -110,7 +115,7 @@ class MetaStorageNode(meta.MetaDataPlaneModel):
         previous_config = config.read_text() if config.exists() else None
         config_changed = _write_if_changed(
             config,
-            f'BIND_ADDR={self.driver_spec.bind_address}\nLOCATION={self.driver_spec.location}\nMDS={self.driver_spec.mds}\nADVERTISE={self.driver_spec.endpoint}\nDOMAIN_PATH={domain}\nWEIGHT={_TOPOLOGY_WEIGHT}\nEXTRA_ARGS="--insecure"\n',
+            f'BIND_ADDR={self.driver_spec.bind_address}\nLOCATION={self.driver_spec.location}\nMDS={self.driver_spec.mds}\nADVERTISE={self.driver_spec.endpoint}\nDOMAIN_PATH={domain}\nWEIGHT={_TOPOLOGY_WEIGHT}\nEXTRA_ARGS=""\n',
         )
         unit_config = OST_UNIT_DIR / f"{self.unit_name}.d" / "exordos.conf"
         previous_unit = unit_config.read_text() if unit_config.exists() else None
@@ -132,6 +137,8 @@ class MetaStorageNode(meta.MetaDataPlaneModel):
                     _write_if_changed(path, content)
             subprocess.run(["systemctl", "daemon-reload"], check=False)
             raise
+        if previous_config is not None:
+            rawstor_tls.reload_if_changed(directory, self.unit_name)
         self.restore_from_dp()
 
     def restore_from_dp(self, **kwargs):
@@ -160,6 +167,7 @@ class MetaStorageNode(meta.MetaDataPlaneModel):
     def delete_from_dp(self, **kwargs):
         subprocess.run(["systemctl", "disable", "--now", self.unit_name], check=True)
         dropin = OST_UNIT_DIR / f"{self.unit_name}.d" / "exordos.conf"
+        rawstor_tls.remove("ost-" + str(self.uuid))
         dropin.unlink(missing_ok=True)
         (OST_CONFIG_DIR / f"{self.uuid}.conf").unlink(missing_ok=True)
         subprocess.run(["systemctl", "daemon-reload"], check=True)

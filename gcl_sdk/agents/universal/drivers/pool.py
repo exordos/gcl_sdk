@@ -290,6 +290,7 @@ class MachineVolume(
     storage_location = properties.property(
         types.AllowNone(types.String(max_length=2048)), default=None
     )
+    rawstor_tls = properties.property(types.Dict(), default=dict)
     storage_policy = properties.property(types.Dict(), default=dict)
     status = properties.property(
         types.Enum([s.value for s in VolumeStatus]),
@@ -549,6 +550,7 @@ class RawstorStorageClusterDriverSpec(AbstractStorageClusterDriverSpec):
 class RawstorStorageClusterAgentSpec(RawstorStorageClusterDriverSpec):
     """Private inventory and policy snapshot; OSTs register themselves with MDS."""
 
+    tls = properties.property(types.Dict(), default=dict)
     nodes = properties.property(types.Dict(), default=dict)
     pools = properties.property(
         types.TypedDict(rawstor_specs.RawstorPoolPolicy()), default=dict
@@ -984,6 +986,7 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
     storage_location = properties.property(
         types.AllowNone(types.String(max_length=2048)), default=None
     )
+    rawstor_tls = properties.property(types.Dict(), default=dict)
     storage_policy = properties.property(types.Dict(), default=dict)
     index = properties.property(
         types.Integer(min_value=0, max_value=4096),
@@ -1126,6 +1129,7 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
             storage_pool=self.storage_pool,
             storage_location=self.storage_location,
             storage_policy=self.storage_policy,
+            rawstor_tls=self.rawstor_tls,
             index=self.index,
             machine=self.machine,
             project_id=self.project_id,
@@ -1135,6 +1139,7 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
         volume = pool.dp_volume_map[self.uuid]
         volume.storage_location = self.storage_location
         volume.storage_policy = self.storage_policy
+        volume.rawstor_tls = self.rawstor_tls
         return volume
 
     def _is_root_volume(self) -> bool:
@@ -1191,12 +1196,15 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
             "storage_pool",
             "storage_location",
             "storage_policy",
+            "rawstor_tls",
             "project_id",
         }
 
     def dump_to_dp(self, pool: MetaPool) -> None:
         """Create the volume to the data plane."""
         driver: AbstractPoolDriver = pool.load_driver()
+        if self.storage_location and hasattr(driver, "configure_rawstor_tls"):
+            driver.configure_rawstor_tls(self._to_dp_volume())
 
         if self.uuid in pool.dp_volume_map:
             # The volume already exists in the data plane
@@ -1229,6 +1237,7 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
                 else storage_pool.name,
                 storage_location=self.storage_location,
                 storage_policy=self.storage_policy,
+                rawstor_tls=self.rawstor_tls,
                 index=self.index,
                 # TODO(akremenetsky): Detect machine without volume name
                 machine=self.machine,
@@ -1280,6 +1289,8 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
             raise ua_driver_exc.ResourceNotFound(resource=self)
 
         driver: AbstractPoolDriver = pool.load_driver()
+        if self.storage_location and hasattr(driver, "configure_rawstor_tls"):
+            driver.configure_rawstor_tls(self._to_dp_volume())
         dp_volume = self._existing_dp_volume(pool)
         self._detach_volume(pool, driver, dp_volume)
         self._delete_volume(pool, driver, dp_volume)
@@ -1290,6 +1301,8 @@ class MetaVolume(meta.MetaCoordinatorDataPlaneModel):
             raise ua_driver_exc.ResourceNotFound(resource=self)
 
         driver: AbstractPoolDriver = pool.load_driver()
+        if self.storage_location and hasattr(driver, "configure_rawstor_tls"):
+            driver.configure_rawstor_tls(self._to_dp_volume())
         dp_volume = self._existing_dp_volume(pool)
         machine = dp_volume.machine
         unknown_action = True
