@@ -19,6 +19,7 @@ import os
 from pathlib import Path
 import pwd
 import subprocess
+from urllib.parse import urlparse
 
 from restalchemy.dm import properties
 from restalchemy.dm import types
@@ -26,9 +27,10 @@ from restalchemy.dm import types_dynamic
 
 from gcl_sdk.agents.universal.drivers import exceptions as driver_exc
 from gcl_sdk.agents.universal.drivers import meta
-from gcl_sdk.agents.universal.drivers import rawstor_specs
 from gcl_sdk.agents.universal.drivers import rawstor_tls
+from gcl_sdk.agents.universal.drivers import rawstor_specs
 from gcl_sdk.agents.universal.drivers import storage_capacity
+from gcl_sdk.agents.universal.drivers.rawstor_cluster import _TOPOLOGY_WEIGHT
 from gcl_sdk.agents.universal.drivers.rawstor_cluster import _write_if_changed
 
 OST_CONFIG_DIR = Path("/etc/rawstor/ost")
@@ -90,11 +92,30 @@ class MetaStorageNode(meta.MetaDataPlaneModel):
             "ost-" + str(self.uuid), self.driver_spec.tls.get("service")
         )
         dropin += rawstor_tls.service_environment(directory)
+        mds = urlparse(self.driver_spec.mds)
+        advertised = urlparse(self.driver_spec.endpoint)
+        for parsed, scheme in ((mds, "mds"), (advertised, "ost")):
+            if (
+                parsed.scheme != scheme
+                or parsed.path not in ("", "/")
+                or parsed.username
+                or parsed.query
+                or parsed.fragment
+            ):
+                raise ValueError(f"Expected {scheme}://host:port")
+            storage_capacity.validate_bind_address(parsed.netloc)
+        domain = self.driver_spec.failure_domain_path
+        if (
+            not 1 <= len(domain.split("/")) <= 4
+            or any(p in ("", ".", "..") for p in domain.split("/"))
+            or any(c.isspace() for c in domain)
+        ):
+            raise ValueError("Invalid OST failure domain path")
         config = OST_CONFIG_DIR / f"{self.uuid}.conf"
         previous_config = config.read_text() if config.exists() else None
         config_changed = _write_if_changed(
             config,
-            f'BIND_ADDR={self.driver_spec.bind_address}\nLOCATION={self.driver_spec.location}\nEXTRA_ARGS=""\n',
+            f'BIND_ADDR={self.driver_spec.bind_address}\nLOCATION={self.driver_spec.location}\nMDS={self.driver_spec.mds}\nADVERTISE={self.driver_spec.endpoint}\nDOMAIN_PATH={domain}\nWEIGHT={_TOPOLOGY_WEIGHT}\nEXTRA_ARGS=""\n',
         )
         unit_config = OST_UNIT_DIR / f"{self.unit_name}.d" / "exordos.conf"
         previous_unit = unit_config.read_text() if unit_config.exists() else None
@@ -117,10 +138,7 @@ class MetaStorageNode(meta.MetaDataPlaneModel):
             subprocess.run(["systemctl", "daemon-reload"], check=False)
             raise
         if previous_config is not None:
-            rawstor_tls.reload_if_changed(
-                rawstor_tls.TLS_DIR / ("ost-" + str(self.uuid)), self.unit_name
-            )
-
+            rawstor_tls.reload_if_changed(directory, self.unit_name)
         self.restore_from_dp()
 
     def restore_from_dp(self, **kwargs):
@@ -135,6 +153,9 @@ class MetaStorageNode(meta.MetaDataPlaneModel):
         )
         if active.returncode:
             raise driver_exc.ResourceNotFound(resource=self)
+        self.driver_spec.mds = values["MDS"]
+        self.driver_spec.endpoint = values["ADVERTISE"]
+        self.driver_spec.failure_domain_path = values["DOMAIN_PATH"]
         self.status = "ACTIVE"
 
     def dump_to_dp(self, **kwargs):
@@ -146,9 +167,9 @@ class MetaStorageNode(meta.MetaDataPlaneModel):
     def delete_from_dp(self, **kwargs):
         subprocess.run(["systemctl", "disable", "--now", self.unit_name], check=True)
         dropin = OST_UNIT_DIR / f"{self.unit_name}.d" / "exordos.conf"
+        rawstor_tls.remove("ost-" + str(self.uuid))
         dropin.unlink(missing_ok=True)
         (OST_CONFIG_DIR / f"{self.uuid}.conf").unlink(missing_ok=True)
-        rawstor_tls.remove("ost-" + str(self.uuid))
         subprocess.run(["systemctl", "daemon-reload"], check=True)
 
 
@@ -156,8 +177,8 @@ class StorageNodeAgentDriver(meta.MetaFileStorageAgentDriver):
     __model_map__ = {"storage_node": MetaStorageNode}
 
     def delete(self, resource):
-        # The MDS agent has already requested the topology update. Do not require a healthy
-        # endpoint, or restart the OST, just to stop a failed/unreachable daemon.
+        # Stop the registrar even when its endpoint is unreachable; graceful
+        # shutdown notifies the MDS that this OST is leaving.
         model = MetaStorageNode.from_ua_resource(resource)
         model.delete_from_dp()
         self._delete_from_meta(resource.kind, resource.uuid)

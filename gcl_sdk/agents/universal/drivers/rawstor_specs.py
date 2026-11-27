@@ -81,4 +81,5 @@ class RawstorNodeDriverSpec(types_dynamic.AbstractKindModel, models.SimpleViewMi
 class RawstorNodeAgentSpec(RawstorNodeDriverSpec):
     """Private agent snapshot; public node configuration never contains PEM keys."""
 
+    mds = properties.property(types.String(max_length=2048), required=True)
     tls = properties.property(types.Dict(), default=dict)

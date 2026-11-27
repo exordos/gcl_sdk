@@ -249,7 +249,7 @@ def _main():
     kind, uri, method, args, kwargs = json.load(sys.stdin)
     allowed = {
         "target": {"spec", "create", "remove", "resize"},
-        "location": {"info", "objects", "create_account"},
+        "location": {"info", "objects", "locations", "create_account"},
     }
     if kind not in allowed or method not in allowed[kind]:
         raise ValueError("Unsupported RawStor operation")
@@ -261,6 +261,8 @@ def _main():
             value = {k: getattr(value, k) for k in ("total", "used")}
         elif method == "spec":
             value = {k: getattr(value, k) for k in ("size", "chunk_size")}
+        elif method == "locations":
+            value = list(value)
         elif method == "objects":
             objects = []
             for target in value:
